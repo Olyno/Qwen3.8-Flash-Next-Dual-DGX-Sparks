@@ -81,6 +81,7 @@ source .env
 # TP1 defaults — deliberately override the 2-node .env values.
 # ---------------------------------------------------------------------------
 MODEL_ID="${TP1_MODEL_ID:-local-inference-lab/Qwen3.8-Flash-Next-NVFP4}"
+MODEL_SOURCE="${MODEL_SOURCE:-}"   # local checkpoint dir to serve instead of the HF cache (baked -lean model)
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-qwen3.8-flash-next}"
 PORT="${_CLI_PORT:-8888}"            # 8888 is safe only while comfy-h3.service is disabled (it watches this port)
 IMAGE="${IMAGE:?IMAGE not set in .env}"
@@ -135,13 +136,22 @@ fi
 # ---------------------------------------------------------------------------
 info "=== Step 1: Resolve checkpoint ==="
 HF_CACHE_DIR="${HF_HOME:-$HOME/.cache/huggingface}"
-ORG="${MODEL_ID%%/*}"; NAME="${MODEL_ID##*/}"
-MODEL_PATH="$HF_CACHE_DIR/hub/models--${ORG}--${NAME}"
-[[ -d "$MODEL_PATH" ]] || err "Checkpoint not in cache: $MODEL_PATH
+if [[ -n "$MODEL_SOURCE" ]]; then
+    [[ -f "$MODEL_SOURCE/config.json" ]] || err "MODEL_SOURCE dir has no config.json: $MODEL_SOURCE"
+    ORG="nvidia"; NAME="Qwen3.8-Flash-Next-NVFP4"   # PLE cache key: baked table bit-identical (verify_bake)
+    MODEL_PATH="$MODEL_SOURCE"; SNAPSHOT_REL=""
+    MODEL_ARG="$MODEL_SOURCE"
+    ok "serving local checkpoint: $MODEL_SOURCE  ($(du -sh "$MODEL_PATH" 2>/dev/null | cut -f1))"
+else
+    ORG="${MODEL_ID%%/*}"; NAME="${MODEL_ID##*/}"
+    MODEL_PATH="$HF_CACHE_DIR/hub/models--${ORG}--${NAME}"
+    [[ -d "$MODEL_PATH" ]] || err "Checkpoint not in cache: $MODEL_PATH
        Fetch it first:  ./download.sh $MODEL_ID"
-SNAPSHOT_REL="snapshots/$(ls "$MODEL_PATH/snapshots" | head -1)"
-[[ -f "$MODEL_PATH/$SNAPSHOT_REL/config.json" ]] || err "No snapshot under $MODEL_PATH/snapshots"
-ok "$MODEL_ID  ($(du -sh "$MODEL_PATH" 2>/dev/null | cut -f1))"
+    SNAPSHOT_REL="snapshots/$(ls "$MODEL_PATH/snapshots" | head -1)"
+    [[ -f "$MODEL_PATH/$SNAPSHOT_REL/config.json" ]] || err "No snapshot under $MODEL_PATH/snapshots"
+    MODEL_ARG="$MODEL_ID"
+    ok "$MODEL_ID  ($(du -sh "$MODEL_PATH" 2>/dev/null | cut -f1))"
+fi
 
 # ---------------------------------------------------------------------------
 # 2. Co-tenant guard + memory budget.
@@ -350,9 +360,10 @@ docker run \\
     -v $OFFLOAD_DIR/protocol.py:$VLLM_PKG/v1/ple_offload/protocol.py:ro \\
     -v $HF_CACHE_DIR:/root/.cache/huggingface \\
     -v $HOME/.cache/vllm:/root/.cache/vllm \\
+    ${MODEL_SOURCE:+-v $MODEL_SOURCE:$MODEL_SOURCE:ro} \\
     $EXTRA_DOCKER_ARGS \\
     $IMAGE \\
-    $MODEL_ID \\
+    $MODEL_ARG \\
     $VLLM_ARGS_STR \\
     --host 0.0.0.0 \\
     --port $PORT
