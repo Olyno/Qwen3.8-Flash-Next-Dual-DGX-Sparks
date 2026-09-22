@@ -23,7 +23,8 @@ export SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-qwen3.8-flash-next-lean}"
 export MAX_MODEL_LEN="${MAX_MODEL_LEN:-262144}"
 export MAX_NUM_SEQS="${MAX_NUM_SEQS:-8}"
 export MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
-export KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8}"
+export EXTRA_VLLM_ARGS="${EXTRA_VLLM_ARGS:---quantization modelopt}"
+export KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-auto}"   # QSA requires a BF16 main KV cache (measured: fp8 -> NotImplementedError)
 [[ -f "$MODEL_SOURCE/config.json" ]] || { echo "model dir not found: $MODEL_SOURCE (pass MODEL_SOURCE=...)"; exit 1; }
 # --- dual-node (2 Sparks, TP2+EP+MTP, YaRN ~1M): same weights, cluster path ---
 # Seed the baked checkpoint into the head's HF cache as a pseudo-repo, then:
