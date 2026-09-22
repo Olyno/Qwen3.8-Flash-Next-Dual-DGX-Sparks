@@ -270,6 +270,7 @@ extract "$VLLM_PKG/model_executor/layers/ple_offload_layer.py" "$OFFLOAD_DIR/ori
 for f in connector worker protocol; do
     extract "$VLLM_PKG/v1/ple_offload/$f.py" "$OFFLOAD_DIR/orig/$f.py"
 done
+python3 "$SCRIPT_DIR/files/patch_ple_offload_fp8_packed.py" "$SCRIPT_DIR/files/patch_ple_offload.py"
 python3 "$SCRIPT_DIR/files/patch_ple_offload.py"
 for f in ple_offload_layer connector worker protocol; do
     [[ -f "$OFFLOAD_DIR/$f.py" ]] || err "offload patch missing: $f.py"
@@ -292,6 +293,9 @@ ok "Packed PLE table: $(ls "$PLE_CACHE_HOST"/*.packed_u8 | head -1) ($(du -sh "$
 # 5. Build vLLM args.
 # ---------------------------------------------------------------------------
 VLLM_ARGS=()
+# nvidia NVFP4 checkpoint declares its FP8 PLE only inside quantization_config — re-inject dtype
+PLE_DTYPE="${PLE_EMBEDDING_DTYPE:-$(python3 "$SCRIPT_DIR/files/detect_ple_dtype.py" "${MODEL_SOURCE:-${MODEL_PATH}/${SNAPSHOT_REL}}" 2>/dev/null || true)}"
+[[ -n "$PLE_DTYPE" ]] && { info "  PLE dtype override ......... $PLE_DTYPE"; PLE_HF_OV=$(python3 -c "import json;print(json.dumps({'text_config':{'ple_embedding_dtype':'$PLE_DTYPE'}}))"); VLLM_ARGS+=("--hf-overrides" "'$PLE_HF_OV'"); }
 VLLM_ARGS+=("--served-model-name" "$SERVED_MODEL_NAME")
 VLLM_ARGS+=("--tensor-parallel-size" "1")
 VLLM_ARGS+=("--gpu-memory-utilization" "$GPU_MEMORY_UTILIZATION")
