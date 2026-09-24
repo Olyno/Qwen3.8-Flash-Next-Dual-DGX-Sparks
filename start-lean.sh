@@ -56,12 +56,12 @@ python3 "$SCRIPT_DIR/files/resolve_snapshot.py" "$REPO" >/dev/null \
 
 # Overrides consumed by start.sh (applied after .env, like start-fp8.sh).
 export OVERRIDE_MODEL_ID="${OVERRIDE_MODEL_ID:-local/$NAME}"
-# Register under the stock model id: clients key capability profiles
-# (e.g. the reasoning_effort picker) off the model name, so a "-lean"
-# suffix hides the thinking-level options even though the checkpoint
-# supports them. Override back to a distinct name if you serve both at
-# once and need to tell them apart.
-export OVERRIDE_SERVED_MODEL_NAME="${OVERRIDE_SERVED_MODEL_NAME:-qwen3.8-flash-next}"
+# Served NAME stays owned by .env (SERVED_MODEL_NAME). Clients key their
+# capability profiles (e.g. the reasoning_effort picker) off the model
+# name, so the lean server registers under the same name as the stock
+# server it replaces. Set OVERRIDE_SERVED_MODEL_NAME to distinguish only
+# if you serve both at once.
+export OVERRIDE_SERVED_MODEL_NAME="${OVERRIDE_SERVED_MODEL_NAME:-}"
 # YaRN 4x scaled context — identical runtime recipe to the stock cluster
 # config; weights are context-length agnostic.
 export OVERRIDE_MAX_MODEL_LEN="${OVERRIDE_MAX_MODEL_LEN:-1048576}"

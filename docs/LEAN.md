@@ -61,7 +61,7 @@ stock per-request reasoning control, passed under `chat_template_kwargs`:
 
 ```bash
 curl http://localhost:8888/v1/chat/completions \
-  -d '{"model":"qwen3.8-flash-next-lean","messages":[...],
+  -d '{"model":"Qwen3.8-Flash-Next-NVFP4","messages":[...],
        "chat_template_kwargs":{"reasoning_effort":"low"}}'
 ```
 
