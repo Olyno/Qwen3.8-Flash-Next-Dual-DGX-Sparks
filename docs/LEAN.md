@@ -43,3 +43,28 @@ full study behind these choices — 31 measured configurations, including the
 DEER and REFRAIN decoding-loop methods and their failure modes — is
 documented in `MODEL_CARD.md` and `benchmark_final_table.md` shipped inside
 the checkpoint folder.
+
+## Thinking levels
+
+The checkpoint's chat template (unchanged by the bake) exposes NVIDIA's
+stock per-request reasoning control, passed under `chat_template_kwargs`:
+
+- `reasoning_effort`: `"low"` | `"medium"` | `"xhigh"` (default `"xhigh"`).
+  The template validates the value and rejects anything else (e.g. `high`)
+  with HTTP 400. It works by prepending matching instruction text to the
+  reasoning preamble — effort steering at the prompt level, not a weight
+  switch.
+- `enable_thinking`: `false` prefills an empty think block for a direct,
+  non-thinking answer; a `reasoning_effort` passed alongside it is ignored.
+- `thinking_budget` exists in some clients but is **not honored** by this
+  serving build; thinking output counts against `max_tokens`.
+
+```bash
+curl http://localhost:8888/v1/chat/completions \
+  -d '{"model":"qwen3.8-flash-next-lean","messages":[...],
+       "chat_template_kwargs":{"reasoning_effort":"low"}}'
+```
+
+On this baked checkpoint `low` stacks two leaners: the baked marker penalty
+(weights) plus the brief-thinking instruction. Their combination is
+directionally aligned but has not been benchmarked as a pair.
