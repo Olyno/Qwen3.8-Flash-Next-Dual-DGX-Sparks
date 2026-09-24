@@ -17,9 +17,15 @@
 # resolve/verify/worker-sync steps treat it like any cached checkpoint, and
 # skips the download step.
 #
-# Context is native 262144 (no YaRN — .env may carry a YaRN 1M config for
-# other checkpoints; this script overrides it). For ~1M, export
-# OVERRIDE_MAX_MODEL_LEN=1000000 OVERRIDE_YARN_ENABLE=true (see README).
+# Context matches this cluster's stock serving: YaRN 4x scaled ~1M, the same
+# runtime recipe as the base checkpoint (the bake only touches lm_head rows;
+# context handling is identical and untested-vs-262K at 1M). For the native,
+# measurement-verified window: OVERRIDE_MAX_MODEL_LEN=262144
+# OVERRIDE_YARN_ENABLE=false.
+#
+# Thinking level is per-request via the checkpoint's chat template:
+# chat_template_kwargs.reasoning_effort = "low" | "medium" | "xhigh"
+# (default xhigh) and enable_thinking=true|false. See README.
 #
 # Single-Spark experiments use ./start-tp1.sh (separate recipe).
 #
@@ -51,8 +57,10 @@ python3 "$SCRIPT_DIR/files/resolve_snapshot.py" "$REPO" >/dev/null \
 # Overrides consumed by start.sh (applied after .env, like start-fp8.sh).
 export OVERRIDE_MODEL_ID="${OVERRIDE_MODEL_ID:-local/$NAME}"
 export OVERRIDE_SERVED_MODEL_NAME="${OVERRIDE_SERVED_MODEL_NAME:-qwen3.8-flash-next-lean}"
-export OVERRIDE_MAX_MODEL_LEN="${OVERRIDE_MAX_MODEL_LEN:-262144}"
-export OVERRIDE_YARN_ENABLE="${OVERRIDE_YARN_ENABLE:-false}"
+# YaRN 4x scaled context — identical runtime recipe to the stock cluster
+# config; weights are context-length agnostic.
+export OVERRIDE_MAX_MODEL_LEN="${OVERRIDE_MAX_MODEL_LEN:-1048576}"
+export OVERRIDE_YARN_ENABLE="${OVERRIDE_YARN_ENABLE:-true}"
 # Pseudo-repo only ever exists on the head — never call download.sh at the Hub.
 export DO_DOWNLOAD_DEFAULT=false
 exec "$SCRIPT_DIR/start.sh" "$@"
