@@ -526,6 +526,9 @@ class PleOffloadRunner:
             raise RuntimeError(f"PLE {name}: packed table size mismatch")
         mm = np.memmap(path, dtype=np.uint8, mode="r", shape=(rows, width))
         table = torch.from_numpy(mm)  # zero-copy, file-backed, evictable
+        wdt = getattr(emb.weight, "dtype", None)
+        if wdt == torch.float8_e4m3fn and table.dtype == torch.uint8:
+            table = table.view(torch.float8_e4m3fn)  # FP8 PLE (nvidia)
         emb._packed_table = table
         emb._packed_table_mmap = mm
         # Release the never-touched anonymous allocations.
