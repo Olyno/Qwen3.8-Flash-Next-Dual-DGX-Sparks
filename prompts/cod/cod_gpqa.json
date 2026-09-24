@@ -1,0 +1,5 @@
+[
+ {"problem": "A spin-1/2 particle is in state (|up> + |down>)/sqrt(2) along z. What is the probability of measuring spin-up along x? Answer choices: A) 0  B) 1/2  C) 1  D) 1/4", "draft": "state = eigenstate of Sx itself; P(up_x) = 1", "gold": "C"},
+ {"problem": "Which compound is the strongest acid? A) phenol B) p-nitrophenol C) p-methoxyphenol D) cyclohexanol", "draft": "NO2 stabilizes conjugate base; electron-withdrawal wins", "gold": "B"},
+ {"problem": "Two stars have identical luminosity; star A is at twice the distance of star B. Flux ratio F_A/F_B?", "draft": "F ~ 1/r^2; (1/2)^2 = 1/4", "gold": "A"}
+]

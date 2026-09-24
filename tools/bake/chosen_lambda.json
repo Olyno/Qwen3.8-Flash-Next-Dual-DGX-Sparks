@@ -1,0 +1,12 @@
+{
+  "lambda": 2.0,
+  "mean_dacc_pp": 2.76,
+  "mean_dlen_pct": -10.53,
+  "ot_total": [
+    67,
+    48
+  ],
+  "rule": "acc-neutral max CoT reduction, prefer smallest lam",
+  "bypass_bake_first": true,
+  "bypass_reason": "user reorder 09-21: matrix paused, bake v1 now"
+}
