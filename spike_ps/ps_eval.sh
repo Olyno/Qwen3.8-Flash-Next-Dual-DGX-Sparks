@@ -9,7 +9,7 @@ mkdir -p "$OUT"
 cd "$LAB"
 for ds in gpqa200 math500 gsm8k100; do
   python3 scripts/bench_runner.py --port "$PORT" --dataset datasets/$ds.jsonl \
-    --out "$OUT/${ds}__${TAG}.jsonl" --arm "$TAG" --concurrency 4
+    --out "$OUT/${ds}__${TAG}.jsonl" --arm "$TAG" --concurrency 8
   python3 scripts/score.py --results "$OUT/${ds}__${TAG}.jsonl" \
     --dataset datasets/$ds.jsonl --out "$OUT/${ds}__${TAG}.scored.jsonl"
 done
