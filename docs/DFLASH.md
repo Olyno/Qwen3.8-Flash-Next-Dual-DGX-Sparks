@@ -129,3 +129,32 @@ drafter with prose tau > 3 appears.
 4. **The lean working copy carries the MTP layer alias in-place**
    (config.json + hf_quant_config.json now declare mtp.layers.48);
    documented here, weights otherwise untouched.
+
+## Day-1 addendum: head-to-head measurement of the packaged DFlash2 draft (same day)
+
+Gate fired on validation-set evidence; this closes the "definitely" by
+measuring draft v0.1.0 live, in place of the target's MTP head, on the
+identical bench prompts (msi, image qwen38-dflash2-solve64-w4s2, the draft's
+own lineage build; greedy, ignore_eos, K=1, 8-block drafts):
+
+| task | tokens/step (tau) | decode tok/s | MTP=3 bar |
+|---|---|---|---|
+| prose | 1.371 | 15.6-18.3 | 2.9 (harness) / ~2.9-3.85 range |
+| code | 1.412 | 16.4-18.8 | |
+| reasoning | 1.455 | 17.1-19.4 | |
+
+Reference points from the same machine, same day: no-speculative decode
+16.2-16.8 tok/s; free ngram lookup tau 1.4-2.7. The trained drafter sits
+AT the no-spec speed band (drafting overhead cancels its acceptance), and
+its tau is BELOW the free mechanisms' best cells. Its validation accept_len
+of 2.31 does not transfer to this traffic — the structured-text assumption
+of the recipe (and of Atlas's 66.6-tok/s code result) does not hold on
+long-horizon reasoning prose.
+
+Reproduction: ~/dflash_spike/dfix_launch.sh (msi); metrics deltas via the
+scrape in bench/acceptance_sweep.py (same formulas).
+
+Verdict unchanged and now head-to-head confirmed: killed. If a drafter with
+prose tau > 3 ever ships, the launcher and sweep tool revive this in
+under an hour.
+
