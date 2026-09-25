@@ -16,8 +16,10 @@ on. Requires an idle server on :8888 (same counter-hygiene rule as sweep.py).
 """
 import argparse, json, re, time, urllib.request
 
-METRICS = "http://localhost:8888/metrics"
-CHAT = "http://localhost:8888/v1/chat/completions"
+import os
+PORT = os.environ.get("BENCH_PORT", "8888")
+METRICS = f"http://localhost:{PORT}/metrics"
+CHAT = f"http://localhost:{PORT}/v1/chat/completions"
 WANTED = ("vllm:spec_decode_num_drafts_total",
           "vllm:spec_decode_num_accepted_tokens_total",
           "vllm:spec_decode_num_draft_tokens_total")
