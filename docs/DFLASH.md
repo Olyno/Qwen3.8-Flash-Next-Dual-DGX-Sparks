@@ -71,6 +71,61 @@ untouched until a ship decision)
   measured MTP=3 numbers (52.1 / 71.5 code / 56.8 prose) after review —
   the original draft anchored on external blog numbers.
 
-## Results
+# Day-1 spike results (2026-09-25, msi experiment Spark, checkpoint = lean working copy)
 
-_(filled by the days above)_
+## Measured
+
+| arm | prose | code | reasoning | entropy |
+|---|---|---|---|---|
+| batch-1 decode, NO speculative decoding | 16.2 / 16.3 tok/s | 16.2 / 16.6 | 16.5 / 16.8 | 16.3 / 16.7 |
+| ngram lookup (S<=4, no corpus) tau (accepted/draft) | 1.39 / **2.69** | 1.53 / 1.71 | 1.99 / 1.99 | 1.36 / 3.77 (degenerate repetition — see decodebench.py docstring) |
+| MTP=3 live production (user traffic, cumulative /metrics) | tau = 1 + 1,076,588/822,814 = **2.31** | | | |
+| MTP=3 harness reference (README, same tooling) | prose ~2.9 tok/step | code ~3.85 | | |
+| Packaged DFlash2 draft v0.1.0 (Sept 18, trained for the STOCK checkpoint) | val accept_len = **2.31** tokens/step (val_metrics.json) | | | |
+
+## Raw data
+
+`bench/acceptance_sweep.py --tag ngram4` wrote per-cell drafts/accepted;
+reproduced verbatim in the console log above (first run in history to use
+per-task acceptance deltas — the tool is now committed to this branch).
+
+## Verdict: KILL the DFlash-2 drafter project (gate fired, day 1.5)
+
+Pre-registered gate: a candidate advances past day 1 only if it beats
+**2.9 tokens/step on prose** (this cluster's measured MTP=3 prose number).
+
+- ngram lookup, the strongest free mechanism, best prose cell 2.69 < 2.9.
+- The packaged DFlash2 drafter — an actually-trained block-diffusion head
+  on a sibling Qwen3.8-Flash checkpoint — validates at 2.31 accept_len.
+  The paper's 3.4-4.6 tau band is structured text; the external 24.7
+  tok/s prose datapoint (Atlas, tau ~1.6) confirms the shape of the curve.
+- Independent measurement agrees: live production MTP=3 on the baked
+  checkpoint runs tau 2.31 on mixed traffic — and MTP drafting is FREE
+  (the head ships in the checkpoint).
+
+Conclusion: on low-structure reasoning prose, this generation's drafting
+mechanisms (ngram, MTP, DFlash-class block diffusion) cluster at tau
+1.4-2.9 and none clears the bar that would justify the training+integration
+budget. The project's differentiated bet (beat MTP on prose) is answered by
+evidence inside the first day and a half. Salvage: the sweep tool, the
+working-copy procedure, and this negative result — re-openable if a
+drafter with prose tau > 3 appears.
+
+## Side findings (durable, non-obvious)
+
+1. **Directory-name substring bug**: naming a served checkpoint dir with
+   the word "dflash" anywhere in the path makes vLLM's spec-config
+   auto-detection ("dflash" in model.lower()) classify method:mtp requests
+   as dflash drafts -> EAGLEConfig wrap -> AttributeError on composite
+   text_config. Avoid draft-brand substrings in checkpoint paths.
+2. **TP1 + nvidia-derived checkpoint + MTP is broken in both local images**:
+   old fc120: mtp.layers.48 FP8 scale param missing at ~85% weight load
+   (the layer-index alias from start.sh's overlay path does not fix it on
+   this loader; on TP2 the same checkpoint+MTP works). new a9c416: same
+   crash pre-load. Production TP2 unaffected.
+3. **Canonical image drift**: gx10 re-pulled vllm/vllm-openai:qwen38-flash-next
+   (now a9c416…) after msi's fc120… build; msi retagged old one as
+   `-msi-old`. TP1 experiments should pin the tag they were validated on.
+4. **The lean working copy carries the MTP layer alias in-place**
+   (config.json + hf_quant_config.json now declare mtp.layers.48);
+   documented here, weights otherwise untouched.
