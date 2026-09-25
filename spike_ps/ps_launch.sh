@@ -1,11 +1,13 @@
 #!/bin/bash
-# ProbSparse spike: day-1 ng_launch recipe (stock nvidia checkpoint, PLE offload,
-# fp8 PLE override), drafter removed, expert-count-per-token injected via
-# --hf-overrides. No checkpoint copy needed: the override replaces the config
-# field at load time.
+# ProbSparse spike launcher. Exact day-1 ngram-recipe server (ng_launch.sh):
+# wk1 working copy served by the qwen38-flash-next image with the fork-lean
+# PLE/modelopt patches, GMU 0.78, ctx 262144, no drafter. The only difference
+# from that baseline run is the expert-count override below.
 # Usage: K=8 ./ps_launch.sh <container> <port>
+#   K=10 reproduces the day-1 baseline exactly (override equals checkpoint value).
 set -euo pipefail
 NAME=$1; PORT=$2; K=${K:?set K=<experts per token>}
+MODEL=${MODEL:-$HOME/models/Qwen3.8-Flash-Next-NVFP4-wk1}
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run \
     -d --name "$NAME" \
@@ -18,14 +20,15 @@ docker run \
     -e VLLM_PLE_PACKED_TABLE_DIR=/root/.cache/vllm/ple_cache/nvidia--Qwen3.8-Flash-Next-NVFP4 \
     -e VLLM_PLE_OFFLOAD_STEP_TIMEOUT=300 \
     -e HF_HOME=/root/.cache/huggingface \
-    -v /home/olyno/Qwen38-overthinking-lab/serve/fork-lean/files/ple_layer_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen3_8_flash_next/nvidia/ple_layer.py:ro \
-    -v /home/olyno/Qwen38-overthinking-lab/serve/fork-lean/files/modelopt_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/quantization/modelopt.py:ro \
-    -v /home/olyno/Qwen38-overthinking-lab/serve/fork-lean/files/ple_offload/ple_offload_layer.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/ple_offload_layer.py:ro \
-    -v /home/olyno/Qwen38-overthinking-lab/serve/fork-lean/files/ple_offload/connector.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/ple_offload/connector.py:ro \
-    -v /home/olyno/Qwen38-overthinking-lab/serve/fork-lean/files/ple_offload/worker.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/ple_offload/worker.py:ro \
-    -v /home/olyno/Qwen38-overthinking-lab/serve/fork-lean/files/ple_offload/protocol.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/ple_offload/protocol.py:ro \
+    -v /home/olyno/Qwen38-overthinking-lab/serve/files/ple_layer_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen3_8_flash_next/nvidia/ple_layer.py:ro \
+    -v /home/olyno/Qwen38-overthinking-lab/serve/files/modelopt_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/quantization/modelopt.py:ro \
+    -v /home/olyno/Qwen38-overthinking-lab/serve/files/ple_offload/ple_offload_layer.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/ple_offload_layer.py:ro \
+    -v /home/olyno/Qwen38-overthinking-lab/serve/files/ple_offload/connector.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/ple_offload/connector.py:ro \
+    -v /home/olyno/Qwen38-overthinking-lab/serve/files/ple_offload/worker.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/ple_offload/worker.py:ro \
+    -v /home/olyno/Qwen38-overthinking-lab/serve/files/ple_offload/protocol.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/ple_offload/protocol.py:ro \
     -v /home/olyno/.cache/huggingface:/root/.cache/huggingface \
     -v /home/olyno/.cache/vllm:/root/.cache/vllm \
+    -v "$MODEL:$MODEL:ro" \
     vllm/vllm-openai:qwen38-flash-next \
     nvidia/Qwen3.8-Flash-Next-NVFP4 \
     --hf-overrides "{\"text_config\": {\"ple_embedding_dtype\": \"float8_e4m3fn\", \"num_experts_per_tok\": $K}}" \
