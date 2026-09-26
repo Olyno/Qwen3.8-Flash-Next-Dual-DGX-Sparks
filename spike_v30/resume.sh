@@ -112,7 +112,7 @@ T1) # fixed-K sweep + telemetry: ONE boot per K, kill-test data for the whole
       curl -s localhost:$PORT/metrics > "$R/t1_k$KK_metrics.txt" 2>/dev/null
       docker rm -f "$NAME" >/dev/null 2>&1
     done
-    echo T1-DONE ;;
+    python3 "$REPO/spike_v30/t1_analyze.py" "$R" > "$R/t1_verdict.txt" 2>&1 || echo T1-ANALYZE-FAILED >> "$R/t1_verdict.txt"; echo T1-DONE ;;
 B1) NAME=hybq; PORT=8891; MODEL=$HOME/models/q38-hyb
     evict "$MODEL"
     bash ~/hyb_spike/hyb_launch.sh "$NAME" $PORT "$MODEL"
