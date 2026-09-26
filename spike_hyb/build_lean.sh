@@ -24,8 +24,9 @@ docker run --rm --memory=1500m --memory-swap=1500m --cpus=4 --entrypoint python3
 python3 - <<"PY"
 import json, collections
 q = json.load(open("/home/olyno/models/q38-lean-hyb/hf_quant_config.json"))["quantization"]
-c = collections.Counter(v.get("strategy") for v in q.values())
+c = collections.Counter(v["quant_algo"] for v in q["quantized_layers"].values())
 print("VERIFY-COUNTS", dict(c))
 assert c.get("FP8_PER_CHANNEL_PER_TOKEN", 0) >= 500, "conversion did not apply"
 print("A4-BUILD-OK")
+touch $HOME/v30_bench/A4.DONE
 PY
