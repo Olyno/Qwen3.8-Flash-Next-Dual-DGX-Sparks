@@ -17,6 +17,7 @@ docker run \
     -e HF_HUB_OFFLINE=1 \
     -e TRANSFORMERS_OFFLINE=1 \
     -e VLLM_PLE_CPU_OFFLOAD=1 \
+    -e VLLM_USE_BREAKABLE_CUDAGRAPH=0 \
     -e VLLM_PLE_PACKED_TABLE_DIR=/root/.cache/vllm/ple_cache/nvidia--Qwen3.8-Flash-Next-NVFP4 \
     -e HF_HOME=/root/.cache/huggingface \
     -v $OV/model.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/model.py:ro \
