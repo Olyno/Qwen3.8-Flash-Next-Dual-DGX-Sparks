@@ -97,6 +97,22 @@ P1) NAME=v30p1; PORT=8892; MODEL=$HOME/models/Qwen3.8-Flash-Next-NVFP4-wk1
     docker rm -f "$NAME" >/dev/null 2>&1
     du -sh "$PROF"; ls "$PROF" | head -4
     tar -C "$PROF" -czf "$HOME/v30_bench/p1_trace.tgz" . && echo P1-TAR-OK ;;
+T1) # fixed-K sweep + telemetry: ONE boot per K, kill-test data for the whole
+    # MoE-cost-aware family (Limits 2609.22156), per-position acceptance for
+    # EVICT's rule replay, and state-page usage for the spec-tax question.
+    for KK in 1 2 3 5 7; do
+      NAME=v30t$KK; PORT=8892; MODEL=$HOME/models/Qwen3.8-Flash-Next-NVFP4-wk1
+      evict "$MODEL"
+      K=6 bash $OV/launch_v30.sh "$NAME" $PORT "$MODEL" --speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$KK,\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"block\",\"disable_eagle_block_drop\":true}" --enable-return-routed-experts
+      hb "$NAME" & HP=$!
+      wait_health; RC=$?
+      kill $HP 2>/dev/null
+      if [ $RC -ne 0 ]; then echo "T1 K=$KK BOOT-FAIL rc=$RC — stopping sweep"; exit 2; fi
+      echo "HEALTHY K=$KK $(date +%H:%M)"; bench "t1_k$KK"; conc "t1_k$KK"
+      curl -s localhost:$PORT/metrics > "$R/t1_k$KK_metrics.txt" 2>/dev/null
+      docker rm -f "$NAME" >/dev/null 2>&1
+    done
+    echo T1-DONE ;;
 B1) NAME=hybq; PORT=8891; MODEL=$HOME/models/q38-hyb
     evict "$MODEL"
     bash ~/hyb_spike/hyb_launch.sh "$NAME" $PORT "$MODEL"
