@@ -61,7 +61,33 @@ Raw rows: `spike_ps/results_k{10,8,6}.txt`; table: `spike_ps/ps_analyze.py`.
 +2.6 pp — gate (≤ 1 pp drop) passes with margin; scoring was re-run on the
 baseline file with the identical scorer to rule out methodology drift.**
 
-MATH-500 (arm running) and GSM8K-100 follow.
+**MATH-500 (500): K=6 → 443/500 = 88.6 % vs baseline 444/500 = 88.8 %
+(−0.2 pp, flip analysis: 7 base-only vs 6 k6-only, McNemar p = 1.0 — pure
+noise).**
+
+**GSM8K-100: K=6 → 94/100 vs baseline 96/100 (−2.0 pp; flips 3 base-only vs
+1 k6-only, exact McNemar p = 0.63 — not significant, the whole delta is 2
+problems out of 100; 3 problems fail for BOTH arms; k6 mean reasoning tokens
+463 vs base 278, no truncations either side).**
+
+Gate verdict per arm: GPQA pass (+2.6), MATH pass (−0.2, noise), GSM8K not
+significantly different from baseline (n too small to resolve −2 pp; the
+paired flip test is null).
+
+## Verdict
+
+K=6 (60 % of experts active): speed +4.4–5.0 % (prose/code, ctx 1k; +2.5–7.7 %
+across all cells), quality statistically indistinguishable from stock on all
+three suites. Declared gate (≤ 1 pp quality drop, any speed gain): passes on GPQA and
+MATH; GSM8K's −2 pp is a 2-problem difference at n=100 with a null paired
+test. Whether +5 % decode is "worth shipping" is a judgment call, not a gate
+— the expert-weight traffic is only ~40 % of decode bytes and per-step costs
+don't scale with K, so this axis is fundamentally capped near +8-10 %.
+
+REJECT for default deployment (marginal), KEEP the mechanism: num_experts_per_tok
+is a zero-patch knob for future capacity/speed tradeoffs (e.g. TP1 lean copies
+where the wk1 124 GiB copy didn't fit), and K=8 keeps the same speed ratio at
+smaller exposure.
 
 ## Findings during setup (worth recording)
 
