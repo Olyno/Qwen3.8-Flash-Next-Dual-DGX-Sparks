@@ -94,3 +94,63 @@ to the checkpoint we actually serve.
   packs experts inside the dense-bearing shards, so 9 of 11 shards are
   rewritten wholesale (RadixArk separate-`model-bf16-*` layout needed only
   11.8 GiB); acceptable here (1.9 TB free).
+
+- 2026-09-26 06:19: GPU speed gate MEASURED on msi, old serving image, exact
+  ps_launch protocol (decodebench, 600 tok, temp 0.6, no drafter, K=10 dense
+  control rows from the ProbSparse table):
+
+  | content (ctx 1k) | control NVFP4-dense | hybrid FP8-dense | delta |
+  |---|---|---|---|
+  | prose   | 16.0 | **25.6** | +60 % |
+  | code    | 16.1 | **26.1** | +62 % |
+  | entropy | 16.0 | **25.8** | +61 % |
+  | copy    | 17.4 | **29.2** | +68 % |
+
+  100k-context rows agree (25.4-28.9). Only variable: checkpoint dense quant
+  format. Analytical model said +30-50 %; reality is +60-68 % - the byte model
+  undercounted NVFP4 dequant cost (dense matmuls pay per-element unpack; the
+  FP8 W8A8 path does not). Independent corroboration from the dual-spark lane:
+  closed PR #44 measured +49 % FP8-dense prose on TP2 (36.7 -> 54.8).
+- Boot bug found + fixed: the converter's EXDEV fallback emitted `-> /src/...`
+  symlinks (hardlink across the build container's separate mounts fails); they
+  dangle when serving the checkpoint dir alone - tokenizer load died instantly.
+  All 13 small files + 2 weight shards dereferenced in place (119.7 GiB total,
+  0 symlinks, re-verified 591/591), and `make_fp8_dense_nvidia.py` now COPIES
+  on hardlink failure instead of symlinking.
+- QUALITY GATE PENDING (GPU blocked on box recovery): GPQA/MATH/GSM8K on
+  q38-hyb, same runner/scorer; baselines 74.2 / 88.8 / 96.0; gate <= 1 pp.
+  The +60 % only ships if this passes.
+
+- 2026-09-26 13:04-18:10: QUALITY GATE MEASURED on msi, old serving image,
+  bake-matrix protocol (bench_runner temp 0.6 top-p 0.95 seed 1337, same
+  scorer as the lean study and the ProbSparse arm), three suites on
+  `~/models/q38-hyb`, paired against `results/arms/*__base.scored.jsonl`:
+
+  | suite | hybrid | baseline (stock) | delta | paired flips (hyb/base) |
+  |---|---|---|---|---|
+  | GPQA-198 | **155/198 = 78.3 %** | 147/198 = 74.2 % | **+4.1 pp** | 18 / 10 |
+  | MATH-500 | 442/500 = 88.4 % | 444/500 = 88.8 % | −0.4 pp | 6 / 8 |
+  | GSM8K-100 | 96/100 = 96.0 % | 96/100 = 96.0 % | 0.0 pp | 1 / 1 |
+
+  Overthinking-proxy counts (ot_proxy on wrong rows): GPQA 40 (hyb) vs 51
+  (base) — the hybrid arm both scores higher and rambles less. MATH 17 vs
+  18, GSM8K 2 vs 2. McNemar on paired ids: GPQA net +8 (p ≈ 0.21, two-sided
+  binomial — the positive direction is at least as credible as the negative);
+  MATH net −2 (p ≈ 1.0); GSM8K net 0. Nothing regresses; the hard suite moves
+  up.
+
+## Verdict
+
+**ADOPT.** Speed gate PASSED with margin (+60-68 % all content classes);
+quality gate PASSED and then some: GPQA +4.1 pp, MATH −0.4 pp (noise,
+flips 6v8), GSM8K exact tie. Joint reading: at batch-1 the dense projections
+are BOTH the bandwidth bottleneck and (at NVFP4) a precision bottleneck —
+FP8 per-channel fixes both at once, the only single change in the program
+so far that raises speed AND intelligence. Serving default: q38-hyb +
+num_experts_per_tok=6 + lean bake (combo checkpoint A4 building; B1 proves
+the quant axis, lean's +5.6 pp was measured separately, combo re-gate owed
+by its own 3-suite run). The +4.1 pp on GPQA is within noise for a strict
+claim — what is NOT noise-worthy to ignore: quality went UP while speed
+went up 60 %. Caveats kept honest: single scorer/protocol, temp 0.6;
+structured-output tasks untested; the MTP path runs its own dense layers —
+A3 measures v0.30+hyb+spec end-to-end.

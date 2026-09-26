@@ -84,10 +84,14 @@ test. Whether +5 % decode is "worth shipping" is a judgment call, not a gate
 — the expert-weight traffic is only ~40 % of decode bytes and per-step costs
 don't scale with K, so this axis is fundamentally capped near +8-10 %.
 
-REJECT for default deployment (marginal), KEEP the mechanism: num_experts_per_tok
-is a zero-patch knob for future capacity/speed tradeoffs (e.g. TP1 lean copies
-where the wk1 124 GiB copy didn't fit), and K=8 keeps the same speed ratio at
-smaller exposure.
+**ADOPTED AS SERVING DEFAULT (Olyno, 2026-09-26; supersedes the earlier
+"REJECT for default deployment" verdict)**: quality is statistically null
+(GPQA +2.6, MATH -0.2 noise, GSM8K -2 = 2 problems at n=100, paired flip
+tests null) and speed is a free +4-5 % - rejecting a free gain is not the
+right call. Deployment shape: num_experts_per_tok=6 via --hf-overrides on
+every serve (zero-patch, reversible per boot; K=8 remains available if a
+future capacity experiment needs smaller exposure). Mechanism kept for the
+same reasons stated above.
 
 ## Findings during setup (worth recording)
 

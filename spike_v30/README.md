@@ -60,3 +60,73 @@ registry maps `Qwen4ExpForConditionalGeneration` natively — no model-registry 
    tok/s old-image baseline → gain/loss number.
 2. same boot → GPQA smoke (lossless sanity of the engine swap).
 3. if ≥ parity: q38-hyb + MTP arms ride the same overlay; retire dead patches.
+
+
+## First live boot (2026-09-26, chain): crash triage + fix set
+
+All four v0.30 boots (stock/MTP3/hybrid on the new image) died identically:
+engine initialized (modelopt_mixed, FlashInfer CUTLASS NVFP4 MoE, FlashInfer
+GDN prefill + CUDA decode, ported PLE overlay reported the FP8 CPU table),
+then the EngineCore worker was SIGKILLed (exit 137 = cgroup kill) during
+post-load profiling. Hypothesis space (NOT yet proven on box; note the old
+image ran fine WITH the same 100g cap, so the cap only bites via some
+v0.30-specific memory behaviour):
+
+1. cgroup cap: `--memory 100g --memory-swap 100g` copied from the old-image
+   launcher; v0.30's engram/pinned PLE path + CUDA unified allocations +
+   host weight pages exceed 100 GB during the profiling dummy-forward.
+   The dual lane's feat/vllm-030 start.sh runs the SAME image + model for a
+   1-hour soak, stable — and carries NO --memory flag.
+2. packed-table mmap specifics: the UVA dummy-forward touches all 47.7 GiB
+   of the page-cache-backed map (non-evictable once GPU-touched on unified
+   memory); also O_RDWR open on a ro-mounted source can EROFS.
+3. GB10 page-cache class the lane already knows: their start.sh runs
+   evict_page_cache.py (fadvise DONTNEED) before launch — without it,
+   "weight loading can die partway with CUDA OOM on an otherwise idle box"
+   (their words, #35/#61). Our launcher did neither.
+
+Fix set applied in launch_v30.sh (each neutralizes one suspect; together
+they cover the space): cap removed, evict_page_cache.py before boot,
+VLLM_PLE_PACKED_TABLE_DIR demoted to opt-in (native pinned path becomes the
+default — the mmap overlay must earn its place in a later A/B, if ever).
+
+Also verified from the upstream v0.30.0 tree (GitHub contents API):
+`vllm/v1/worker/gpu/spec_decode/dflash2/` EXISTS (speculator.py) — the newer
+image carries the DFlash2 machinery our serving fork lacks. qwen4_exp
+nvidia/ files confirmed byte-identical to what we ported against.
+
+Note: v0.30 defaults VLLM_PLE_CPU_OFFLOAD to 1 (fork PR #68) — we keep it
+explicit.
+
+## Second crash (2026-09-26 ~16:10, post-B1): box hard-hang, driver bug found
+After the quality gate finished (B1 PASS — see docs/HYBRID-FP8.md), the A1
+boot was launched while the A4 lean->hybrid converter was still copying
+(~120 GB of EXDEF fallback copies through a 1.5 GB-capped container).
+sshd went unresponsive while Tailscale still answered pings — same hang
+signature as the morning's chain; the box needed a power-cycle. Root cause
+class: two concurrent unified-memory hogs (GPU boot + bulk page-cache
+writer). RULE: never boot a vLLM server while a bulk copy runs; serialize
+heavy jobs. resume.sh encodes this (phases are single-purpose; A4 build
+is a separate manual step run ONLY between phases).
+
+The boot-time audit also caught a launcher bug worth its own line:
+**launch_v30.sh mounted "$MODEL" but passed the hard-coded
+`nvidia/Qwen3.8-Flash-Next-NVFP4` to `vllm serve`** — every A-phase would
+have silently served the HF-cache stock model and mislabeled the hybrid
+rows as v0.30 gains. Fixed: serve "$MODEL". (The mount made the dir
+available; the argument never used it — classic bind-mount camouflage.)
+
+## GPU queue (adopted recipes; box recovery is the only blocker)
+1. A1: stock wk1, K=6, no drafter (launch_v30.sh defaults) -> decodebench +
+   concbench ladder vs 16.0-16.2 old-image baseline and vs the +60% hybrid
+   rows (same protocol).
+2. A2: + speculative-config {method mtp, K=5, draft_sample_method
+   probabilistic, rejection_sample_method block} — hibrid48 serving recipe
+   on our checkpoint; vocab-reduction overlay (MTP_DRAFT_VOCAB) must NOT be
+   combined: use_local_argmax_reduction is rejected with sampled drafting
+   (team PR #71 finding).
+3. A3: q38-hyb + A2 spec (the combo the B1 verdict greenlights).
+4. A4: lean x hybrid combo checkpoint (converter running when box returns)
+   -> its own 3-suite gate before serving adoption.
+Bench rows land here + in docs/HYBRID-FP8.md; P1 profiler = same boot with
+VLLM_TORCH_PROFILER_DIR set (launcher opt-in mount).

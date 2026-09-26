@@ -3,9 +3,9 @@
 # FP8 per-channel. Same TP1 recipe as the ProbSparse control (ps_launch.sh)
 # plus the four fp8dense overlay mounts (modelopt_hybrid carries BOTH the
 # FP8_BLOCK MoE fix and the per-channel dispatch).
-# Usage: ./hyb_launch.sh <container> <port> [model_dir]
+# Usage: [K=6] ./hyb_launch.sh <container> <port> [model_dir]
 set -euo pipefail
-NAME=$1; PORT=$2; MODEL=${3:-$HOME/models/q38-hyb}
+NAME=$1; PORT=$2; K=${K:-6}; MODEL=${3:-$HOME/models/q38-hyb}
 SERVE=$HOME/Qwen38-overthinking-lab/serve/files
 HYB=$HOME/hyb_spike
 OV=$HYB/overlay
@@ -35,7 +35,7 @@ docker run \
     -v "$MODEL:$MODEL:ro" \
     vllm/vllm-openai:qwen38-flash-next \
     "$MODEL" \
-    --hf-overrides "{\"text_config\": {\"ple_embedding_dtype\": \"float8_e4m3fn\"}}" \
+    --hf-overrides "{\"text_config\": {\"ple_embedding_dtype\": \"float8_e4m3fn\", \"num_experts_per_tok\": $K}}" \
     --served-model-name qwen3.8-flash-next \
     --tensor-parallel-size 1 \
     --gpu-memory-utilization 0.735 \

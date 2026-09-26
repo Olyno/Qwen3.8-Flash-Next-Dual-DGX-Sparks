@@ -34,6 +34,7 @@ import argparse
 import fnmatch
 import json
 import os
+import shutil
 import struct
 import sys
 import time
@@ -271,8 +272,12 @@ def main() -> int:
             try:
                 os.link(target, d)
             except OSError as exc:
-                print(f"  hardlink failed for {f} ({exc}); using symlink", flush=True)
-                os.symlink(target, d)
+                # EXDEV (separate /src vs /dst mounts, e.g. build container
+                # bind roots). A symlink back to the host path is NOT a safe
+                # fallback: the checkpoint must stay self-contained when
+                # served from a container that mounts only the dst dir.
+                print(f"  hardlink failed for {f} ({exc}); copying", flush=True)
+                shutil.copyfile(target, d)
             if not os.path.exists(d):
                 raise RuntimeError(f"could not link {f} into {dst}")
         linked += 1
