@@ -56,7 +56,12 @@ Raw rows: `spike_ps/results_k{10,8,6}.txt`; table: `spike_ps/ps_analyze.py`.
 
 ## Quality result (measured, this box)
 
-(quality gate runs after the speed table — see below)
+**GPQA-Diamond (198): K=6 → 152/198 = 76.8 % vs baseline 147/198 = 74.2 %
+(`results/arms/gpqa200__base.jsonl`, same runner + same scorer).
++2.6 pp — gate (≤ 1 pp drop) passes with margin; scoring was re-run on the
+baseline file with the identical scorer to rule out methodology drift.**
+
+MATH-500 (arm running) and GSM8K-100 follow.
 
 ## Findings during setup (worth recording)
 
