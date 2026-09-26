@@ -11,6 +11,9 @@ set -euo pipefail
 NAME=$1; PORT=$2; K=${K:-6}
 MODEL=${3:-$HOME/models/Qwen3.8-Flash-Next-NVFP4-wk1}
 OV=${OV:-$HOME/upgrade/v30/overlay}
+# Boot-robustness overrides (hang #3 post-mortem: stock watermarks lose the
+# reclaim race during compile-warm with the big profile; lower = safer boot).
+GPU_UTIL=${GPU_UTIL:-0.735}; BATCHED=${BATCHED:-8192}; MAXLEN=${MAXLEN:-131072}
 PROF_ARGS=()
 if [[ -n "${VLLM_TORCH_PROFILER_DIR:-}" ]]; then
     PROF_ARGS=(-e VLLM_TORCH_PROFILER_DIR=/prof -v "$VLLM_TORCH_PROFILER_DIR":/prof)
@@ -47,10 +50,10 @@ docker run \
     --hf-overrides "{\"text_config\": {\"ple_embedding_dtype\": \"float8_e4m3fn\", \"num_experts_per_tok\": $K}}" \
     --served-model-name qwen3.8-flash-next \
     --tensor-parallel-size 1 \
-    --gpu-memory-utilization 0.735 \
+    --gpu-memory-utilization "$GPU_UTIL" \
     --max-num-seqs 8 \
-    --max-num-batched-tokens 8192 \
-    --max-model-len 131072 \
+    --max-num-batched-tokens "$BATCHED" \
+    --max-model-len "$MAXLEN" \
     --kv-cache-dtype auto \
     --load-format safetensors \
     --safetensors-load-strategy lazy \
