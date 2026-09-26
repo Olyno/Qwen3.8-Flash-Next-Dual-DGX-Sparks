@@ -62,7 +62,7 @@ A1) NAME=v30a1; PORT=8892; MODEL=$HOME/models/Qwen3.8-Flash-Next-NVFP4-wk1
     docker rm -f "$NAME" ;;
 A2) NAME=v30a2; PORT=8892; MODEL=$HOME/models/Qwen3.8-Flash-Next-NVFP4-wk1
     evict "$MODEL"
-    K=6 bash $OV/launch_v30.sh "$NAME" $PORT "$MODEL" --speculative-config '{"method":"mtp","num_speculative_tokens":5,"draft_sample_method":"probabilistic","rejection_sample_method":"block"}'
+    K=6 bash $OV/launch_v30.sh "$NAME" $PORT "$MODEL" --speculative-config '{"method":"mtp","num_speculative_tokens":5,"draft_sample_method":"probabilistic","rejection_sample_method":"block","disable_eagle_block_drop":true}'
     hb "$NAME" & HP=$!
     wait_health; RC=$?
     kill $HP 2>/dev/null
@@ -72,7 +72,7 @@ A2) NAME=v30a2; PORT=8892; MODEL=$HOME/models/Qwen3.8-Flash-Next-NVFP4-wk1
     docker rm -f "$NAME" ;;
 A3) NAME=v30a3; PORT=8892; MODEL=$HOME/models/q38-hyb
     evict "$MODEL"
-    K=6 bash $OV/launch_v30.sh "$NAME" $PORT "$MODEL" --speculative-config '{"method":"mtp","num_speculative_tokens":5,"draft_sample_method":"probabilistic","rejection_sample_method":"block"}'
+    K=6 bash $OV/launch_v30.sh "$NAME" $PORT "$MODEL" --speculative-config '{"method":"mtp","num_speculative_tokens":5,"draft_sample_method":"probabilistic","rejection_sample_method":"block","disable_eagle_block_drop":true}'
     hb "$NAME" & HP=$!
     wait_health; RC=$?
     kill $HP 2>/dev/null
