@@ -1,0 +1,18 @@
+# recipes/peers.conf.example — copy to recipes/peers.conf (gitignored) for
+# per-operator overrides of anything a checked-in recipe pins: a locally-built
+# image digest, an NFS mount, the fp8dense overlay mounts, a different port.
+# Sourced LAST (after $RECIPE.conf) by start.sh, so it wins over the recipe but
+# still loses to the exported environment.
+#
+# This file is an EXAMPLE and lint-skipped by tests/recipe_lint.sh; peers.conf
+# is linted like any recipe, so uncomment IMAGE/CKPT_SHA256 lines there.
+
+# IMAGE="registry.example.local/vllm-fn:qwen4@sha256:<64hex>"
+# IMAGE_HINT="registry.example.local/vllm-fn:qwen4"
+# CKPT_SHA256="<64hex of your local snapshot tree>"
+# PORT=8888
+# MAX_MODEL_LEN=262144
+# YARN=1                        # only meaningful above the native 262144
+# HF_CACHE_DIR="$HOME/.cache/huggingface"
+# DOCKER_ARGS_EXTRA="-v $HOME/fp8dense/model.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/model.py:ro"
+# EXTRA_VLLM_ARGS=""

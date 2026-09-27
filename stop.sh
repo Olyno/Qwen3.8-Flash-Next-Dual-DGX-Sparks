@@ -1,62 +1,76 @@
 #!/usr/bin/env bash
-# stop.sh — Stop the vLLM container on both head and worker nodes.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# stop.sh — the ONE teardown. Zero flags required. Stops whatever container the
+# active recipe names (env RECIPE / recipes state), its memwatch, and evicts
+# the checkpoint's clean page cache so the next boot doesn't CUDA-OOM on an
+# "idle" box (files/evict_page_cache.py; lane finding #35/#61).
+#
+# Graceful by default (single-spark stop.sh:6-9): vLLM gets SIGTERM + a chance
+# to unlink the POSIX shm segments the PLE offload handshake allocates. With
+# --ipc host, a SIGKILL leaks them onto /dev/shm until reboot. --force skips.
 set -euo pipefail
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-if [[ ! -f .env ]]; then
-    echo "ERROR: .env not found."
-    exit 1
+info() { echo -e "\033[1;34m[INFO]\033[0m  $*"; }
+ok()   { echo -e "\033[1;32m[ OK ]\033[0m  $*"; }
+warn() { echo -e "\033[1;33m[WARN]\033[0m  $*"; }
+
+FORCE=false; [[ "${1:-}" == --force ]] && FORCE=true
+STOP_TIMEOUT="${STOP_TIMEOUT:-30}"   # docker escalates to SIGKILL after this
+[[ "$STOP_TIMEOUT" =~ ^[0-9]+$ ]] || { echo "STOP_TIMEOUT must be an integer (got '$STOP_TIMEOUT')"; exit 1; }
+
+# Which containers: the recipe(s)' CONTAINER names, always including prod.
+RECIPE="${RECIPE:-prod}"
+containers=()
+for r in "recipes/$RECIPE.conf" recipes/prod.conf recipes/peers.conf; do
+    [[ -f "$r" ]] || continue
+    c=$(sed -n 's/^CONTAINER="\{0,1\}\([A-Za-z0-9_.-]*\)"\{0,1\}.*/\1/p' "$r" | tail -1)
+    [[ -n "$c" ]] && containers+=("$c")
+done
+# Dedupe.
+if (( ${#containers[@]} )); then
+    mapfile -t containers < <(printf '%s\n' "${containers[@]}" | sort -u)
+else
+    containers=(vllm-fn-prod)   # recipes vanished: stop the name we launched
 fi
 
-source .env
-
-WORKER_USER="${WORKER_USER:-}"
-WORKER_IP="${WORKER_IP:?WORKER_IP not set in .env}"
-CONTAINER_NAME="vllm-fn"
-NFS_CONTAINER="${NFS_CONTAINER:-vllm-fn-nfs}"
-NFS_VOLUME="${NFS_VOLUME:-vllm-fn-hf}"
-STOP_NFS=false
-
-for arg in "$@"; do
-    case "$arg" in
-        --nfs|--all) STOP_NFS=true ;;
-        -h|--help)
-            echo "Usage: $0 [--nfs]"
-            echo "  (default)  Stop vLLM on worker then head"
-            echo "  --nfs      Also stop the head NFS share and remove the worker volume"
-            exit 0
-            ;;
-        *)
-            echo "Unknown argument: $arg (try --help)"
-            exit 1
-            ;;
-    esac
+for CONTAINER in "${containers[@]}"; do
+    # Watchdog first so it cannot race a slow graceful stop into a kill
+    # (single-spark stop.sh:48-53). [m]emwatch anchor never matches our argv.
+    if pkill -f "[m]emwatch.sh $CONTAINER" 2>/dev/null; then info "$CONTAINER: watchdog stopped"; fi
+    if [[ -n "$(docker ps -aq -f "name=^${CONTAINER}$" 2>/dev/null)" ]]; then
+        if $FORCE; then
+            docker kill "$CONTAINER" >/dev/null 2>&1 || true; ok "$CONTAINER: killed (--force)"
+        else
+            docker stop -t "$STOP_TIMEOUT" "$CONTAINER" >/dev/null 2>&1 \
+                || docker kill "$CONTAINER" >/dev/null 2>&1 || true
+            ok "$CONTAINER: stopped (graceful, ${STOP_TIMEOUT}s)"
+        fi
+        docker rm "$CONTAINER" >/dev/null 2>&1 || true
+    else
+        info "$CONTAINER: not present."
+    fi
 done
 
-ssh_cmd() {
-    local user_prefix=""
-    [[ -n "$WORKER_USER" ]] && user_prefix="${WORKER_USER}@"
-    ssh -o StrictHostKeyChecking=no "${user_prefix}$WORKER_IP" "$@"
-}
+# Report leaked shm, never delete it: other --ipc host containers live here too
+# (single-spark stop.sh:92-94).
+leaked=$(find /dev/shm -maxdepth 1 \( -name 'psm_*' -o -name 'sem.mp-*' \) 2>/dev/null | wc -l)
+(( leaked > 0 )) && warn "$leaked psm_*/sem.mp-* segments still in /dev/shm (another --ipc host container, or a kill before unlink)."
 
-echo "Stopping $CONTAINER_NAME on worker ($WORKER_IP)..."
-ssh_cmd "docker rm -f $CONTAINER_NAME 2>/dev/null && echo '  Worker: stopped.' || echo '  Worker: not running.'"
-
-echo "Stopping $CONTAINER_NAME on head..."
-docker rm -f "$CONTAINER_NAME" 2>/dev/null && echo "  Head: stopped." || echo "  Head: not running."
-
-if $STOP_NFS; then
-    echo "Stopping NFS share ($NFS_CONTAINER) on head..."
-    echo "  (kernel NFS in Docker can ignore SIGKILL if rpcbind is in D-state; Ctrl-C and reboot if this hangs)"
-    if timeout 15 docker rm -f "$NFS_CONTAINER" >/dev/null 2>&1; then
-        echo "  NFS server: stopped."
-    else
-        echo "  NFS server: still running (could not kill). Leave it — start.sh will reuse it."
-    fi
-    echo "Removing worker NFS volume ($NFS_VOLUME)..."
-    ssh_cmd "docker volume rm $NFS_VOLUME 2>/dev/null && echo '  Worker volume: removed.' || echo '  Worker volume: not present.'"
+# Release the checkpoint's clean pages for the NEXT boot. Needs no root
+# (posix_fadvise DONTNEED, read-only opens); best-effort by design — the
+# script itself never fails over cache eviction.
+EVICT="$SCRIPT_DIR/files/evict_page_cache.py"
+if [[ -f "$EVICT" ]]; then
+    HF_CACHE_DIR="${HF_CACHE_DIR:-${HF_HOME:-$HOME/.cache/huggingface}}"
+    # Evict every cached snapshot tree; harmless no-op when nothing is loaded.
+    mapfile -t _ckpt < <(find "$HF_CACHE_DIR/hub" -maxdepth 1 -type d -name 'models--*' 2>/dev/null)
+    for d in "${_ckpt[@]:-}"; do
+        [[ -n "$d" ]] && python3 "$EVICT" "$d" >/dev/null 2>&1 || true
+    done
+    info "page cache evicted for the HF checkpoints."
+else
+    warn "files/evict_page_cache.py absent — skipped (copy it; see files/NOTES.md)."
 fi
-
-echo "Done."
+ok "done. On the peer node of a dual pair, run ./stop.sh there too."
