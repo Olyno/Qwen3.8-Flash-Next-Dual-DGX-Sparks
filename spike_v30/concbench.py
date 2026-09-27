@@ -48,7 +48,12 @@ async def stream_one(sess, port, model, max_tokens, temp, i):
                     except Exception:
                         continue
                     dl = d.get("choices", [{}])[0].get("delta", {})
-                    if dl.get("content"):
+                    # qwen3 reasoning-parser: thinking tokens arrive as
+                    # reasoning_content and content may never come inside a
+                    # short max_tokens budget. Count ANY delta with a payload
+                    # key (mirrors decodebench.py:56-58); the old content-only
+                    # test all-failed the C=4/8/16 ladder on the 09-27 A1 run.
+                    if dl.get("content") or dl.get("reasoning_content"):
                         if ttft is None:
                             ttft = time.perf_counter() - t0
                         ntok += 1
