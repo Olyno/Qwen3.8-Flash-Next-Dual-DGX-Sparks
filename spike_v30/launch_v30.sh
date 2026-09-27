@@ -19,11 +19,14 @@ PLE_OFFLOAD=${PLE_OFFLOAD:-1}; LOAD_STRAT=${LOAD_STRAT:-lazy}
 # GPU_UTIL empty => DERIVE like single-spark start.sh Step 2: budget =
 # min(weights+overhead5.6+mtp1.49+max(kv_need,12G), MemTotal - HOST_RESERVE26).
 if [[ -z "$GPU_UTIL" ]]; then
-    GPU_UTIL=$(python3 - "$MODEL" "$MAXLEN" "$PLE_OFFLOAD" <<'PY'
+    GPU_UTIL=$(python3 - "$MODEL" "$MAXLEN" "$PLE_OFFLOAD" "${PLE_MMAP:-}" <<'PY'
 import json, os, sys, math
-model, maxlen, ple_off = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+model, maxlen, ple_off, mmap_ = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
 idx = os.path.join(model, "model.safetensors.index.json")
 wtb = json.load(open(idx))["metadata"]["total_size"] if os.path.exists(idx) else 105e9
+# PLE lives on HOST whenever offload=1 (pinned or mmap — GPU budget is the
+# same; the difference is host-side evictability, which HOST_RESERVE covers
+# only for the evictable mmap table).
 ple = 47.68 * 2**30 if ple_off == "1" else 0.0
 w = max(wtb - ple, 0) / 2**30
 kv_need = maxlen * 29482 * 0.58 / 2**30           # fp8 KV mult
