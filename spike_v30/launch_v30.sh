@@ -2,11 +2,12 @@
 # vLLM v0.30.0 upgrade-test launcher. Mirrors ps_launch.sh (same server flags)
 # on the new image with the ported [fp8dense overlay] bind-mounted. PLE CPU
 # offload is native now (EngramConfig, VLLM_PLE_CPU_OFFLOAD defaults to 1 in
-# v0.30 — see lane PR #68: set PLE_OFFLOAD=false / VLLM_PLE_CPU_OFFLOAD=0 to
-# disable). The packed-table mmap path is OPT-IN via VLLM_PLE_PACKED_TABLE_DIR:
-# it crashed the first boot (see README diagnosis — UVA read of the whole
-# 47.7 GiB map during profiling inside a 100g cgroup on unified memory).
-# Usage: K=6 [VLLM_TORCH_PROFILER_DIR=...] [VLLM_PLE_PACKED_TABLE_DIR=...] ./launch_v30.sh <container> <port> [model-dir] [extra vllm args...]
+# v0.30 — set PLE_OFFLOAD=0 to disable; CAUTION: plain pinned offload costs
+# ~104 GiB unevictable RAM on GB10 -> unified-pool hang, hangs #3-#8).
+# PLE_MMAP=/path enables the PROVEN mmap-backed table (patch_ple_mmap_v030.py
+# from the single-spark lane; table persisted under ~/.cache/vllm/
+# ple_mmap_v030, first boot builds it, later boots skip the 47.7 GiB copy).
+# Usage: K=6 [PLE_MMAP=$HOME/.cache/vllm/ple_mmap_v030] [VLLM_TORCH_PROFILER_DIR=...] ./launch_v30.sh <container> <port> [model-dir] [extra vllm args...]
 set -euo pipefail
 NAME=$1; PORT=$2; K=${K:-6}
 MODEL=${3:-$HOME/models/Qwen3.8-Flash-Next-NVFP4-wk1}
@@ -38,9 +39,23 @@ PROF_ARGS=()
 if [[ -n "${VLLM_TORCH_PROFILER_DIR:-}" ]]; then
     PROF_ARGS=(-e VLLM_TORCH_PROFILER_DIR=/prof -v "$VLLM_TORCH_PROFILER_DIR":/prof)
 fi
-PT_ARGS=()
-if [[ -n "${VLLM_PLE_PACKED_TABLE_DIR:-}" ]]; then
-    PT_ARGS=(-e "VLLM_PLE_PACKED_TABLE_DIR=$VLLM_PLE_PACKED_TABLE_DIR")
+PT_ENV=()
+NG_EMB="$OV/ngram_embedding.py"
+if [[ -n "${PLE_MMAP:-}" ]]; then
+    # Proven v0.30 path (single-spark lane): pristine image ngram + patcher.
+    # Table dir lives INSIDE the already bind-mounted ~/.cache/vllm (rw), so
+    # no extra mount; first boot builds it from shard copies through the
+    # normal loader, commits via msync+fingerprint; later boots skip the
+    # 47.7 GiB copy entirely. Lookups read rows over ATS, no cudaHostRegister.
+    ORIG="$OV/ngram_embedding.orig.py"
+    if [[ ! -f "$ORIG" ]]; then
+        CID=$(docker create vllm/vllm-openai:v0.30.0 /bin/true)
+        docker cp "$CID:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ngram_embedding.py" "$ORIG"
+        docker rm "$CID" >/dev/null
+    fi
+    python3 "$OV/patch_ple_mmap_v030.py" "$ORIG" "$NG_EMB" || { echo "launch_v30: mmap patch anchor drift" >&2; exit 1; }
+    PT_ENV=(-e "VLLM_PLE_MMAP_DIR=/root/.cache/vllm/ple_mmap_v030" -e VLLM_PLE_MMAP_ADVICE=1)
+    mkdir -p "$HOME/.cache/vllm/ple_mmap_v030"
 fi
 # Page-cache release before launch (GB10 unified pool; lane finding: weight
 # loading can CUDA-OOM on an "idle" box without it — files/evict_page_cache.py).
@@ -56,12 +71,12 @@ docker run \
     -e "VLLM_PLE_CPU_OFFLOAD=$PLE_OFFLOAD" \
     -e VLLM_USE_BREAKABLE_CUDAGRAPH=0 \
     -e HF_HOME=/root/.cache/huggingface \
-    "${PT_ARGS[@]}" \
+    "${PT_ENV[@]}" \
     "${PROF_ARGS[@]}" \
     -v $OV/model.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/model.py:ro \
     -v $OV/mtp.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/mtp.py:ro \
     -v $OV/hyperconnection.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/hyperconnection.py:ro \
-    -v $OV/ngram_embedding.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ngram_embedding.py:ro \
+    -v "$NG_EMB":/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ngram_embedding.py:ro \
     -v /home/olyno/.cache/huggingface:/root/.cache/huggingface \
     -v /home/olyno/.cache/vllm:/root/.cache/vllm \
     -v "$MODEL:$MODEL:ro" \

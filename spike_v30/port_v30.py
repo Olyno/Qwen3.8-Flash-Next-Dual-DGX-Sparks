@@ -152,111 +152,13 @@ t = sub(
 save("mtp.py", t)
 
 # ---------------------------------------------------------------- ngram_embedding.py
-n = load("ngram_embedding.py")
-n = sub(n, "import torch\n", "import os\nimport torch\n", 1)
-n = sub(
-    n,
-    """        embedding_cls = (
-            Qwen4ExpPLEPinnedHostEmbedding
-            if engram_config is not None and engram_config.cpu_offload
-            else Qwen4ExpPLEDeviceEmbedding
-        )""",
-    """        if os.environ.get("VLLM_PLE_PACKED_TABLE_DIR"):
-            embedding_cls = _PlePackedTableEmbedding
-        else:
-            embedding_cls = (
-                Qwen4ExpPLEPinnedHostEmbedding
-                if engram_config is not None and engram_config.cpu_offload
-                else Qwen4ExpPLEDeviceEmbedding
-            )""",
-)
-n = sub(
-    n,
-    """        self.ngram_embedding = embedding_cls(""",
-    """        _pt_kwargs = {}
-        if embedding_cls is _PlePackedTableEmbedding:
-            _pt_kwargs = {"_packed_prefix": embedding_prefix}
-        self.ngram_embedding = embedding_cls(""",
-)
-n = sub(
-    n,
-    """            data_parallel_rank=data_parallel_rank,
-        )
-        weight = self.ngram_embedding.weight""",
-    """            data_parallel_rank=data_parallel_rank,
-            **_pt_kwargs,
-        )
-        weight = self.ngram_embedding.weight""",
-)
-
-# mmap-backed pinned-table variant: reuses the UVA lookup of the pinned class.
-# Defined at module end (after Qwen4ExpNGramEmbedding, which resolves it lazily
-# through the module globals at construction time).
-n += '''
-
-class _PlePackedTableEmbedding(Qwen4ExpPLEPinnedHostEmbedding):
-    """Pinned-host PLE whose CPU buffer is an mmap of a pre-packed FP8 table.
-
-    VLLM_PLE_PACKED_TABLE_DIR holds "<prefix>.ngram_embedding.packed_u8"
-    (produced by the repo's build_ple_packed_table.py). On GB10 unified memory
-    this trades ~104 GiB of non-evictable anonymous pinned RAM for a
-    page-cache-backed map; lookup and dequant semantics are identical.
-    """
-
-    def __init__(self, *args, _packed_prefix: str = "", **kwargs) -> None:
-        # Set before super().__init__ runs: allocate_embedding_weight is called
-        # from the base constructor, so object.__setattr__ is required.
-        object.__setattr__(self, "_packed_prefix", _packed_prefix)
-        super().__init__(*args, **kwargs)
-
-    def _find_packed_file(self) -> str | None:
-        dir_ = os.environ["VLLM_PLE_PACKED_TABLE_DIR"]
-        want = self._packed_prefix + ".packed_u8"
-        try:
-            entries = os.listdir(dir_)
-        except OSError:
-            return None
-        # Match by suffix: the checkpoint-side table was named under the old
-        # runtime prefix ("language_model.model..."), the v0.30 prefix may lack
-        # the "language_model." root.
-        for e in entries:
-            if e.endswith(want):
-                return os.path.join(dir_, e)
-            tail = want[len("model.") :] if want.startswith("model.") else want
-            if e.endswith(tail):
-                return os.path.join(dir_, e)
-        return None
-
-    def allocate_embedding_weight(
-        self,
-        num_embeddings: int,
-        embedding_dim: int,
-        dtype: torch.dtype,
-    ) -> torch.Tensor:
-        path = self._find_packed_file() if dtype == torch.float8_e4m3fn else None
-        if path is None:
-            # Not FP8, or no table: normal pinned allocation + row copy.
-            return super().allocate_embedding_weight(
-                num_embeddings, embedding_dim, dtype
-            )
-        import mmap
-
-        expected = num_embeddings * embedding_dim
-        size = os.path.getsize(path)
-        if size != expected:
-            raise ValueError(
-                f"packed PLE table {path} is {size} bytes, expected {expected}"
-            )
-        fd = os.open(path, os.O_RDWR)
-        mm = mmap.mmap(fd, size, access=mmap.ACCESS_WRITE)
-        weight = (
-            torch.frombuffer(mm, dtype=torch.uint8)
-            .view(num_embeddings, embedding_dim)
-            .view(dtype)
-            .requires_grad_(False)
-        )
-        object.__setattr__(self, "_packed_mmap", mm)  # keep the mapping alive
-        return weight
-'''
+# NOT patched by string-splice here anymore. The proven v0.30 mmap path lives
+# in files/patch_ple_mmap_v030.py (port of the single-spark repo's patcher,
+# anchors verified against pristine image sources by that lane). port_v30.py
+# only keeps model.py/mtp.py/hyperconnection.py splices.
+# Boot #8 (09-27 ~13:0x) proved the old hand-rolled _PlePackedTableEmbedding
+# still hung: it UVA-registered the mmap AND re-copied all 47.7 GiB of shards
+# per boot. The sister patcher reads rows over ATS from a shared MAP_ANON-free
+# file and skips shard copies once the persistent table is committed.
 save("ngram_embedding.py", n)
 print("ported:", sorted(os.listdir(OUT)))
