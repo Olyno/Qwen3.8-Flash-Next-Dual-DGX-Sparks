@@ -60,6 +60,43 @@ if [[ -n "${PLE_MMAP:-}" ]]; then
     PT_ENV=(-e "VLLM_PLE_MMAP_DIR=/root/.cache/vllm/ple_mmap_v030" -e VLLM_PLE_MMAP_ADVICE=1)
     mkdir -p "$HOME/.cache/vllm/ple_mmap_v030"
 fi
+
+# --- optional proven sister-lane patches (each inert without its flag) -----
+# DRAFT_VOCAB=<ids.txt>: reduced drafter lm_head (their patch_mtp_draft_vocab
+# trio; needs files/patch_mtp_draft_vocab.py NEXT TO the v030 patcher, both in
+# $OV). Applies onto OUR ported mtp.py so the fp8dense HC-mixer splice stays.
+# KV_FP8=1: vllm#55557 fp8-e4m3 QSA KV backport (patch_qsa_fp8_kv_v030.py);
+# pristine image qsa files extracted, patched, bind-ro over the package.
+MTP_PY="$OV/mtp.py"
+if [[ -n "${DRAFT_VOCAB:-}" ]]; then
+    # v030 patcher resolves its inputs relative to ITS own directory: stage a
+    # private copy dir with (v030-patcher, base patcher, our mtp as .orig).
+    DVD="$OV/dvdraft"
+    mkdir -p "$DVD"
+    cp "$OV/patch_mtp_draft_vocab_v030.py" "$OV/patch_mtp_draft_vocab.py" "$DVD/"
+    cp "$OV/mtp.py" "$DVD/mtp_v030_patched.py.orig"
+    ( cd "$DVD" && python3 patch_mtp_draft_vocab_v030.py ) || { echo "launch_v30: draft-vocab anchor drift" >&2; exit 1; }
+    MTP_PY="$DVD/mtp_v030_patched.py"
+    DV_ARGS=(-v "$DRAFT_VOCAB:/root/draft_vocab.txt:ro" -e VLLM_MTP_DRAFT_VOCAB=/root/draft_vocab.txt)
+else
+    DV_ARGS=()
+fi
+KV_ARGS=()
+QSA_MOUNTS=()
+if [[ "${KV_FP8:-}" == 1 ]]; then
+    QO="$OV/qsa_orig"; QP="$OV/qsa_patch"
+    if [[ ! -f "$QO/qsa.py" || ! -f "$QO/ops/qsa.py" ]]; then
+        CID=$(docker create vllm/vllm-openai:v0.30.0 /bin/true)
+        mkdir -p "$QO/ops"
+        docker cp "$CID:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/qsa.py" "$QO/qsa.py"
+        docker cp "$CID:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ops/qsa.py" "$QO/ops/qsa.py"
+        docker rm "$CID" >/dev/null
+    fi
+    python3 "$OV/patch_qsa_fp8_kv_v030.py" "$QO" "$QP" || { echo "launch_v30: qsa#55557 does not apply" >&2; exit 1; }
+    QSA_MOUNTS=(-v "$QP/qsa.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/qsa.py:ro" \
+                -v "$QP/ops/qsa.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ops/qsa.py:ro")
+    KV_DTYPE=${KV_DTYPE:-fp8_e4m3}
+fi
 # Page-cache release before launch (GB10 unified pool; lane finding: weight
 # loading can CUDA-OOM on an "idle" box without it — files/evict_page_cache.py).
 python3 "$HOME/Qwen3.8-Flash-Next-Dual-DGX-Sparks/files/evict_page_cache.py" \
@@ -76,8 +113,10 @@ docker run \
     -e HF_HOME=/root/.cache/huggingface \
     "${PT_ENV[@]}" \
     "${PROF_ARGS[@]}" \
+    "${DV_ARGS[@]}" \
+    "${QSA_MOUNTS[@]}" \
     -v $OV/model.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/model.py:ro \
-    -v $OV/mtp.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/mtp.py:ro \
+    -v "$MTP_PY":/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/mtp.py:ro \
     -v $OV/hyperconnection.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/hyperconnection.py:ro \
     -v "$NG_EMB":/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ngram_embedding.py:ro \
     -v /home/olyno/.cache/huggingface:/root/.cache/huggingface \
@@ -92,7 +131,7 @@ docker run \
     --max-num-seqs 8 \
     --max-num-batched-tokens "$BATCHED" \
     --max-model-len "$MAXLEN" \
-    --kv-cache-dtype auto \
+    --kv-cache-dtype "${KV_DTYPE:-auto}" \
     --safetensors-load-strategy "$LOAD_STRAT" \
     --enable-chunked-prefill \
     --reasoning-parser qwen3 \
