@@ -55,3 +55,9 @@ files/draft_vocab_*.txt
 # MTP_DRAFT_VOCAB default in .env.sample work out of the box. Generated
 # vocabularies stay untracked.
 !files/draft_vocab_en_code_47k.txt
+
+# launch-time generated overlays (extract+patch per node, from the pinned image)
+files/v030_ple/
+files/v030_fp8kv/
+files/dvdraft/
+logs/
