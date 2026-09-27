@@ -1,0 +1,22 @@
+# msi auto-heal layer 3: after an auto-reboot, resume the bench queue without
+# waiting for a human or this session. resume.sh is DONE-tag idempotent, so a
+# dumb rerun of the interrupted phase is always safe; --restart-on-failure
+# retries it 3x then goes quiet (prevents a boot-loop against a bad model).
+# install (root, one-time):
+#   sudo cp watchdog-resume.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable watchdog-resume.service
+[Unit]
+Description=Resume v30 bench phase after watchdog reboot
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=olyno
+Environment=HOME=/home/olyno
+# PHASE_STATE written by resume.sh launcher script; see note below.
+ExecStart=/bin/bash -c 'test -f /home/olyno/v30_bench/PHASE_STATE && bash /home/olyno/resume.sh "$(cat /home/olyno/v30_bench/PHASE_STATE)" || true'
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
