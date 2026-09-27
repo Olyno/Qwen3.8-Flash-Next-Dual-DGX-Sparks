@@ -1,13 +1,21 @@
 #!/bin/bash
-# vLLM v0.30.0 upgrade-test launcher. Mirrors ps_launch.sh (same server flags)
-# on the new image with the ported [fp8dense overlay] bind-mounted. PLE CPU
-# offload is native now (EngramConfig, VLLM_PLE_CPU_OFFLOAD defaults to 1 in
-# v0.30 — set PLE_OFFLOAD=0 to disable; CAUTION: plain pinned offload costs
-# ~104 GiB unevictable RAM on GB10 -> unified-pool hang, hangs #3-#8).
-# PLE_MMAP=/path enables the PROVEN mmap-backed table (patch_ple_mmap_v030.py
-# from the single-spark lane; table persisted under ~/.cache/vllm/
-# ple_mmap_v030, first boot builds it, later boots skip the 47.7 GiB copy).
-# Usage: K=6 [PLE_MMAP=$HOME/.cache/vllm/ple_mmap_v030] [VLLM_TORCH_PROFILER_DIR=...] ./launch_v30.sh <container> <port> [model-dir] [extra vllm args...]
+# vLLM v0.30.0 upgrade-test launcher. Same server flags as ps_launch.sh on the
+# new image, with the ported [fp8dense overlay] (model/mtp/hyperconnection)
+# bind-mounted.
+#
+# PLE: v0.30 native offload (VLLM_PLE_CPU_OFFLOAD=1) pins the whole 47.7 GiB
+# table as NON-evictable anonymous RAM -> unified-pool D-state hang (crashes
+# #3-#8). Set PLE_MMAP=<dir> for the PROVEN fix (patch_ple_mmap_v030.py from
+# the single-spark lane): ATS row reads over a shared file map, no pinning;
+# the table builds once under the dir, later boots skip the copy entirely.
+# PLE_OFFLOAD=0 is a last resort (table on GPU -> driver OOM at 131k ctx).
+#
+# Optional, each inert without its flag:
+#   DRAFT_VOCAB=<ids.txt>  reduced drafter lm_head (sister patcher trio)
+#   KV_FP8=1               vllm#55557 QSA fp8_e4m3 KV backport
+#   VLLM_TORCH_PROFILER_DIR=<dir>  torch profiler capture (P1)
+#
+# Usage: K=6 PLE_MMAP=$HOME/.cache/vllm/ple_mmap_v030 ./launch_v30.sh <container> <port> [model-dir] [extra vllm args...]
 set -euo pipefail
 NAME=$1; PORT=$2; K=${K:-6}
 MODEL=${3:-$HOME/models/Qwen3.8-Flash-Next-NVFP4-wk1}
