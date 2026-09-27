@@ -126,7 +126,7 @@ args=(docker run -d --name "$CONTAINER" --gpus all --network host --ipc host
       -e VLLM_HOST_IP="${NODE_IP:-127.0.0.1}" "${PLE_OFFLOAD_ENV[@]}" "${PLE_MOUNT[@]}" "${QSA_MOUNT[@]}")
 if [[ "$TOPO_MODE" == dual ]]; then
     # NCCL/RoCE over the 200G link: iface from detection; HCA/GID per the dual
-    # repo's .env.sample convention (=rocep1s0f0, GID 3), recipe-overridable.
+    # repo .env.example convention (=rocep1s0f0, GID 3), recipe-overridable.
     args+=(-e GLOO_SOCKET_IFNAME="${FABRIC_IFNAME:-$FABRIC_IFACE}"
            -e NCCL_SOCKET_IFNAME="${FABRIC_IFNAME:-$FABRIC_IFACE}"
            -e TP_SOCKET_IFNAME="${FABRIC_IFNAME:-$FABRIC_IFACE}"

@@ -38,17 +38,16 @@ for arg in "$@"; do
     esac
 done
 
-if [[ ! -f .env ]]; then
-    echo "ERROR: .env not found. Copy .env.sample to .env and edit it."
-    echo "  cp .env.sample .env"
-    exit 1
-fi
+# Config surface since the consolidation: recipes/prod.conf defaults, optional
+# .env overrides (template: .env.example), environment wins over both.
 
 # Environment wins over .env for ABLIT / HF_TOKEN (same rule as start.sh).
 _CLI_HF_TOKEN="${HF_TOKEN:-}"
 _CLI_ABLIT="${ABLIT:-}"
-# shellcheck source=.env
-source .env
+# recipe defaults first (MODEL_ID, HF_CACHE_DIR live there), then optional .env.
+source recipes/prod.conf 2>/dev/null || true
+if [[ -f .env ]]; then # shellcheck source=.env
+source .env; fi
 [[ -n "$_CLI_HF_TOKEN" ]] && HF_TOKEN="$_CLI_HF_TOKEN"
 HF_TOKEN="${HF_TOKEN:-}"
 [[ -n "$HF_TOKEN" ]] && export HF_TOKEN
