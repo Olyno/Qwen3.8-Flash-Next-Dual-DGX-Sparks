@@ -89,6 +89,7 @@ FP8DENSE_MOUNT=()
 if [[ "${FP8DENSE:-0}" == 1 ]]; then
     _pkg=/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia
     for f in model.py mtp.py hyperconnection.py; do
+        [[ -f "$SCRIPT_DIR/files/$f" ]] || err "FP8DENSE=1 needs files/$f (see files/NOTES.md)"
         FP8DENSE_MOUNT+=(-v "$SCRIPT_DIR/files/$f:$_pkg/$f:ro")
     done
 fi
