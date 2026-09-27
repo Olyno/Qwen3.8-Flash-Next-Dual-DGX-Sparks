@@ -89,11 +89,30 @@ FP8DENSE_MOUNT=()
 if [[ "${FP8DENSE:-0}" == 1 ]]; then
     _pkg=/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia
     for f in model.py mtp.py hyperconnection.py; do
-        [[ -f "files/$f" ]] || err "FP8DENSE=1 needs files/$f (copy from spike_v30/files)"
-        FP8DENSE_MOUNT+=(-v "$SCRIPT_DIR/files/$f:/$_pkg/$f:ro")
+        FP8DENSE_MOUNT+=(-v "$SCRIPT_DIR/files/$f:$_pkg/$f:ro")
     done
 fi
 
+
+# fp8 KV on the QSA path needs the PR #55557 backport (missed the v0.30 cut):
+# patch pristine image qsa.py + ops/qsa.py, bind over the package. Without
+# this wiring, KV_CACHE_DTYPE=fp8_e4m3 is silently unsupported on qwen4_exp.
+QSA_MOUNT=()
+if [[ "${KV_CACHE_DTYPE:-auto}" == fp8* ]]; then
+    [[ -f files/patch_qsa_fp8_kv_v030.py ]] || err "KV_CACHE_DTYPE=fp8* needs files/patch_qsa_fp8_kv_v030.py"
+    QO=files/v030_fp8kv/orig; QP=files/v030_fp8kv
+    if [[ ! -f $QO/qsa.py || ! -f $QO/ops/qsa.py ]]; then
+        info "Extracting pristine qsa.py + ops/qsa.py from $IMAGE ..."
+        CID=$(docker create "$IMAGE" /bin/true)
+        mkdir -p "$QO/ops"
+        docker cp "$CID:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/qsa.py" "$QO/qsa.py"
+        docker cp "$CID:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ops/qsa.py" "$QO/ops/qsa.py"
+        docker rm "$CID" >/dev/null
+    fi
+    python3 files/patch_qsa_fp8_kv_v030.py "$QO" "$QP" >/dev/null || err "qsa #55557 does not apply (image drift)"
+    _pkg=/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia
+    QSA_MOUNT=(-v "$SCRIPT_DIR/$QP/qsa.py:$_pkg/qsa.py:ro" -v "$SCRIPT_DIR/$QP/ops/qsa.py:$_pkg/ops/qsa.py:ro")
+fi
 # --- docker run ----------------------------------------------------------------
 read -r -a _vllm <<<"$VLLM_ARGS"
 # Caches mount to /root (container runs as root, monolith :900-901).
@@ -103,7 +122,7 @@ args=(docker run -d --name "$CONTAINER" --gpus all --network host --ipc host
       --memory "${CONTAINER_MEM_GIB}g" --memory-swap "${CONTAINER_MEM_GIB}g"
       -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 -e HF_HOME=/root/.cache/huggingface
       -v "$HF_CACHE_DIR:/root/.cache/huggingface" -v "$HOME/.cache/vllm:/root/.cache/vllm"
-      -e VLLM_HOST_IP="${NODE_IP:-127.0.0.1}" "${PLE_OFFLOAD_ENV[@]}" "${PLE_MOUNT[@]}")
+      -e VLLM_HOST_IP="${NODE_IP:-127.0.0.1}" "${PLE_OFFLOAD_ENV[@]}" "${PLE_MOUNT[@]}" "${QSA_MOUNT[@]}")
 if [[ "$TOPO_MODE" == dual ]]; then
     # NCCL/RoCE over the 200G link: iface from detection; HCA/GID per the dual
     # repo's .env.sample convention (=rocep1s0f0, GID 3), recipe-overridable.
@@ -121,6 +140,7 @@ else
 fi
 _vllm+=(--kv-cache-dtype "${KV_CACHE_DTYPE:-auto}")
 [[ -n "${SPECULATIVE_CONFIG:-}" ]] && _vllm+=(--speculative-config "$SPECULATIVE_CONFIG")
+_vllm+=(--gpu-memory-utilization "$GPU_MEMORY_UTILIZATION")
 [[ -n "${COMPILATION_CONFIG:-}" ]] && _vllm+=(--compilation-config "$COMPILATION_CONFIG")
 [[ -n "${HF_OVERRIDES:-}"       ]] && _vllm+=(--hf-overrides       "$HF_OVERRIDES")
 [[ -n "${MAX_MODEL_LEN:-}"      ]] && _vllm+=(--max-model-len      "$MAX_MODEL_LEN")

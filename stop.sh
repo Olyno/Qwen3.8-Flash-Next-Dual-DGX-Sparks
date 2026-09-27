@@ -64,12 +64,17 @@ leaked=$(find /dev/shm -maxdepth 1 \( -name 'psm_*' -o -name 'sem.mp-*' \) 2>/de
 EVICT="$SCRIPT_DIR/files/evict_page_cache.py"
 if [[ -f "$EVICT" ]]; then
     HF_CACHE_DIR="${HF_CACHE_DIR:-${HF_HOME:-$HOME/.cache/huggingface}}"
-    # Evict every cached snapshot tree; harmless no-op when nothing is loaded.
-    mapfile -t _ckpt < <(find "$HF_CACHE_DIR/hub" -maxdepth 1 -type d -name 'models--*' 2>/dev/null)
-    for d in "${_ckpt[@]:-}"; do
+    # Evict (a) every cached HF snapshot tree and (b) every local MODEL_PATH a
+    # recipe names (bench arms live outside the hub cache). Harmless no-op when
+    # nothing is loaded.
+    evict_dirs=()
+    while read -r p; do [[ -n "$p" && -d "$p" ]] && evict_dirs+=("$p"); done \
+        < <(sed -n 's/^MODEL_PATH="\{0,1\}\$HOME\([^"#]*\)"\{0,1\}.*/'"$HOME"'\1/p; s/^MODEL_PATH="\{0,1\}\(\/[^"#]*\)"\{0,1\}.*/\1/p' recipes/*.conf 2>/dev/null | sort -u)
+    mapfile -t -O ${#evict_dirs[@]} _ckpt < <(find "$HF_CACHE_DIR/hub" -maxdepth 1 -type d -name 'models--*' 2>/dev/null)
+    for d in "${evict_dirs[@]}" "${_ckpt[@]:-}"; do
         [[ -n "$d" ]] && python3 "$EVICT" "$d" >/dev/null 2>&1 || true
     done
-    info "page cache evicted for the HF checkpoints."
+    info "page cache evicted for checkpoints + HF cache."
 else
     warn "files/evict_page_cache.py absent — skipped (copy it; see files/NOTES.md)."
 fi
