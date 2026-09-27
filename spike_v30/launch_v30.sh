@@ -11,9 +11,10 @@ set -euo pipefail
 NAME=$1; PORT=$2; K=${K:-6}
 MODEL=${3:-$HOME/models/Qwen3.8-Flash-Next-NVFP4-wk1}
 OV=${OV:-$HOME/upgrade/v30/overlay}
-# Boot-robustness overrides (hang #3 post-mortem: stock watermarks lose the
-# reclaim race during compile-warm with the big profile; lower = safer boot).
+# Boot-robustness overrides (hangs #3-5: v0.30 compile-warm died under stock
+# AND reduced-profile watermarks; PLE_OFFLOAD=0 tests the pinned-table path).
 GPU_UTIL=${GPU_UTIL:-0.735}; BATCHED=${BATCHED:-8192}; MAXLEN=${MAXLEN:-131072}
+PLE_OFFLOAD=${PLE_OFFLOAD:-1}
 PROF_ARGS=()
 if [[ -n "${VLLM_TORCH_PROFILER_DIR:-}" ]]; then
     PROF_ARGS=(-e VLLM_TORCH_PROFILER_DIR=/prof -v "$VLLM_TORCH_PROFILER_DIR":/prof)
@@ -33,7 +34,7 @@ docker run \
     --cap-add SYS_NICE --cap-add SYS_PTRACE --ulimit memlock=-1 --ulimit stack=67108864 \
     -e HF_HUB_OFFLINE=1 \
     -e TRANSFORMERS_OFFLINE=1 \
-    -e VLLM_PLE_CPU_OFFLOAD=1 \
+    -e "VLLM_PLE_CPU_OFFLOAD=$PLE_OFFLOAD" \
     -e VLLM_USE_BREAKABLE_CUDAGRAPH=0 \
     -e HF_HOME=/root/.cache/huggingface \
     "${PT_ARGS[@]}" \
