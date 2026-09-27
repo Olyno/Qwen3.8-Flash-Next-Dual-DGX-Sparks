@@ -14,7 +14,7 @@ OV=${OV:-$HOME/upgrade/v30/overlay}
 # Boot-robustness overrides (hangs #3-5: v0.30 compile-warm died under stock
 # AND reduced-profile watermarks; PLE_OFFLOAD=0 tests the pinned-table path).
 GPU_UTIL=${GPU_UTIL:-0.735}; BATCHED=${BATCHED:-8192}; MAXLEN=${MAXLEN:-131072}
-PLE_OFFLOAD=${PLE_OFFLOAD:-1}
+PLE_OFFLOAD=${PLE_OFFLOAD:-1}; LOAD_STRAT=${LOAD_STRAT:-lazy}
 PROF_ARGS=()
 if [[ -n "${VLLM_TORCH_PROFILER_DIR:-}" ]]; then
     PROF_ARGS=(-e VLLM_TORCH_PROFILER_DIR=/prof -v "$VLLM_TORCH_PROFILER_DIR":/prof)
@@ -56,8 +56,7 @@ docker run \
     --max-num-batched-tokens "$BATCHED" \
     --max-model-len "$MAXLEN" \
     --kv-cache-dtype auto \
-    --load-format safetensors \
-    --safetensors-load-strategy lazy \
+    --safetensors-load-strategy "$LOAD_STRAT" \
     --enable-chunked-prefill \
     --reasoning-parser qwen3 \
     --enable-auto-tool-choice \
