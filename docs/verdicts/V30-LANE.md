@@ -105,3 +105,14 @@ K4" datapoint says check this). Analyzer dry-run 09-29 parses all five rows
 (drafts=0 until T1b lands). NOTE the anomaly: this ladder's K1/K2 rows are
 ABOVE the A2 K4 row on the same class (20.2 vs A2 21.8 hyb-less 25.8?) —
 different checkpoints (wk1 vs hybrid); do not cross-read columns across arms.
+
+## Async scheduling: already ON by default at v0.30 for our stack (09-29)
+Image grep (vllm/config/vllm.py:1407-1466): explicit `--async-scheduling` raises
+only for non-EAGLE/MTP/draft_model/dspark spec methods; the auto path disables
+(with a `warning_once`) only on those methods or `disable_padded_drafter_batch`.
+`method='mtp'` is inside `EagleModelTypes` (config/speculative.py:69-71) and the
+mp executor returns `supports_async_scheduling()=True` (multiproc_executor.py:558).
+The running A3 container's 17 k boot-log lines contain zero "async" strings —
+no disable-warning fired ⇒ scheduler already runs AsyncScheduler (max_concurrent
+_batches=2). Step-overhead hiding is therefore NOT an open lever; R3's ITL row
+and the P1b2 profile will show whether the overlap is effective at k=4.
