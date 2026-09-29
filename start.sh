@@ -264,6 +264,9 @@ args=(docker run -d --name "$CONTAINER" --gpus all --network host --ipc host
       -v "$MODEL_SNAPSHOT:$MODEL_SNAPSHOT:ro"
       -e VLLM_HOST_IP="${NODE_IP:-127.0.0.1}" "${PLE_OFFLOAD_ENV[@]}" "${PLE_MOUNT[@]}" "${QSA_MOUNT[@]}")
 [[ -n "${VLLM_ALLOW_LONG_MAX_MODEL_LEN:-}" ]] && args+=(-e "VLLM_ALLOW_LONG_MAX_MODEL_LEN=$VLLM_ALLOW_LONG_MAX_MODEL_LEN")
+# opt-in passthrough (envs.py:721 Rust BPE shim; helps prompt-heavy TTFT,
+# inert when GPU-bound; default stays off — set VLLM_USE_FASTOKENS=1 to try)
+[[ -n "${VLLM_USE_FASTOKENS:-}" ]] && args+=(-e "VLLM_USE_FASTOKENS=$VLLM_USE_FASTOKENS")
 # v0.30 auto-enables breakable CUDA graphs; on GB10 they re-capture mid-turn
 # and add +-15 % decode noise (upstream 34e7400 measured +-2 % with them off,
 # +4 % at 8 streams). Off by default; V030_BREAKABLE_CUDAGRAPH=1 re-enables.
