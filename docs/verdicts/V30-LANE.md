@@ -95,3 +95,13 @@ c=1 steady decode at bench ctx is budget-insensitive (6-row steps, one-chunk
 prefill) so the ladder comparisons stand; the one open question is whether the
 prod config (8192, recipes/prod.conf) shifts TTFT@1k/100k — first true 8192
 row = R1 arm (ride_r1.sh), recorded here when it lands.
+
+## T1 fixed-K speed ladder (wk1 arm, prose@1k tok/s; 09-28 sweep)
+K=1 23.5 · K=2 23.9 · K=3 20.9 · K=4 20.2 · K=9 11.9 (copy rises with K:
+31.0/34.7/40.7/44.5). Telemetry was lost to the `$KK_metrics` bash bug; T1b
+re-dumps /metrics per arm -> t1_analyze_v2 EV verdict (acceptance data needed
+to call whether K2/K3 beats K4 for prose EV — the second-box "-6 % prose at
+K4" datapoint says check this). Analyzer dry-run 09-29 parses all five rows
+(drafts=0 until T1b lands). NOTE the anomaly: this ladder's K1/K2 rows are
+ABOVE the A2 K4 row on the same class (20.2 vs A2 21.8 hyb-less 25.8?) —
+different checkpoints (wk1 vs hybrid); do not cross-read columns across arms.
