@@ -116,3 +116,16 @@ The running A3 container's 17 k boot-log lines contain zero "async" strings —
 no disable-warning fired ⇒ scheduler already runs AsyncScheduler (max_concurrent
 _batches=2). Step-overhead hiding is therefore NOT an open lever; R3's ITL row
 and the P1b2 profile will show whether the overlap is effective at k=4.
+
+## v0.30.1rc0 is landmine-contaminated — stay on v0.30.0 (09-29)
+415-commit diff audit (GitHub compare API): rc0 carries **#55390** ("annotate
+MTP draft KV groups positionally" = the −30 % GDN-prefix-TPS regression opener
+from hunt-2) but NOT its fix #58368 ⇒ any rc0 build sits inside the known
+landmine window. Also inside (skipped/irrelevant): #57885 sparse-meta perf
+(MLA indexer/sparse_swa files only — not our QSA builder), #57273 sm_90-only
+QSA table (H100 tuning, not SM121), #57396 vocab-mapping CPU-GPU sync removal
+(dead code for us: VocabMapping is inactive on the draft-vocab-patch path),
+#55867 FP8-TP FlashInfer TRTLLM MoE for this exact model (merged 09-17, so
+pre-v0.30.0? — base branch main, cut date 09-21 ⇒ present in our image).
+Real upgrade candidates remain v0.31.0rc1+ AFTER the R queue harvests the
+#58449 fused-draft port (rc1 already contains #58400+#58368).
