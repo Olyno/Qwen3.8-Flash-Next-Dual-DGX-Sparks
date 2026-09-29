@@ -71,7 +71,7 @@ to the checkpoint we actually serve.
 ## Log
 
 - 2026-09-25: recon complete. Converter ported to the nvidia shard layout
-  (`spike_hyb/make_fp8_dense_nvidia.py`): per-shard quantize decision,
+  (`tools/hybrid/make_fp8_dense_nvidia.py`): per-shard quantize decision,
   foreign tensors byte-copied, ModelOpt config merged (48 NVFP4 + FP8 PLE +
   FP8_BLOCK entries preserved) with the shipped `exclude_modules` list
   REPLACED by the canonical keep-list — vLLM's `is_layer_excluded` check runs

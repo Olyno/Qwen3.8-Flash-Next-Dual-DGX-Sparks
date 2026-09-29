@@ -52,7 +52,7 @@ cell — the effect is real and directionally as the byte ledger predicted
 (half the optimistic band: this serving stack spends more per step than pure
 expert weights, and kernel-level costs don't scale linearly with count).
 
-Raw rows: `spike_ps/results_k{10,8,6}.txt`; table: `spike_ps/ps_analyze.py`.
+Raw rows: `experiments/probsparse/` results_k{10,8,6}.txt; table: `experiments/probsparse/ps_analyze.py`.
 
 ## Quality result (measured, this box)
 
