@@ -1,0 +1,6 @@
+[
+ {"problem": "Solve for x: 3x + 7 = 22.", "draft": "3x = 22 - 7 = 15; x = 5", "gold": "5"},
+ {"problem": "What is the value of 2^5 + 3^2?", "draft": "2^5 = 32; 3^2 = 9; 32 + 9 = 41", "gold": "41"},
+ {"problem": "A rectangle has length 8 and width 3. What is its perimeter?", "draft": "P = 2(8 + 3) = 22", "gold": "22"},
+ {"problem": "If f(x) = x^2 - 4, what is f(3)?", "draft": "f(3) = 9 - 4 = 5", "gold": "5"}
+]

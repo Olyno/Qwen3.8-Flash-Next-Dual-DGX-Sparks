@@ -16,7 +16,8 @@ Findings that motivated the shape of this script:
 """
 import json, time, argparse, urllib.request
 
-BASE, MODEL = "http://localhost:8888", "qwen3.8-flash-next"
+import os
+BASE, MODEL = f"http://localhost:{os.environ.get('BENCH_PORT', '8888')}", "qwen3.8-flash-next"
 FILLER = ("Entry {i:06d}: the quarterly logistics audit recorded a routine "
           "variance in the northbound depot inventory.\n")
 TASKS = {
