@@ -85,12 +85,12 @@ Precedence: exported env > `recipes/$RECIPE.conf` > `recipes/peers.conf` > engin
   131072 ctx native (no YaRN), lazy load, chunked prefill, `FULL_DECODE_ONLY`
   CUDA graphs + breakable graphs off, modelopt quant, `qwen3` reasoning
   parser + `qwen3_coder` tool parser.
-  **Status (09-28, measured):** decode prose 30.5 / code 35.5 tok/s single
-  stream = ×1.79 / ×2.00 over the v0.30 floor (A1 17.1–18.8). The gpqa200
-  re-gate of this combo scored 81.3 % vs the 82.8 % baked baseline
-  (−1.515 pp against a ≤1 pp bar); the A3 engine-control run decides whether
-  the gap is engine numerics (prod stands) or a lean×hybrid interaction
-  (retune). Full ledger: `docs/verdicts/V30-LANE.md`.
+  **Status (09-29, measured + gated):** decode prose 30.5 / code 35.5 tok/s
+  single stream = ×1.79 / ×2.00 over the v0.30 floor (A1 17.1–18.8). gpqa200
+  re-gate: 81.3 % vs 82.8 % baked (−1.515 pp against a ≤1 pp bar); the A3
+  engine-control run resolved it — A3 (no-lean, same stack) scores **identical
+  138/163**, so the delta is the v0.30/fp8-KV-era numerics, not the lean bake
+  (McNemar p=.33 N.S.) ⇒ **prod stands**. Full ledger: `docs/verdicts/V30-LANE.md`.
 - **Bench-arm ladder.** `arm-a1.conf` is the baseline floor (stock wk1 checkpoint, K=6, no
   drafter, bf16 KV, no overlay) — every speed claim above it is paid for against its
   decodebench row. The ladder: **A1 baseline → A2 +MTP k4 → A3 +hybrid → A4 +lean = prod**
@@ -197,11 +197,11 @@ speculative-config key (−50 % TTFT, sister-measured; prod ships it in
   Chain-of-Draft prompts. In the combo ledger (`HYBRID-FP8.md`) the lean axis is carried at
   +5.6 pp, and the lean×hybrid combo owes its own 3-suite re-gate to arm A4.
 - **`V30-LANE.md` — the v0.30 ledger (current).** All A1-A4 speed rows above,
-  the MTP/QSA k-legality arithmetic, the nine-hang boot saga, and the gpqa200
-  gate: prod combo 81.3 % vs baked 82.8 % baseline (paired McNemar 11↔8,
-  p=.57) — −1.515 pp against the ≤1 pp bar, with the A3 engine-control
-  pre-registered to split engine-shift vs lean×hybrid interaction. Interim
-  product until the control lands: the A3 stack (25.8/32.2 prose/code).
+  the MTP/QSA k-legality arithmetic, the nine-hang boot saga, and the closed
+  gpqa200 gate: prod combo 81.3 % vs 82.8 % baked (−1.515 pp vs the ≤1 pp
+  bar) resolved by the A3 engine-control — same stack without the lean bake
+  scores 138/163, **identical to A4** ⇒ engine numerics, not lean ⇒
+  **prod.conf confirmed as the product**.
 
 ## Troubleshooting
 
