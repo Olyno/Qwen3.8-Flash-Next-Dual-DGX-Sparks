@@ -103,6 +103,7 @@ fi
 
 # --- preflight: disk headroom, ports free (head-side only), stale container --
 _free_gib=$(df -BG --output=avail "$HOME/.cache/vllm" 2>/dev/null | tail -1 | tr -dc '0-9')
+mkdir -p "$HOME/.cache/vllm/triton_home"   # the persisted Triton JIT cache root (see docker run below)
 [[ "${_free_gib:-0}" -ge 60 ]] || err "only ${_free_gib:-?} GiB free under ~/.cache/vllm; the mmap PLE table needs ~50 + engine cache."
 if [[ "$TOPO_MODE" == single || "$NODE_RANK" == 0 ]]; then
     for _p in "$PORT" "$MASTER_PORT"; do
@@ -247,10 +248,16 @@ fi
 read -r -a _vllm <<<"$VLLM_ARGS"
 # Caches mount to /root (container runs as root, monolith :900-901).
 # ~/.cache/vllm rw wholesale: the mmap table dir + engine cache ride it.
+# /root/.triton persists too: vLLM's Triton kernels (GDN post-conv, PLE conv
+# writeback, top-p sampling) JIT at first sight of each shape and the warning
+# is explicit that it is a latency spike; without the mount every container
+# restart re-pays it inside a live turn (gx10 prod logs 09-28 22:33/22:53).
+# Do NOT set TRITON_CACHE_DIR instead: it drops the <device> path level and
+# TritonBundler emit/reload disagree (vllm docker.md; 13 kernels re-JIT).
 args=(docker run -d --name "$CONTAINER" --gpus all --network host --ipc host
       --cap-add SYS_NICE --cap-add SYS_PTRACE --ulimit memlock=-1 --ulimit stack=67108864
       -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 -e HF_HOME=/root/.cache/huggingface
-      -v "$HF_CACHE_DIR:/root/.cache/huggingface" -v "$HOME/.cache/vllm:/root/.cache/vllm"
+      -v "$HF_CACHE_DIR:/root/.cache/huggingface" -v "$HOME/.cache/vllm:/root/.cache/vllm" -v "$HOME/.cache/vllm/triton_home:/root/.triton"
       # The model MUST exist INSIDE the container at the same absolute path
       # (monolith launch_v30.sh :20 -v "$MODEL:$MODEL:ro"). Without it vLLM
       # treats the nonexistent path as an HF repo id -> HFValidationError.
