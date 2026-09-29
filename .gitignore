@@ -56,9 +56,18 @@ files/draft_vocab_*.txt
 # MTP_DRAFT_VOCAB default in .env.sample work out of the box. Generated
 # vocabularies stay untracked.
 !files/draft_vocab_en_code_47k.txt
+# ...and the six vendored language files (MiaAI-Lab single-spark@7d0712d
+# recipe; md5-verified copies) so RECIPE=prod-fr works out of the box.
+!files/draft_vocab_fr_en_code_65k.txt
+!files/draft_vocab_de_en_code_65k.txt
+!files/draft_vocab_zh_en_code_65k.txt
+!files/draft_vocab_ja_en_code_65k.txt
+!files/draft_vocab_pt_en_code_65k.txt
+!files/draft_vocab_ru_en_code_65k.txt
 
 # launch-time generated overlays (extract+patch per node, from the pinned image)
 files/v030_ple/
+files/v030_draftvocab/
 files/v030_fp8kv/
 files/dvdraft/
 logs/

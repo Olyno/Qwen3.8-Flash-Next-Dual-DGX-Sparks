@@ -166,6 +166,52 @@ if [[ "${KV_CACHE_DTYPE:-auto}" == fp8* ]]; then
     _pkg=/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia
     QSA_MOUNT=(-v "$SCRIPT_DIR/$QP/qsa.py:$_pkg/qsa.py:ro" -v "$SCRIPT_DIR/$QP/ops/qsa.py:$_pkg/ops/qsa.py:ro")
 fi
+
+# Reduced-vocabulary MTP drafting (FR-Spec): a draft_vocab file (ids, one per
+# line) slices the drafter lm_head to 65k/47k rows — 1.18 GiB -> 0.22 GiB and
+# ~10 % of the step bytes; correctness is structural (rejection sampling), the
+# only stake is drafting speed per language's coverage. OUR ADDITION (09-29):
+# the dual lane never wired it. Mechanism: patch pristine image mtp.py with the
+# v030 draft-vocab patcher, bind over the package, set VLLM_MTP_DRAFT_VOCAB.
+# ENGAGES ONLY IN GREEDY DRAFTING: image llm_base_proposer.py:444 routes the
+# reduced head through _greedy_sample/use_local_argmax_reduction — with
+# draft_sample_method=probabilistic (our product default) the slice is inert,
+# so recipes pairing it must switch the drafter to greedy (lossless verify
+# unchanged; see SPEC note in recipes/prod.conf).
+DRAFT_VOCAB_MOUNT=()
+if [[ -n "${MTP_DRAFT_VOCAB:-}" ]]; then
+    DV_FILE="$SCRIPT_DIR/$MTP_DRAFT_VOCAB"
+    [[ -f "$DV_FILE" ]] || err "MTP_DRAFT_VOCAB=$MTP_DRAFT_VOCAB not found under files/"
+    [[ -f files/patch_mtp_draft_vocab_v030.py ]] || err "needs files/patch_mtp_draft_vocab_v030.py"
+    DVP=files/v030_draftvocab
+    # BASE MATTER: with FP8DENSE=1 the package's mtp.py is ALREADY our
+    # files/mtp.py (HC-mixer splice, mounted next). Slice THAT, not the image
+    # pristine (launch_v30 contract) — compose so both overlays survive.
+    if [[ "${FP8DENSE:-0}" == 1 ]]; then
+        DVBASE="$SCRIPT_DIR/files/mtp.py"
+        [[ -f "$DVBASE" ]] || err "FP8DENSE=1 + MTP_DRAFT_VOCAB needs files/mtp.py"
+    else
+        DVBASE=files/v030_draftvocab/orig/mtp.py
+        if [[ ! -f "$DVBASE" ]]; then
+            info "Preparing draft-vocab overlay (extract pristine mtp.py from $IMAGE)..."
+            mkdir -p files/v030_draftvocab/orig
+            CID=$(docker create "$IMAGE" /bin/true)
+            docker cp "$CID:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/mtp.py" "$DVBASE"
+            docker rm "$CID" >/dev/null
+        fi
+    fi
+    DVSTAGE=$DVP/stage; mkdir -p "$DVSTAGE"
+    cp files/patch_mtp_draft_vocab_v030.py files/patch_mtp_draft_vocab.py "$DVSTAGE/"
+    cp "$DVBASE" "$DVSTAGE/mtp_v030_patched.py.orig"
+    ( cd "$DVSTAGE" && python3 patch_mtp_draft_vocab_v030.py ) \
+        || err "draft-vocab mtp patcher refuses (anchor drift / already patched)"
+    mkdir -p "$DVP"
+    cp "$DVSTAGE/mtp_v030_patched.py" "$DVP/mtp.py"
+    _pkg=/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia
+    DRAFT_VOCAB_MOUNT=(-v "$SCRIPT_DIR/$DVP/mtp.py:$_pkg/mtp.py:ro"
+                       -v "$DV_FILE:/root/draft_vocab.txt:ro"
+                       -e VLLM_MTP_DRAFT_VOCAB=/root/draft_vocab.txt)
+fi
 # --- dual pair: head orchestrates the worker (old start.sh ergonomics) -------
 # RUN_WORKER=1 (dual default, head rank): prove ssh + docker + image on the
 # worker, sync THIS repo dir (same absolute $SCRIPT_DIR is the contract — the
@@ -297,7 +343,7 @@ _vllm+=(--gpu-memory-utilization "$GPU_MEMORY_UTILIZATION")
 [[ -n "${DOCKER_ARGS_EXTRA:-}"  ]] && args+=(${DOCKER_ARGS_EXTRA})
 info "=== Launch: $CONTAINER (recipe $RECIPE, $( if [[ "$TOPO_MODE" == dual ]]; then echo "rank $NODE_RANK"; else echo single; fi )) ==="
 # shellcheck disable=SC2086
-"${args[@]}" "${FP8DENSE_MOUNT[@]}" "$IMAGE" "$MODEL_SNAPSHOT" "${_vllm[@]}" ${EXTRA_VLLM_ARGS:-}
+"${args[@]}" "${FP8DENSE_MOUNT[@]}" "${DRAFT_VOCAB_MOUNT[@]}" "$IMAGE" "$MODEL_SNAPSHOT" "${_vllm[@]}" ${EXTRA_VLLM_ARGS:-}
 ok "container started."
 
 memwatch_start
