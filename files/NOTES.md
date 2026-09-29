@@ -12,16 +12,16 @@ stripped installs, not a standing to-do.
 | file | loaded by | what for |
 |---|---|---|
 | `memwatch.sh` | `engine/memwatch.sh` → `nohup bash` | host-MemAvailable watchdog; kills the container before a unified-pool hang |
-| `evict_page_cache.py` | `stop.sh` (+ `spike_v30/launch_v30.sh`) | `posix_fadvise(DONTNEED)` on the checkpoint tree so the next boot doesn't CUDA-OOM on an "idle" box |
+| `evict_page_cache.py` | `stop.sh` (+ `experiments/v30/launch_v30.sh`) | `posix_fadvise(DONTNEED)` on the checkpoint tree so the next boot doesn't CUDA-OOM on an "idle" box |
 | `patch_ple_mmap_v030.py` | `engine/ple.sh` (`ple_prepare_overlay`) | overlays the image's `ngram_embedding.py` with the mmap PLE table path; output dir `files/v030_ple/` is launch-generated, gitignored |
 | `patch_qsa_fp8_kv_v030.py` | `start.sh` (when `KV_CACHE_DTYPE=fp8*`) | backports vllm#55557 fp8_e4m3 QSA KV onto v0.30 `nvidia/qsa.py` + `ops/qsa.py`; output dir `files/v030_fp8kv/` is launch-generated, gitignored. Delete-condition: image moves to vLLM 0.31+ |
 | `model.py` `mtp.py` `hyperconnection.py` | `start.sh` (when `FP8DENSE=1`) | the 3-source fp8dense overlay mounted ro over `vllm/models/qwen4_exp/nvidia/` — needed ONLY for hybrid / lean-hyb checkpoints; stock nvidia ckpts boot without mounts |
-| `patch_mtp_draft_vocab.py` | `patch_mtp_draft_vocab_v030.py` (imports its blocks) + `spike_v30/launch_v30.sh` via `$OV` | TP-aware reduced-vocab MTP head splice (`VLLM_MTP_DRAFT_VOCAB`). Not wired by consolidated `start.sh` yet — the v0.30 delta keeps its delete-condition with the spike lane |
-| `patch_mtp_draft_vocab_v030.py` | `spike_v30/launch_v30.sh` | applies the blocks above onto the v0.30-portable `mtp.py` |
-| `build_draft_vocab.py` | operator (`.env.sample`, README recipe) | corpus → frequency-ranked draft-id list |
+| `patch_mtp_draft_vocab.py` | `patch_mtp_draft_vocab_v030.py` (imports its blocks) + `experiments/v30/launch_v30.sh` via `$OV` | TP-aware reduced-vocab MTP head splice (`VLLM_MTP_DRAFT_VOCAB`). Not wired by consolidated `start.sh` yet — the v0.30 delta keeps its delete-condition with the spike lane |
+| `patch_mtp_draft_vocab_v030.py` | `experiments/v30/launch_v30.sh` | applies the blocks above onto the v0.30-portable `mtp.py` |
+| `build_draft_vocab.py` | operator (`.env.example`, README recipe) | corpus → frequency-ranked draft-id list |
 | `draft_vocab_en_code_47k.txt` | `MTP_DRAFT_VOCAB` knob | shipped 47,149-id code-tuned vocabulary (vendored, +13.1 % single-Spark measured); the one tracked exception to `files/draft_vocab_*.txt` |
 | `test_draft_vocab.py` | manual: mount into the image (`python3 /tmp/t.py`) | CPU test of the draft-vocab shard slicing + cross-rank argmax — run after touching the patcher |
-| `fp8dense/` | operator / `tools/README.md` pointers | hybrid-checkpoint pipeline: `build.sh` orchestrates `make_fp8_dense_checkpoint.py`; `verify_fp8_dense_checkpoint.py` (GPU-free verifier), `compute_quant_stats.py` (per-tensor RMSE), `test_quant_config_resolution.py` (in-image CPU quant-method resolution check). NOTE: `build.sh:19` execs `../resolve_snapshot.py`, which was deleted in the consolidation — rebuild the checkpoint with `make_fp8_dense_checkpoint.py` directly or restore a resolver (Main). |
+| `fp8dense/` | operator / `tools/README.md` pointers | hybrid-checkpoint pipeline: `build.sh` orchestrates `make_fp8_dense_checkpoint.py`; `verify_fp8_dense_checkpoint.py` (GPU-free verifier), `compute_quant_stats.py` (per-tensor RMSE), `test_quant_config_resolution.py` (in-image CPU quant-method resolution check). `build.sh` resolves the snapshot through `../resolve_snapshot.py` (kept; also used by `download.sh`) |
 
 ## Deleted from files/ in the consolidation (2026-09-27)
 
@@ -33,11 +33,8 @@ stripped installs, not a standing to-do.
   check-weights.sh", but the consolidated `start.sh` never sources it (weights
   ride the direct `$HF_CACHE_DIR` bind-mount; dual = same script both nodes) and
   `check-weights.sh` itself was deleted. Zero refs in start.sh / stop.sh /
-  engine/ / recipes/ / tests/ / bench/ / tools/ / spike_v30/. The old
+  engine/ / recipes/ / tests/ / bench/ / tools/ / experiments/. The old
   single-spark README copy survives under `docs/legacy/` for archaeology.
-- `files/resolve_snapshot.py` — deleted by Main with the single-node verify
-  lane (`check-weights.sh`, `verify-weights.py`); `download.sh` still calls it
-  (flagged to Main).
 
 Generated-at-launch dirs (`v030_ple/`, `v030_fp8kv/`, `dvdraft/`) are
 gitignored; wipe them freely — they rebuild from the patchers above.

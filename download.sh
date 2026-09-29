@@ -3,7 +3,7 @@
 # download.sh — Fetch HuggingFace weights onto the HEAD node only.
 #
 # The worker never gets a local copy. After this, ./start.sh --launch (or
-# ./start-fp8.sh --launch) exports the head cache over NFS on ConnectX, or
+# start.sh --launch) exports the head cache over NFS on ConnectX, or
 # start.sh rsyncs the worker copy (default).
 #
 # Usage:

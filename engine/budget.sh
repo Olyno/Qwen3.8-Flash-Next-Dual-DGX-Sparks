@@ -39,7 +39,7 @@ OS_RESERVE_GIB="${OS_RESERVE_GIB:-16.0}"
 # :235-241 the packed PLE table's size, subtracted from the on-disk checkpoint
 # to get GPU-resident weights. Stock/ablit snapshots = 26.82 (measured, drill
 # report 2026-09-10); the NVIDIA checkpoint packs 47.68 GiB PLE in
-# model-fp8-mtp-ple.safetensors -> start-v030.sh:14 pins 47.68 for it.
+# model-fp8-mtp-ple.safetensors -> launch_v30.sh (experiments/v30) pins 47.68 for it.
 PLE_GIB="${PLE_GIB:-47.68}"
 # :242-248 GiB of MTP draft weights living inside the checkpoint, loaded only
 # when MTP is on (NVIDIA packs 2.34 GiB next to the PLE table); credited back

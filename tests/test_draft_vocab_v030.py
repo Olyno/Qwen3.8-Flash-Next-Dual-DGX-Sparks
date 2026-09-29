@@ -11,7 +11,7 @@ FILES = REPO / "files"
 ORIG = FILES / "mtp_v030_patched.py.orig"
 
 
-@unittest.skipUnless(ORIG.is_file(), "no extracted v0.30 mtp.py; run ./start-v030.sh --launch once")
+@unittest.skipUnless(ORIG.is_file(), "no extracted v0.30 mtp.py; a v0.30 boot with DRAFT_VOCAB set stages it under files/")
 class DraftVocabV030(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -45,13 +45,6 @@ class DraftVocabV030(unittest.TestCase):
         r = self.run_patch()
         self.assertNotEqual(r.returncode, 0)
         self.assertFalse((self.tmp / "mtp_v030_patched.py").exists())
-
-
-class LaunchWrapper(unittest.TestCase):
-    def test_wrapper_sets_the_lane(self):
-        src = (REPO / "start-v030.sh").read_text()
-        for needle in ("export V030=true", "vllm/vllm-openai:v0.30.0", "OVERRIDE_KV_CACHE_DTYPE:-auto", 'exec "$SCRIPT_DIR/start.sh"'):
-            self.assertIn(needle, src)
 
 
 if __name__ == "__main__":
