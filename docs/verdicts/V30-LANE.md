@@ -87,3 +87,11 @@ statistically indistinguishable, but the product rule is the point estimate.
 - Gate-history hygiene: the 7 harness-error rows were retried (append-only
   resume), all scored; first-pass 78.8 and pre-correction -4.0 pp figures are
   superseded by this section.
+
+## Provenance footnote (09-29)
+All A1-A4 + gate speed rows above were booted at `max_num_batched_tokens=2048`
+(the ride scripts' export; `launch_v30.sh`'s own default 8192 never applied).
+c=1 steady decode at bench ctx is budget-insensitive (6-row steps, one-chunk
+prefill) so the ladder comparisons stand; the one open question is whether the
+prod config (8192, recipes/prod.conf) shifts TTFT@1k/100k — first true 8192
+row = R1 arm (ride_r1.sh), recorded here when it lands.
