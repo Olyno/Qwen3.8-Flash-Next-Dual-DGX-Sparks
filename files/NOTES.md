@@ -38,3 +38,4 @@ stripped installs, not a standing to-do.
 
 Generated-at-launch dirs (`v030_ple/`, `v030_fp8kv/`, `dvdraft/`) are
 gitignored; wipe them freely — they rebuild from the patchers above.
+| `patch_qsa_fused_draft_v030.py` | experiments R2 arm (`ride_r2.sh`, worktree) | backport of vllm#58449: the QSA builder declares `supports_draft_decode_metadata_update` + in-place `update_draft_decode_metadata`, flipping the speculator's fused multi-step draft loop ON (v0.30's consumer is present; our builder didn't declare support -> boot log "falling back to rebuilding attention metadata", k whole-model metadata rebuilds per round). Output dir `files/v030_fused/` is bench-staged, gitignored. DELETE when the image ships #58449 merged |
