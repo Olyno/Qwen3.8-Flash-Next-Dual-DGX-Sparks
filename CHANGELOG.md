@@ -2,6 +2,39 @@
 
 Notable changes to this deployment. Format follows [Keep a Changelog](https://keepachangelog.com/1.1.0/).
 
+## 2026-09-29 — fork consolidation (this history)
+
+### Changed
+
+- **History rebuilt** on upstream `2c86a1d` as a curated 10-commit arc
+  (launcher → lean → hybrid → K6 → v30 lane → kills → legacy → context
+  revert → README → prune), then perf commits land directly on `main`.
+  Experiment branches deleted; worktrees on the bench box replace them
+  (`docs/WORKFLOW.md`).
+- **Single launcher**: `start.sh`/`stop.sh` only (was a four-script family);
+  topology auto-detect, head-orchestrated dual pair over ssh (base64-quoted
+  worker transport — ssh re-tokenization field failure, gx10 09-28),
+  recipes-as-data with lint, PLE mmap default + pinned refused ≤128 GiB.
+- **Reactivity fixes on the launcher**: persisted Triton JIT cache
+  (`~/.cache/vllm/triton_home`, NOT `TRITON_CACHE_DIR` — bundler path-level
+  trap), breakable CUDA graphs default OFF (±15 %→±2 % decode noise),
+  flashinfer autotune cache persisted.
+- **Context**: product recipes serve native ≤262,144; the 1M-YaRN pair
+  contract retired (beyond trained range + MTP acceptance collapse at long
+  positions, prod logs 09-28 22:56).
+
+### Added
+
+- **FP8-dense hybrid checkpoint** (`tools/hybrid/`): +60-68 % decode, GPQA
+  +4.1 pp (docs/verdicts/HYBRID-FP8.md). Lean bake composes: prod =
+  q38-lean-hyb × K6 × MTP k=4 × fp8-KV(#55557 backport) × PLE mmap on v0.30
+  — prose 30.5 / code 35.5 tok/s ×1.79/×2.00 vs the v0.30 floor (V30-LANE).
+- **Lean thinking bake** (`tools/bake/`): GPQA +5.6-8.6 pp at −16 % tokens
+  (LEAN.md); ProbSparse K6 adopted free +4-5 % (PROBSPARSE.md).
+- **gpqa200 gate discipline**: 161/198 v0.30 combo 81.3 % vs baked 82.8 %
+  bar — McNemar 11↔8 p=.57, A3 engine-control pre-registered (V30-LANE.md).
+
+
 ## 2026-09-16
 
 ### Added
