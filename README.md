@@ -11,6 +11,20 @@ FP8-KV kernel work vendored from
 [MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark)
 (AGPL-3.0-or-later).
 
+## Results at a glance (measured, single Spark unless noted)
+
+| Stack | prose tok/s | code tok/s | GPQA | vs |
+|---|---|---|---|---|
+| v0.30 stock floor (A1) | 17.1 | 17.5 | — | baseline |
+| + MTP k=4 drafting (A2) | 21.8 | 25.0 | — | ×1.28 / ×1.43 |
+| + FP8-dense hybrid ckpt (A3) | 25.8 | 32.2 | 78.3 % (old image) | +4.1 pp quality vs stock |
+| + lean thinking bake (A4 = **prod**) | **30.5** | **35.5** | 82.8 % baked / 81.3 % v0.30 re-gate | **×1.79 / ×2.00**, K6 +4-5 % free |
+
+Reactivity shipped since 09-28: persisted Triton JIT cache, breakable CUDA
+graphs off, native 262K context (YaRN 1M retired — acceptance collapse at
+long positions). Every number: `docs/verdicts/` (ladder + gate math in
+`V30-LANE.md`).
+
 ## Hardware
 
 | Kit | What runs | How it is found |
