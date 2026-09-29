@@ -12,7 +12,9 @@ NOTE: this build streams reasoning in delta["reasoning"], NOT
 """
 import json, time, argparse, urllib.request, uuid
 
-BASE, MODEL = "http://localhost:8888", "qwen3.8-flash-next"
+import os
+BASE = "http://localhost:" + os.environ.get("BENCH_PORT", "8888")
+MODEL = "qwen3.8-flash-next"
 FILLER = ("Entry {i:06d}: the quarterly logistics audit recorded a routine "
           "variance in the northbound depot inventory.\n")   # 25 tokens/line
 NEEDLES = [(0.05, "alpha", "7391-CORAL"),
