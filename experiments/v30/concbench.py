@@ -22,7 +22,7 @@ def prompt(i):
             f"coastal sediment transport, reasoning step by step.")
 
 
-async def stream_one(sess, port, model, max_tokens, temp, i):
+async def stream_one(sess, port, model, max_tokens, temp, i, min_tokens=0):
     t0 = time.perf_counter()
     ttft = None
     ntok = 0
@@ -30,7 +30,12 @@ async def stream_one(sess, port, model, max_tokens, temp, i):
         "model": model,
         "messages": [{"role": "user", "content": prompt(i)}],
         "max_tokens": max_tokens, "temperature": temp, "stream": True,
+        "stop": [],
     }
+    if min_tokens:
+        # vLLM extra sampling key: keep generating past EOS so every stream
+        # fills its budget -> measures scheduler behavior, not early stops
+        body["min_tokens"] = min_tokens
     try:
         async with sess.post(f"http://localhost:{port}/v1/chat/completions",
                              json=body) as r:
@@ -64,22 +69,27 @@ async def stream_one(sess, port, model, max_tokens, temp, i):
         return {"err": repr(e)[:80]}
 
 
-async def level(port, model, c, max_tokens, temp, warm):
+async def level(port, model, c, max_tokens, temp, warm, min_tokens=0):
     conn = aiohttp.TCPConnector(limit=c + 4)
     async with aiohttp.ClientSession(connector=conn) as sess:
         rs = await asyncio.gather(*[
-            stream_one(sess, port, model, max_tokens, temp, warm + i)
+            stream_one(sess, port, model, max_tokens, temp, warm + i, min_tokens)
             for i in range(c)])
+    err = sum(1 for r in rs if "err" in r)
+    zero = sum(1 for r in rs if "err" not in r and r["tok"] == 0)
     ok = [r for r in rs if "err" not in r and r["tps"] > 0]
-    if not ok:
+    slow = [r for r in rs if "err" not in r and r["tps"] == 0 and r["tok"] > 0]
+    if not ok and not zero and not slow:
         return None
-    agg = sum(r["tok"] for r in ok) / max(r["secs"] for r in ok)
-    return {"C": c, "n_ok": len(ok),
-            "per_stream_med": round(statistics.median(r["tps"] for r in ok), 1),
-            "per_stream_min": round(min(r["tps"] for r in ok), 1),
+    agg = sum(r["tok"] for r in ok) / max((r["secs"] for r in ok), default=1)
+    tps_sorted = sorted(r["tps"] for r in ok)
+    return {"C": c, "n_ok": len(ok), "n_err": err, "n_zero": zero, "n_slow": slow,
+            "per_stream_med": round(statistics.median(tps_sorted), 1) if tps_sorted else 0,
+            "per_stream_min": round(tps_sorted[0], 1) if tps_sorted else 0,
+            "per_stream_p90": round(tps_sorted[int(len(tps_sorted) * 0.9) - 1], 1) if tps_sorted else 0,
             "aggregate": round(agg, 1),
-            "ttft_med": round(statistics.median(r["ttft"] for r in ok), 2),
-            "ttft_p95": round(max(r["ttft"] for r in ok), 2)}
+            "ttft_med": round(statistics.median(r["ttft"] for r in ok), 2) if ok else None,
+            "ttft_p95": round(max(r["ttft"] for r in ok), 2) if ok else None}
 
 
 async def main():
@@ -89,6 +99,7 @@ async def main():
     ap.add_argument("--decode", type=int, default=400)
     ap.add_argument("--temp", type=float, default=0.6)
     ap.add_argument("--reps", type=int, default=1)
+    ap.add_argument("--min-tokens", type=int, default=0)
     a = ap.parse_args()
     async with aiohttp.ClientSession() as s:
         model = (await (await s.get(f"http://localhost:{a.port}/v1/models")
