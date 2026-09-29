@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""t1_analyze.py — verdict math for the T1 fixed-K sweep (spike_v30/resume.sh).
+"""t1_analyze.py — verdict math for the T1 fixed-K sweep (experiments/v30 resume).
 
 Inputs (written by T1 in $R = ~/v30_bench):
   t1_k<K>_pass1.txt        decodebench output per arm (tok/s rows)

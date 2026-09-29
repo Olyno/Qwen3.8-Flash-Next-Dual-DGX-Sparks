@@ -6,13 +6,13 @@
 #   * v0.30 native EngramConfig offload (PLE_MODE=pinned) holds the 47.7 GiB
 #     table as anonymous PINNED RAM -> ~104 GiB non-evictable with weights ->
 #     unified-pool exhaustion, kernel hang, no OOM record (msi crashes #3-#5,
-#     spike_v30/README.md). REFUSED on <=128 GB pools below.
+#     experiments/v30/README.md). REFUSED on <=128 GB pools below.
 #   * The day-0 packed-file idea (VLLM_PLE_PACKED_TABLE_DIR + *.packed_u8 +
 #     RW bind) is DEAD design: it re-pinned the mmap through UVA and re-copied
 #     47.7 GiB on every boot (hang #8, msi 2026-09-27 ~13:0x). Do not
 #     reintroduce it.
 #   * The PROVEN path (default here, PLE_MODE=mmap) is
-#     files/patch_ple_mmap_v030.py (from pushrepo/spike_v30/files/), which
+#     files/patch_ple_mmap_v030.py (from files/), which
 #     overlays the image's ngram_embedding.py with a torch.from_file map under
 #     VLLM_PLE_MMAP_DIR — a subdir of the ALREADY rw-mounted ~/.cache/vllm, per
 #     (layer prefix, snapshot fingerprint, tp rank), committed via
@@ -49,7 +49,7 @@ ple_policy() {  # consumes PLE_MODE, MEM_TOTAL_GIB; sets PLE_OFFLOAD_ENV (+ PLE_
                 err "PLE_MODE=pinned refused on this box (${MEM_TOTAL_GIB%.*} GiB pool).
        v0.30 native offload keeps the PLE table in NON-evictable anonymous RAM
        (~104 GiB pinned footprint): it hung the unified pool three times on
-       2026-09-26 (spike_v30/README.md). Use the default PLE_MODE=mmap, or run
+       2026-09-26 (experiments/v30/README.md). Use the default PLE_MODE=mmap, or run
        on a >128 GB pool if you must A/B the pinned path."
             fi
             PLE_OFFLOAD_ENV=(-e VLLM_PLE_CPU_OFFLOAD=1)
@@ -69,7 +69,7 @@ ple_prepare_overlay() {  # mmap mode only: extract pristine ngram_embedding.py +
     local dst="$SCRIPT_DIR/files/v030_ple" patcher="$SCRIPT_DIR/files/patch_ple_mmap_v030.py"
     if [[ ! -f "$patcher" ]]; then
         warn "files/patch_ple_mmap_v030.py absent — mmap PLE path NOT wired."
-        warn "     Copy it (pushrepo/spike_v30/files/) before booting; without the"
+        warn "     Copy it (files/) before booting; without the"
         warn "     overlay VLLM_PLE_MMAP_DIR is ignored and the boot takes the"
         warn "     pinned path this launcher exists to avoid."
         return 0

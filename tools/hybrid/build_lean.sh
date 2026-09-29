@@ -6,7 +6,7 @@
 # is copied from q38-stock-real - the bake artifacts dir lost that file,
 # the bake never touches architecture, so stock's config is correct).
 # NEVER run this while a vLLM server is booting (GB10 unified memory: two
-# bulk jobs = hard hang, see spike_v30/README.md "Second crash").
+# bulk jobs = hard hang, see experiments/v30/README.md "Second crash").
 set -euo pipefail
 SRC=$HOME/models/q38-lean-real
 LEANREAL=$HOME/Qwen38-overthinking-lab/artifacts/Qwen3.8-Flash-Next-NVFP4-lean

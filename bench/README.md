@@ -18,11 +18,11 @@ bandwidth-bound decode, and a second client pollutes every number.
 → `mtp_accept --since` → `reasoning_check` score → `longctx` for the TTFT
 row. Run `concbench` (below) for the concurrency column.
 
-## CURRENT but lives in `spike_v30/` (legacy lane dir — deliberately not moved)
+## CURRENT but lives in `experiments/v30/`
 
 | script | what it measures |
 |---|---|
-| `spike_v30/concbench.py` | concurrency ladder C=1..32: per-stream decode + TTFT vs load; protocol mirrors decodebench (same prompt families, temp 0.6) so the C=1 row is comparable with the single-stream table. `python3 spike_v30/concbench.py --port 8888 [--levels 1,4,8,16,32] [--decode 600]`. Needs `aiohttp`. |
+| `experiments/v30/concbench.py` | concurrency ladder C=1..32: per-stream decode + TTFT vs load; protocol mirrors decodebench (same prompt families, temp 0.6) so the C=1 row is comparable with the single-stream table. `python3 experiments/v30/concbench.py --port 8888 [--levels 1,4,8,16,32] [--decode 600]`. Needs `aiohttp`. |
 
 It stays in the spike lane until that lane retires; it has no imports from
 there and can be run straight from that path.
