@@ -264,6 +264,11 @@ args=(docker run -d --name "$CONTAINER" --gpus all --network host --ipc host
       -v "$MODEL_SNAPSHOT:$MODEL_SNAPSHOT:ro"
       -e VLLM_HOST_IP="${NODE_IP:-127.0.0.1}" "${PLE_OFFLOAD_ENV[@]}" "${PLE_MOUNT[@]}" "${QSA_MOUNT[@]}")
 [[ -n "${VLLM_ALLOW_LONG_MAX_MODEL_LEN:-}" ]] && args+=(-e "VLLM_ALLOW_LONG_MAX_MODEL_LEN=$VLLM_ALLOW_LONG_MAX_MODEL_LEN")
+# v0.30 auto-enables breakable CUDA graphs; on GB10 they re-capture mid-turn
+# and add +-15 % decode noise (upstream 34e7400 measured +-2 % with them off,
+# +4 % at 8 streams). Off by default; V030_BREAKABLE_CUDAGRAPH=1 re-enables.
+args+=(-e "VLLM_USE_BREAKABLE_CUDAGRAPH=${V030_BREAKABLE_CUDAGRAPH:-0}")
+args+=(-e VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/root/.cache/vllm/fi_autotune)
 if [[ "$TOPO_MODE" == dual ]]; then
     # NCCL/RoCE over the fabric iface (detection: .env pair members, else /30).
     # HCA/GID per the dual repo .env convention (=rocep1s0f0, GID 3), override.
