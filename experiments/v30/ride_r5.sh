@@ -6,7 +6,7 @@ set -uo pipefail
 R=$HOME/v30_bench; OV=$HOME/upgrade/v30/overlay; MODEL=$HOME/models/q38-lean-hyb
 NAME=v30r5; PORT=8901; LOG=$R/ride_r5.log
 QP=$R/r5_qsa_patch
-rm -rf $QP; mkdir -p $QP/orig
+rm -rf $QP; mkdir -p $QP/orig $QP/ops
 cp $OV/qsa_patch/qsa.py $QP/ 2>/dev/null
 sed 's/== (12, 0)/.major == 12/' $OV/qsa_patch/ops/qsa.py > $QP/ops/qsa.py
 grep -n "major == 12" $QP/ops/qsa.py || { echo "R5 SKIP: sed no-op" >> $LOG; exit 4; }

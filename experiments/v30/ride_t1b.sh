@@ -10,13 +10,6 @@ NAME_BASE=v30tb; PORT=8894; MODEL=$HOME/models/Qwen3.8-Flash-Next-NVFP4-wk1
 export KV_FP8=1 MAXLEN=114688
 LOG=$R/ride_T1b.log; exec >>"$LOG" 2>&1
 echo "=== ride T1b start $(date) ==="
-while ! mkdir $R/gpu.lock 2>/dev/null; do
-  [ -f $R/gpu.lock/owner ] || { sleep 60; continue; }
-  . $R/gpu.lock/owner 2>/dev/null || true
-  if [ -n "${PID:-}" ] && ! kill -0 $PID 2>/dev/null; then rm -rf $R/gpu.lock; fi
-  sleep 60
-done
-echo "PID=$$" > $R/gpu.lock/owner
 # preflight: unified-pool teardown of a previous engine can take minutes to
 # release; booting inside the window dies on "free memory < desired". Wait
 # until no v30* containers exist AND >=105 GiB is free (max 15 min).

@@ -15,14 +15,8 @@ export PLE_MMAP=$HOME/.cache/v30/ple_mmap_v030
 SPEC='{"method":"mtp","num_speculative_tokens":4,"draft_sample_method":"probabilistic","rejection_sample_method":"block","disable_eagle_block_drop":true}'
 LOG=$R/ride_a3retry.log; exec >>"$LOG" 2>&1
 echo "=== A3 retry start $(date) ==="
-while ! mkdir $R/gpu.lock 2>/dev/null; do
-  [ -f $R/gpu.lock/owner ] || { sleep 60; continue; }
-  . $R/gpu.lock/owner 2>/dev/null || true
-  if [ -n "${PID:-}" ] && ! kill -0 $PID 2>/dev/null; then rm -rf $R/gpu.lock; fi
-  sleep 60
-done
-echo "PID=$$" > $R/gpu.lock/owner
-grep -q "chain_r complete" $R/chainr.log 2>/dev/null || { echo "guard: chain_r not complete — refusing"; exit 3; }
+# chain_r2 exports CHAIN_HELD=1 around its arms
+[ "${CHAIN_HELD:-0}" = 1 ] || { pgrep -f "[c]hain_r" >/dev/null && { echo "guard: chain busy (standalone refuse)"; exit 3; }; }
 docker rm -f $NAME >/dev/null 2>&1
 bash $OV/launch_v30.sh "$NAME" "$PORT" "$MODEL" --speculative-config "$SPEC"
 rc=1

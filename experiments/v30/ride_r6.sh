@@ -9,16 +9,9 @@ R=$HOME/v30_bench; OV=$HOME/upgrade/v30/overlay; MODEL=$HOME/models/q38-lean-hyb
 PORT=8904
 LOG=$R/ride_r6.log; exec >>"$LOG" 2>&1
 echo "=== R6 start $(date) ==="
-grep -q "chain_r complete" $R/chainr.log || { echo "guard: chain_r busy"; exit 3; }
-# atomic GPU lock: a3retry poller uses the same mkdir protocol
-while ! mkdir $R/gpu.lock 2>/dev/null; do
-  [ -f $R/gpu.lock/owner ] || { sleep 60; continue; }
-  . $R/gpu.lock/owner 2>/dev/null || true
-  if [ -n "${PID:-}" ] && ! kill -0 $PID 2>/dev/null; then rm -rf $R/gpu.lock; fi
-  sleep 60
-done
-echo "PID=$$" > $R/gpu.lock/owner
-trap 'rm -rf $R/gpu.lock' EXIT
+# CHAIN_HELD=1 is exported by chain_r2 run(); standalone invocations must
+# refuse while any chain process is alive (children run AS the chain).
+[ "${CHAIN_HELD:-0}" = 1 ] || { pgrep -f "[c]hain_r" >/dev/null && { echo "guard: chain busy"; exit 3; }; }
 run() {  # $1=env assignment (may be empty), $2=tag
   local NAME=v30r6$2 DG_OPT=()
   docker rm -f $NAME >/dev/null 2>&1
