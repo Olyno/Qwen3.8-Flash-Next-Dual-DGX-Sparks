@@ -18,6 +18,7 @@ preflight() {
   while true; do
     local n=$(docker ps -q --filter "name=v30" | wc -l)
     local g=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1)
+    [[ "$g" =~ ^[0-9]+$ ]] || g=0   # GB10 unified pool reports N/A; host MemAvailable is the real gate
     local m=$(awk '/MemAvailable/{print int($2/1048576)}' /proc/meminfo)
     [ "$n" -eq 0 ] && [ "${g:-99999}" -le 16384 ] && [ "${m:-0}" -ge 80 ] && { echo "PREFLIGHT-OK gpu-used=${g}MiB avail=${m}G $(date +%H:%M)"; return 0; }
     if [ $(( $(date +%s) - t0 )) -gt 1800 ]; then echo "PREFLIGHT-WARN timeout gpu-used=${g}MiB avail=${m}G — proceeding $(date +%H:%M)"; return 0; fi
