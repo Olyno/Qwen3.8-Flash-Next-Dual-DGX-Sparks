@@ -129,3 +129,21 @@ QSA table (H100 tuning, not SM121), #57396 vocab-mapping CPU-GPU sync removal
 pre-v0.30.0? — base branch main, cut date 09-21 ⇒ present in our image).
 Real upgrade candidates remain v0.31.0rc1+ AFTER the R queue harvests the
 #58449 fused-draft port (rc1 already contains #58400+#58368).
+
+## A3 engine-control GATE VERDICT (2026-09-29 13:30, n=163 common-anchor)
+A3 = q38-hyb (NO lean bake) on the v0.30 stack (fp8-KV backport, GMU .748,
+BATCHED 2048, k=4 block) — the control for the A4 −1.515 pp finding.
+Raw: 138/163 valid = 84.66 % of valid; 35 ids error-out (runner HTTP retries;
+gap-fill rerun armed). Reanchored to the 163 ids all three arms answered:
+  baked(lean,v0.27) 143/163 = 87.73 %
+  A4  (lean,v0.30)  138/163 = 84.66 %
+  A3  (hyb, v0.30)  138/163 = 84.66 %   ← A3 == A4 to the question
+McNemar baked-vs-A3: 11↔6 discordant, p≈0.33 (not significant).
+**Pre-registered branch lands: A3 ≥ 81 ⇒ ENGINE SHIFT, not lean penalty.**
+The −1.5 pp gate delta tracks the v0.30/fp8-KV era stack (~3 pp on this
+anchor set, statistically weak), NOT the marker-penalty bake: identical engine,
+opposite bake verdicts, zero separation. Decision: **prod.conf (lean-hyb K4)
+stands as the product**; the gate bar FAIL remains as-measured on 198
+(81.3 vs 82.8) with the caveat that its cause is engine numerics and the
+0.31-era upgrade (native #55557) is now the quality-side lever.
+Gap-fill (a3retry) may add up to 35 ids; verdict re-check on its close.
