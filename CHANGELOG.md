@@ -424,3 +424,17 @@ See `git log`. The last commit before this working tree is `4014cc6`
 (*start.sh: reject non-numeric MAX_MODEL_LEN before the YaRN guard*, 2026-08-31), which followed
 `6e08722` — the replacement of the SGLang deployment with this vLLM TP2+EP+MTP3 dual-DGX-Spark
 bring-up.
+
+## 2026-09-29 (evening) — multilingual reduced-vocab drafting on the pair
+- Vendored the six per-language 65k draft vocabularies from
+  MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark@7d0712d (fr/de/zh/ja/pt/ru;
+  coverage + measured decode numbers in `recipes/prod.conf`'s MULTILINGUAL
+  note). md5-verified copies, tracked.
+- `start.sh` wires `MTP_DRAFT_VOCAB` for the first time on the dual lane:
+  patches the FP8DENSE `files/mtp.py` (composition) or pristine image mtp.py,
+  binds the sliced file + `VLLM_MTP_DRAFT_VOCAB`. recipe_lint allowlist +
+  README ledger updated. `RECIPE=prod-fr ./start.sh` = French-first profile
+  (greedy drafting + fr 65k; verify stays lossless block rejection).
+- Proven: fk3 dual-pair smoke — head + worker argv both carry the composed
+  mount shadowing FP8DENSE's (later `-v` wins), the vocab mount, and the env;
+  composed mtp.py AST-clean and contains the `_attach_draft_vocab` block.
