@@ -105,6 +105,16 @@ if [[ "${KV_FP8:-}" == 1 ]]; then
                 -v "$QP/ops/qsa.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ops/qsa.py:ro")
     KV_DTYPE=${KV_DTYPE:-fp8_e4m3}
 fi
+# Graph-capture shaping: default byte-identical to the banked rows. For a boot
+# that the pool guard says is dying in capture (the #56824 curve), EAGER=1 or a
+# reduced CAPTURE_SIZES cuts the ~16 GiB graph peak without touching numerics.
+if [[ "${EAGER:-0}" == 1 ]]; then
+    COMP_CFG='{"mode":0,"cudagraph_mode":"NONE"}'
+elif [[ -n "${CAPTURE_SIZES:-}" ]]; then
+    COMP_CFG="{\"mode\":0,\"cudagraph_mode\":\"FULL_DECODE_ONLY\",\"cudagraph_capture_sizes\":[${CAPTURE_SIZES}]}"
+else
+    COMP_CFG='{"mode":0,"cudagraph_mode":"FULL_DECODE_ONLY"}'
+fi
 # Page-cache release before launch (GB10 unified pool; lane finding: weight
 # loading can CUDA-OOM on an "idle" box without it — files/evict_page_cache.py).
 EVICT="$HOME/fork/files/evict_page_cache.py"   # canonical checkout on the bench box
@@ -148,7 +158,7 @@ docker run \
     --enable-auto-tool-choice \
     --tool-call-parser qwen3_coder \
     --distributed-executor-backend mp \
-    --compilation-config "{\"mode\":0,\"cudagraph_mode\":\"FULL_DECODE_ONLY\"}" \
+    --compilation-config "$COMP_CFG" \
     --quantization modelopt \
     --host 0.0.0.0 \
     --port "$PORT" \
