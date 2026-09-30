@@ -107,8 +107,9 @@ if [[ "${KV_FP8:-}" == 1 ]]; then
 fi
 # Page-cache release before launch (GB10 unified pool; lane finding: weight
 # loading can CUDA-OOM on an "idle" box without it — files/evict_page_cache.py).
-python3 "$HOME/Qwen3.8-Flash-Next-Dual-DGX-Sparks/files/evict_page_cache.py" \
-    "$MODEL" >/dev/null 2>&1 || true
+EVICT="$HOME/fork/files/evict_page_cache.py"   # canonical checkout on the bench box
+[ -f "$EVICT" ] || EVICT="$HOME/Qwen3.8-Flash-Next-Dual-DGX-Sparks/files/evict_page_cache.py"
+python3 "$EVICT" "$MODEL" >/dev/null 2>&1 || true
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run \
     -d --name "$NAME" \
