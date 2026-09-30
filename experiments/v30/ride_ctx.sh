@@ -43,7 +43,7 @@ health() {
 
 arm() { # $1 = native|yarn, $2 = maxlen, $3 = hf-overrides blob
     docker rm -f $NAME >/dev/null 2>&1
-    export K=6 MAXLEN=$2 KV_FP8=1 PLE_MMAP=$HOME/.cache/vllm/ple_mmap_v030 OV BATCHED=2048   # 8192-boot freezes msi (3/3 today); 2048 = banked-reference-comparable + survives
+    export K=6 MAXLEN=$2 KV_FP8=1 PLE_MMAP=$HOME/.cache/vllm/ple_mmap_v030 OV BATCHED=2048 SPARSE_MAX_LOGITS_MB=256   # 8192-boot freezes msi (3/3 today); 2048 = banked-reference-comparable + survives
     bash $HOME/fork/experiments/v30/launch_v30.sh $NAME $PORT $MODEL \
         --speculative-config "$SPEC" --hf-overrides "$3" >>"$LOG" 2>&1 \
         || { echo "RUN-FAIL $1 $(date +%H:%M)" >>$LOG; docker logs $NAME 2>&1 | tail -30 > $R/ctx_${1}_FAIL.txt; docker rm -f $NAME >/dev/null 2>&1; return 1; }

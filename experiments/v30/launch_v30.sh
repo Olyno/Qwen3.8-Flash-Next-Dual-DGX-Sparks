@@ -119,6 +119,7 @@ docker run \
     -e TRANSFORMERS_OFFLINE=1 \
     -e "VLLM_PLE_CPU_OFFLOAD=$PLE_OFFLOAD" \
     -e VLLM_USE_BREAKABLE_CUDAGRAPH=0 \
+    -e VLLM_SPARSE_INDEXER_MAX_LOGITS_MB="${SPARSE_MAX_LOGITS_MB:-512}" \
     -e HF_HOME=/root/.cache/huggingface \
     "${PT_ENV[@]}" \
     "${PROF_ARGS[@]}" \
