@@ -147,3 +147,18 @@ stands as the product**; the gate bar FAIL remains as-measured on 198
 (81.3 vs 82.8) with the caveat that its cause is engine numerics and the
 0.31-era upgrade (native #55557) is now the quality-side lever.
 Gap-fill (a3retry) may add up to 35 ids; verdict re-check on its close.
+
+## CTX arm — pre-registered expectations (2026-09-30, runs tonight)
+The 1M-retirement verdict (09-29, commit "262K native for the gx10 pair
+recipe") was INFERRED (acceptance-position collapse + KV math), never measured
+end-to-end. The context A/B arm now measures it on the production stack:
+needle retrieval + prefill TTFT + prose decode + per-position acceptance at
+60k/200k/500k/950k, native (262K) arm vs YaRN-4.0 (1M) arm.
+Expectations written BEFORE data:
+  - YaRN arm: recall stays high only while acceptance tau degrades enough to
+    cost decode; the 09-27 pair rows (mean acceptance 2.8-3.3 at long ctx vs
+    ~3.5-4.0 at short) predict YaRN loses speed, not needles.
+  - If YaRN needles FAIL past 262K too, the retirement was right for TWO
+    reasons and the question closes.
+  - Adoption rule: raise prod context (131K -> 262K) only on a needle PASS at
+    250K + decode within 10 % of the 131K row; keep 131K otherwise.
