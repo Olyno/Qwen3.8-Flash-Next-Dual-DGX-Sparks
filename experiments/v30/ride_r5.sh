@@ -14,6 +14,7 @@ python3 -m py_compile $QP/ops/qsa.py || { echo "R5 SKIP: compile" >> $LOG; exit 
 docker rm -f $NAME >/dev/null 2>&1
 spec='{"method":"mtp","num_speculative_tokens":4,"draft_sample_method":"probabilistic","rejection_sample_method":"block","disable_eagle_block_drop":true}'
 ho='{"text_config": {"ple_embedding_dtype": "float8_e4m3fn", "num_experts_per_tok": 6}}'
+python3 ~/fork/files/evict_page_cache.py "$MODEL" >/dev/null 2>&1 || true  # the boot that follows a 120G cold read MUST release stale pages first
 docker run -d --name $NAME --gpus all --network host --ipc host \
   --cap-add SYS_NICE --cap-add SYS_PTRACE --ulimit memlock=-1 \
   -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 -e HF_HOME=/root/.cache/huggingface \

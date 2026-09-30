@@ -27,6 +27,11 @@ bash -n "$S" || { echo "FAIL: bash -n on $S"; exit 1; }
 if grep -qE "BATCHED=8192|max-num-batched-tokens 8192" "$S"; then
     echo "FAIL: 8192-batch boot in $(basename $S) — the box-freeze class of 2026-09-30"; FAIL=1
 fi
+# any docker run in an arm must be preceded by the page-cache release
+# (boot-after-cold-read CUDA-OOM/freeze class; the silent-|| true trap)
+if grep -q "docker run" "$S" && ! grep -q "evict_page_cache" "$S"; then
+    echo "FAIL: docker run without the page-cache release before it"; FAIL=1
+fi
 # the N/A coercion must be present wherever nvidia-smi feeds an integer test
 if grep -q "nvidia-smi --query-gpu=memory" "$S" && ! grep -q '\*\[!0-9\]\*)' "$S"; then
     echo "FAIL: nvidia-smi output feeds integer compare without the [N/A]-string coercion"; FAIL=1
