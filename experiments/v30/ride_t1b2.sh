@@ -1,4 +1,8 @@
 #!/bin/bash
+# ride_t1b2.sh — rerun of the T1b telemetry sweep with the probe fixed (the
+# original silently died on a nonexistent --only flag: argparse exit, || true
+# swallowed it, dumps came out zeros). Acceptance counters are per-process:
+# they cannot be recovered post-boot. ~12 min/arm x 5 arms.
 # ride_t1b.sh — recover the T1 acceptance telemetry that ride_t1 lost to the
 # $KK_metrics unbound-var bug (speed/conc rows are ALREADY banked; this dumps
 # ONLY spec_decode counters). One boot per K, 600-tok prose@1k as the draft
