@@ -290,3 +290,21 @@ streams outliving the bench window under pool pressure) — the row is NOT
 the concurrency answer; r1b's pre-death census attempt + a redo decide it.
 R6 (DeepGEMM): 6/10 text-identical, logprob max|Δ| 0.0065 — review tomorrow;
 null-text rows and truncation need disambiguating before any corruption claim.
+
+## R6 DeepGEMM A/B: sampling noise dominates the 10-prompt probe — greedy re-run added to the redo list
+The banked "6/10 text-identical" is NOT corruption evidence. At temp 0.6 text
+divergence is EXPECTED between runs (the probe never fixed a seed); what
+actually matters: (a) max|Δlogprob| over 10 prompts = 0.0065 — tiny, but
+logprobs were taken on the FIRST token of each response, where sampling
+hasn't branched yet; (b) 5/10 rows null-text in BOTH arms — the probe's own
+timeout, harness not engine. Two rows look damning in hindsight (DG1 answered
+"3" to 17*23 vs DG0's correct "391"; a "2+2=4" vs "4" whitespace echo) — but
+"3" is what a 600-token cut mid-stream at low temp can look like when the
+model pauses at a multiplication. Decisive instrument: temp-0 greedy, both
+arms, identical prompts, full generations — if outputs diverge AT GREEDY,
+that is GEMM nondeterminism, i.e. the #58544 corruption class on our shapes.
+ride_r6.sh: add --temperature 0 (both arms) + 120 s per-request timeout + 30
+prompts (arithmetic, code-print, exact-copy rows — the classes where a GEMM
+flip changes a token). Verdict predicate unchanged: any token divergence at
+greedy => DG stays off (product keeps cuBLAS); byte-identical => DG1 becomes
+a speed candidate worth a row.
