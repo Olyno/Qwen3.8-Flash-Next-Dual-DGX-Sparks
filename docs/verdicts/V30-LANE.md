@@ -235,3 +235,13 @@ fused-draft re-anchored, compose clean incl. stacked fp8dense→draft-vocab.
 v0.30 tests still green, recipe_lint PASS (new KV_PATCH/IMAGE_SERIES keys).
 Remaining before any L1 boot: the notes/gitignore polish + an rc2 image that
 exists (build it ourselves or wait for the v0.31.0 artifact — decision then).
+
+## #59432 zero-fill skip: NOT free on our stack (image-verified 09-30 19:3x)
+The upstream rationale ("caches that read-before-write keep their zeros via
+needs_kv_cache_zeroing") inverts for us: our config has 36 gated-delta-net
+layers → `has_mamba_layers` True → `needs_kv_cache_zeroing` True on every
+boot — the startup memset is load-bearing here, not slack. The only way the
+backport pays is block-scope (zero the mamba/ring groups, skip a uniform-
+precision attention group), which is finer than the issue's platform flag.
+VERDICT: parked, evidence recorded; the boot-pool win we already took is the
+guard + mmap PLE. (If a future image narrows the flag per-group, reopen.)
