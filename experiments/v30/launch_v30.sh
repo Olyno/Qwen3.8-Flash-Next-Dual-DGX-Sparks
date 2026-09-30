@@ -108,6 +108,20 @@ if [[ "${KV_FP8:-}" == 1 ]]; then
                 -v "$QP/ops/qsa.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ops/qsa.py:ro")
     KV_DTYPE=${KV_DTYPE:-fp8_e4m3}
 fi
+# QSA_RESERVE=1: vllm#57105 backport (merged 09-27, one release AFTER the
+# v0.30.0 image cut). Long prefill allocated a fresh worst-case logits tensor
+# per chunk -> allocator fragmentation -> the measured 200k+ pool death on
+# this box. The upstream change reserves the workspace once per call.
+# Allocation-only: numerics untouched. Composable with KV_FP8=1 (this file,
+# ops/qsa_indexer.py, is not in the fp8 patch's set).
+RES_MOUNTS=()
+if [[ "${QSA_RESERVE:-}" == 1 ]]; then
+    QI="$OV/qsa57105_orig"; QIO="$OV/qsa57105_patch"
+    IDX=/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py
+    [[ -f "$QI/qsa_indexer.py" ]] || { CID=$(docker create vllm/vllm-openai:v0.30.0 /bin/true); mkdir -p "$QI"; docker cp "$CID:$IDX" "$QI/qsa_indexer.py"; docker rm "$CID" >/dev/null; }
+    python3 "$HOME/fork/files/patch_qsa_logits_reserve_v030.py" "$QI" "$QIO" || { echo "launch_v30: qsa#57105 does not apply" >&2; exit 1; }
+    RES_MOUNTS=(-v "$QIO/qsa_indexer.py:$IDX:ro")
+fi
 # Graph-capture shaping: default byte-identical to the banked rows. For a boot
 # that the pool guard says is dying in capture (the #56824 curve), EAGER=1 or a
 # reduced CAPTURE_SIZES cuts the ~16 GiB graph peak without touching numerics.
@@ -138,6 +152,7 @@ docker run \
     "${PROF_ARGS[@]}" \
     "${DV_ARGS[@]}" \
     "${QSA_MOUNTS[@]}" \
+    "${RES_MOUNTS[@]}" \
     -v $OV/model.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/model.py:ro \
     -v "$MTP_PY":/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/mtp.py:ro \
     -v $OV/hyperconnection.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/hyperconnection.py:ro \
