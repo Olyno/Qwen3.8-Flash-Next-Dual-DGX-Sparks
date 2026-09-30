@@ -192,10 +192,14 @@ Mitigations, in order of bite:
   2. sysctl vm.compaction_proactiveness=0 — needs user sudo, offered.
   3. @reboot selfheal cron: re-arms the chain after a freeze, gated (avail
      >=95 G + docker up) and throttled 2/h so a hang-loop can't brick.
-Verification, first data 10:0x: the 10:06 re-arm (repo tip, BATCHED=2048
-everywhere incl. the overlay copy of launch_v30) froze the box again ~10 min
-into T1b. So batch size is NOT the cause — the constant is the weight/page-
-cache churn of any lean-hyb boot on this box since ~08:30. Candidates left:
+Verification, status 10:5x: the 10:06 and 10:31 re-arms exec'd launch_v30
+through the OVERLAY copy (what the drivers run) — its 2048 provenance at the
+freeze moments is unverifiable (the overlay sync shipped with the later full
+deploy; selfheal v1 died on a quoting bug before syncing anything). So the
+batch-size theory has not had a clean test; 6/6 freezes were boots where an
+8192 launcher cannot be excluded. The first provably-2048 boot is the next
+arm (deploy v3 syncs overlay + drivers before arming). Candidates if it
+still freezes:
 (a) kernel compaction storm — the sysctl (vm.compaction_proactiveness=0) is
 still unapplied and is now the prime suspect + cheapest test;
 (b) hardware degradation (thermal/PSU/RAM) — the journal pattern (pressure
