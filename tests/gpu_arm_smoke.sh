@@ -32,6 +32,13 @@ fi
 if grep -q "docker run" "$S" && ! grep -q "evict_page_cache" "$S"; then
     echo "FAIL: docker run without the page-cache release before it"; FAIL=1
 fi
+# health loops must poll by CONTAINER NAME, never kill -0 on a docker-run
+# wrapper pid (the wrapper exits the instant `docker run -d` prints its id;
+# the loop then declares a live boot dead and orphans it to trample the next
+# arm — the 09-30 R3/R4 cascade).
+if grep -q "launch_v30\|docker run" "$S" && grep -q "kill -0" "$S"; then
+    echo "FAIL: health loop uses kill -0 on a wrapper pid (false BOOT-FAIL class)"; FAIL=1
+fi
 # the N/A coercion must be present wherever nvidia-smi feeds an integer test
 if grep -q "nvidia-smi --query-gpu=memory" "$S" && ! grep -qF '|| g=0' "$S" && ! grep -qF 'f=999999' "$S"; then
     echo "FAIL: nvidia-smi output feeds integer compare without the [N/A]-string coercion"; FAIL=1
