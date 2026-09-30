@@ -51,6 +51,9 @@ if [[ -n "${VLLM_TORCH_PROFILER_DIR:-}" ]]; then
     PROF_ARGS=(-e VLLM_TORCH_PROFILER_DIR=/prof -v "$VLLM_TORCH_PROFILER_DIR":/prof)
 fi
 PT_ENV=()
+if [[ "${ALLOW_LONG:-0}" == 1 ]]; then
+    PT_ENV+=(-e VLLM_ALLOW_LONG_MAX_MODEL_LEN=1)   # required above the rope-derived ceiling (start.sh does this too; the bench launcher didn't — the YaRN arm's 60-min timeout was this refusal, not slowness)
+fi
 NG_EMB="$OV/ngram_embedding.py"
 if [[ -n "${PLE_MMAP:-}" ]]; then
     # Proven v0.30 path (single-spark lane): pristine image ngram + patcher.
