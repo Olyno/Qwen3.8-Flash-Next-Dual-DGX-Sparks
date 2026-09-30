@@ -16,7 +16,7 @@ run() {  # $1=env assignment (may be empty), $2=tag
   local NAME=v30r6$2 DG_OPT=()
   docker rm -f $NAME >/dev/null 2>&1
   if [ -n "$1" ]; then DG_OPT=(-e "$1"); fi
-  env KV_FP8=1 MAXLEN=131072 BATCHED=2048 DG_EXTRA="${1:-}" bash -c '
+  env KV_FP8=1 MAXLEN=131072 BATCHED=2048 PLE_MMAP=$HOME/.cache/vllm/ple_mmap_v030 DG_EXTRA="${1:-}" bash -c '
     if [ -n "$DG_EXTRA" ]; then export $DG_EXTRA; fi
     KV_FP8=1 MAXLEN=131072 BATCHED=2048 K=6 bash '"$OV"'/launch_v30.sh '"$NAME"' '"$PORT"' '"$MODEL"' --speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":4,\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"block\",\"disable_eagle_block_drop\":true}"' &
   local LP=$! ok=0

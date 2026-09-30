@@ -7,7 +7,7 @@ set -uo pipefail
 R=$HOME/v30_bench; OV=$HOME/upgrade/v30/overlay
 REPO=$HOME/Qwen3.8-Flash-Next-Dual-DGX-Sparks
 NAME_BASE=v30tb; PORT=8894; MODEL=$HOME/models/Qwen3.8-Flash-Next-NVFP4-wk1
-export KV_FP8=1 MAXLEN=114688
+export KV_FP8=1 MAXLEN=114688 PLE_MMAP=$HOME/.cache/vllm/ple_mmap_v030
 LOG=$R/ride_T1b.log; exec >>"$LOG" 2>&1
 echo "=== ride T1b start $(date) ==="
 # preflight: unified-pool teardown of a previous engine can take minutes to

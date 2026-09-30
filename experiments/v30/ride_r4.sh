@@ -5,7 +5,7 @@ set -uo pipefail
 R=$HOME/v30_bench; OV=$HOME/upgrade/v30/overlay; MODEL=$HOME/models/q38-lean-hyb
 NAME=v30r4; PORT=8899; LOG=$R/ride_r4.log
 docker rm -f $NAME >/dev/null 2>&1
-KV_FP8=1 MAXLEN=131072 BATCHED=2048 K=6 bash $OV/launch_v30.sh "$NAME" "$PORT" "$MODEL" \
+KV_FP8=1 MAXLEN=131072 BATCHED=2048 K=6 PLE_MMAP=$HOME/.cache/vllm/ple_mmap_v030 bash $OV/launch_v30.sh "$NAME" "$PORT" "$MODEL" \
   --speculative-config '{"method":"mtp","num_speculative_tokens":4,"draft_sample_method":"probabilistic","rejection_sample_method":"block","disable_eagle_block_drop":true}' \
   --moe-backend flashinfer_b12x > $LOG 2>&1 &
 LP=$!

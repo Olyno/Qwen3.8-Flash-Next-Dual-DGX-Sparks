@@ -1,6 +1,8 @@
 #!/bin/bash
 # R3: ITL-isolation arm. Same A4 prod stack, plus --long-prefill-token-threshold
-# 1024 + --max-num-scheduled-tokens 8192 (knobs exist in image, config/scheduler.py:56,70).
+# 1024 + scheduled-token cap (knobs exist in image, config/scheduler.py:56,70).
+# NOTE: this arm boots the SAME fp8-KV + mmap-PLE stack as A4 (it previously
+# silently omitted both: bf16 KV + pinned PLE = the pool-collapse class).
 # Hypothesis (research #8): c=1 tok/s ~unchanged; multi-stream inter-token
 # spikes shrink (prefill no longer rides inside decode steps). Measure both.
 set -uo pipefail
@@ -8,7 +10,7 @@ R=$HOME/v30_bench; OV=$HOME/upgrade/v30/overlay; MODEL=$HOME/models/q38-lean-hyb
 NAME=v30r3; PORT=8897
 LOG=$R/ride_r3.log
 docker rm -f $NAME >/dev/null 2>&1
-K=6 bash $OV/launch_v30.sh "$NAME" "$PORT" "$MODEL" \
+KV_FP8=1 PLE_MMAP=$HOME/.cache/vllm/ple_mmap_v030 K=6 bash $OV/launch_v30.sh "$NAME" "$PORT" "$MODEL" \
   --speculative-config '{"method":"mtp","num_speculative_tokens":4,"draft_sample_method":"probabilistic","rejection_sample_method":"block","disable_eagle_block_drop":true}' \
   --long-prefill-token-threshold 1024 >> $LOG 2>&1 &
 LP=$!
