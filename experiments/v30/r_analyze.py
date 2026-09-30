@@ -76,6 +76,57 @@ def census(path):
     return rows
 
 
+def ctx_arm(arm):
+    """context A/B: per-depth needle+decode+acceptance for one arm."""
+    depths = [60000, 200000, 500000, 950000]
+    out = []
+    refused = set()
+    vp = os.path.join(R, "ctx_verdict.txt")
+    if os.path.exists(vp):
+        for line in open(vp):
+            m = re.match(r"native (\d+) REFUSED", line)
+            if m:
+                refused.add(int(m.group(1)))
+    for T in depths:
+        if arm == "native" and T in refused:
+            out.append((T, "REFUSED", None, None, None))
+            continue
+        npath = os.path.join(R, f"ctx_{arm}_needle_{T}.txt")
+        res = ttft = dec = acc = None
+        if os.path.exists(npath):
+            for line in open(npath):
+                if line.startswith("RESULT:"):
+                    res = line.split()[1]
+                elif line.startswith("TTFT"):
+                    ttft = float(line.rsplit(":", 1)[1].split()[0])
+        rows = pass1(os.path.join(R, f"ctx_{arm}_dec_{T}.txt"))
+        dec = rows.get((f"{T:,}", "prose")) or rows.get((str(T), "prose"))
+        acc = metrics_pos(os.path.join(R, f"ctx_{arm}_metrics_{T}.txt"))
+        out.append((T, res, ttft, dec, acc))
+    return out
+
+
+def ctx_section():
+    print("== CTX: YaRN-1M vs 262K-native (measured, not inferred) ==")
+    seen = False
+    for arm in ("native", "yarn"):
+        rows = ctx_arm(arm)
+        if all(r[1] is None for r in rows):
+            continue
+        seen = True
+        print(f"  [{arm}]")
+        for T, res, ttft, dec, acc in rows:
+            if res == "REFUSED":
+                print(f"    {T:>7,}: engine refuses (over trained ctx)")
+                continue
+            a = f" tau={acc['tau']} q={acc['q']}" if acc else ""
+            d = f" prose {dec[1]:.1f} tok/s" if dec else ""
+            t = f" TTFT {ttft:.0f}s" if ttft else ""
+            print(f"    {T:>7,}: needles {res}{t}{d}{a}")
+    if not seen:
+        print("  pending (no ctx_* files yet)")
+
+
 def main():
     print("== R1: reactivity evidence (JIT cold vs warm) ==")
     log = os.path.join(R, "ride_r1.log")
@@ -115,6 +166,7 @@ def main():
             c = census(os.path.join(R, f))
             for row in c:
                 print(f"  {f}: {row}")
+    ctx_section()
     print("== T1b verdict ==")
     tv = os.path.join(R, "t1_verdict.txt")
     if os.path.exists(tv):
