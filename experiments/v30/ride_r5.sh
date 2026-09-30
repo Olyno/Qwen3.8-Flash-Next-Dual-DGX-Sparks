@@ -35,7 +35,7 @@ docker run -d --name $NAME --gpus all --network host --ipc host \
   $MODEL --served-model-name qwen3.8-flash-next --max-num-seqs 8 --max-num-batched-tokens 2048 \
   --safetensors-load-strategy lazy --enable-chunked-prefill --reasoning-parser qwen3 \
   --quantization modelopt --kv-cache-dtype fp8_e4m3 --max-model-len 131072 \
-  --speculative-config "$spec" --hf-overrides "$ho" \
+  --speculative-config "$spec" --hf-overrides "$ho" --port $PORT \
   --gpu-memory-utilization 0.748 >> $LOG 2>&1 || { echo "R5 RUN-FAIL" >> $LOG; exit 2; }
 ok=0
 for i in $(seq 1 180); do sleep 30; curl -s -m 5 localhost:$PORT/health >/dev/null 2>&1 && { ok=1; break; }; docker ps --format '{{.Names}}' | grep -qx $NAME || break; done
