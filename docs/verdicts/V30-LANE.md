@@ -221,3 +221,17 @@ T1b all five K arms booted+benchmarked (rc=0) but acceptance dumps = zeros:
 Implication if ctx2's yarn@200k also guard-fires: 1M-YaRN is not just slow,
 it is UNSERVABLE at deep prefill on this engine+box — the retirement
 verdict would upgrade from inference to measured-crash evidence.
+
+## v31-lane L0 result (09-30 17:2x, source-tested, no boot yet)
+All five patchers handled against v0.31.0rc2 source on the worktree branch
+(local, per single-branch law until measured): fp8-KV = native on rc2,
+backport refuses as predicted, start.sh version-gates the mount
+(KV_PATCH=1|native|auto, gate matrix 19/19); PLE mmap = re-anchored onto
+common/ngram_embedding.py — every semantic anchor survives there (fp8
+process_weights_after_loading byte-identical), the shard weight_loader loop
+lives in the nvidia shim and is patched too; fp8dense trio converted to an
+anchor-checked patcher (fusion gate preserved, drift refuses); draft-vocab +
+fused-draft re-anchored, compose clean incl. stacked fp8dense→draft-vocab.
+v0.30 tests still green, recipe_lint PASS (new KV_PATCH/IMAGE_SERIES keys).
+Remaining before any L1 boot: the notes/gitignore polish + an rc2 image that
+exists (build it ourselves or wait for the v0.31.0 artifact — decision then).
