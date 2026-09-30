@@ -11,5 +11,7 @@ echo "chain_r2 finished $(date +%H:%M) — firing t1b2 then ctx2"
 CHAIN_HELD=0 bash $HOME/ride_t1b2.sh
 CHAIN_HELD=0 bash $HOME/ride_ctx2.sh
 CHAIN_HELD=0 bash $HOME/ride_r1b.sh
-CHAIN_HELD=0 bash $HOME/ride_r3.sh   # re-run: the live attempt died to the wrapper-pid bug
+CHAIN_HELD=0 bash $HOME/ride_r3.sh   # re-runs: the live 17:5x attempts died to the wrapper-pid loop bug, fixed since
+CHAIN_HELD=0 bash $HOME/ride_r2.sh
+CHAIN_HELD=0 bash $HOME/ride_r4.sh
 echo "=== standby done $(date) ==="
