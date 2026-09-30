@@ -2,6 +2,61 @@
 
 Notable changes to this deployment. Format follows [Keep a Changelog](https://keepachangelog.com/1.1.0/).
 
+## 2026-09-30 — queue hardening, the freeze root-cause, context data begins
+
+### Fixed
+- **Silent box deaths root-caused**: every "reboot" since 09-29 16:50 was the
+  chain's first arm booting the PINNED PLE table (a missing `PLE_MMAP`
+  export) — the documented pool-collapse path. Proof via a new 5-second
+  memory+thermal guard, which killed the engine 3/3 and the box survived
+  (power/thermal exonerated). All drivers corrected; guard + gated
+  `@reboot` self-heal stay installed.
+- **Health-window arithmetic**: three arms filed BOOT-FAIL the exact minute
+  their boot succeeded (JIT-heavy boots need 60-74 min; windows were 40-60).
+  Windows to 90 min; a failed-arm auto-redo list rides the standby.
+- **Wrapper-pid health loops** (`kill -0` on a detached `docker run -d`)
+  mis-declared live boots dead in 60 s and orphaned containers into the next
+  arm: R3/R4 rewritten to poll by container name; the new
+  `tests/gpu_arm_smoke.sh` arm validator refuses this class, the 8192-batch
+  class, the missing page-cache release, and the GB10 `N/A` coercion gap.
+- **Telemetry probe flag** (`--only` never existed → silent-zero acceptance
+  dumps): fixed, `--tasks` added to the bench, corrected rerun queued.
+- **Long-context launcher flag** (`VLLM_ALLOW_LONG_MAX_MODEL_LEN` existed in
+  `start.sh` but not the bench launcher → the YaRN arm's "timeout" was a
+  pydantic refusal): added (`ALLOW_LONG=1`); rerun queued.
+- **Page-cache release paths** resolved against the canonical checkout and
+  inserted before every hand-rolled `docker run` arm.
+- Analyzer honesty: zero-draft acceptance dumps now read absent, never τ=1.0.
+
+### Added
+- **Measured context data** (arm 1 of 2): native 262K seat passes the 3/3
+  needle at 60k (prefill 2,078 tok/s, prose 21.3); a 200k chunked prefill
+  bled the pool 17→8 GiB over 12 min and the guard killed it — the upstream
+  #56457/#57105 fragmentation class, fixed only in 0.31: **~100-130K is the
+  current safe-prefill ceiling; prod's 131K sits under it.** `pair.conf`
+  ships `VLLM_SPARSE_INDEXER_MAX_LOGITS_MB=64` (the upstream mitigation).
+- **Dynamic-depth resolution**: batch-size-scheduled drafting exists in our
+  image but is hostile to `FULL_DECODE_ONLY` (force-downgrade; #58692 crashes
+  MTP-on-MRv2 = our runner); the context-axis variant is unmerged upstream;
+  the returned-slice trim is a no-op inside captured graphs. R7 keeps only
+  the concurrency question (paired 32-seat boots, pre-registered band).
+- **Decode-step anatomy arm** (torch profiler, pure-python analyzer, 8 %
+  arm-worthiness bar): settles the cuBLAS-fallback/indexer/prepare-fusion
+  shortlist with one measurement, queued tonight.
+- **v0.31 readiness (source-tested, branch-local)**: all five bind-mounted
+  patchers now have rc2 counterparts or version gates (fp8-KV native +
+  `KV_PATCH` gate, PLE mmap re-anchored onto the upstream module split,
+  fp8dense converted to an anchor-checked patcher, draft-vocab + fused-draft
+  re-anchored, 19/19 gate matrix + composition tests green). Awaits an rc2
+  image artifact or a self-build for the runtime ladder.
+- Hunt-6 delta scan banked (SM121 GEMM plans, FP8 indexer dot, RAZOR expert
+  pruning for our exact arch, QSA prepare fusion, startup-time levers,
+  sglang as the new centre of gravity for this architecture).
+
+### Notes
+- History reworded msg-only (tree-identical) for new-reader compliance;
+  README/CHANGELOG shorthand swept; every README number re-audited against
+  its verdict ledger.
 ## 2026-09-29 — fork consolidation (this history)
 
 ### Changed
