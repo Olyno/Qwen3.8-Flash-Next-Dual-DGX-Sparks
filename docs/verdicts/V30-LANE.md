@@ -245,3 +245,16 @@ backport pays is block-scope (zero the mamba/ring groups, skip a uniform-
 precision attention group), which is finer than the issue's platform flag.
 VERDICT: parked, evidence recorded; the boot-pool win we already took is the
 guard + mmap PLE. (If a future image narrows the flag per-group, reopen.)
+
+## Gate verdict RE-CHK after gap-fill (2026-09-30 19:42, rc=0, +23 ids)
+Common-answer set grew 163 -> 186 ids. On it:
+  baked (lean, old image)   161/186 = 86.56 %
+  A3 (hyb,  v0.30 stack)    155/186 = 83.33 %   own valid n=186 (fully filled)
+  A4 (lean, v0.30 stack)    154/186 = 82.80 %
+The decisive pair is A3-vs-A4 (identical engine, opposite bake): 155 vs 154,
+McNemar 10-vs-9 discordant, p≈1.0 — the lean bake's gate cost is ZERO, now on
+a 14 % bigger anchor set. The baked-vs-A4 gap (−3.8 pp) remains the
+engine-era shift (baked-vs-A4 pair: 11-vs-4, p=.118). Verdict UNCHANGED and
+strengthened: prod.conf stands; quality lever = the v0.31 ladder, not a
+lean retune. tool: tools/gate_reanchor.py (replays this from the scored
+files; sign test reproduces the banked .33).
