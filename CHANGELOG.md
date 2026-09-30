@@ -435,6 +435,8 @@ bring-up.
   binds the sliced file + `VLLM_MTP_DRAFT_VOCAB`. recipe_lint allowlist +
   README ledger updated. `RECIPE=prod-fr ./start.sh` = French-first profile
   (greedy drafting + fr 65k; verify stays lossless block rejection).
-- Proven: fk3 dual-pair smoke — head + worker argv both carry the composed
+- Proven: a smoke harness of `docker`/`ssh` bin-stubs that log the exact argv each
+  node would receive (kept off-repo under /tmp) — head + worker argv
+  both carry the composed
   mount shadowing FP8DENSE's (later `-v` wins), the vocab mount, and the env;
   composed mtp.py AST-clean and contains the `_attach_draft_vocab` block.

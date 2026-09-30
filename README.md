@@ -21,8 +21,8 @@ FP8-KV kernel work vendored from
 | + lean thinking bake (A4 = **prod**) | **30.5** | **35.5** | 82.8 % baked / 81.3 % v0.30 re-gate | **×1.79 / ×2.00**, K6 +4-5 % free |
 
 Reactivity shipped since 09-28: persisted Triton JIT cache, breakable CUDA
-graphs off, native 262K context (YaRN 1M retired — acceptance collapse at
-long positions). Every number: `docs/verdicts/` (ladder + gate math in
+graphs off, native context only (YaRN 1M retired — acceptance collapse at
+long positions; prod ships 131K native, the pair recipe 262K). Every number: `docs/verdicts/` (ladder + gate math in
 `V30-LANE.md`).
 
 ## Hardware
@@ -165,7 +165,7 @@ offload, MTP draft quant config and quant-prefix matching are all first-class up
 |---|---|---|
 | `patch_ple_mmap_v030.py` (mmap PLE) | native offload = pinned RAM; hangs ≤128 GiB pools | upstream's PLE offload can keep the table in evictable file-backed pages (then re-bench vs native pinned via `compare` on a >128 GB box and keep the winner) |
 | `patch_qsa_fp8_kv_v030.py` — backport of vllm-project/vllm#55557 (fp8_e4m3 QSA KV) | v0.30 image predates the merge | the image moves to vLLM ≥ 0.31, which ships #55557 natively (stated in the patcher's own docstring) |
-| `patch_mtp_draft_vocab_v030.py` + the 47k/65k draft-vocab files | reduced-vocabulary drafting slices the drafter lm_head (1.18 -> 0.22 GiB); coverage decides its worth: en+code 47k is ~flat for English, but fr/de/zh/ja/ru/pt prose is under-covered (fr 69 %) — the vendored per-language 65k files lift it to ~99.5 % (measured +10…+77 % decode by language, `recipes/prod-fr.conf`) | the slice engages only via greedy drafting (`use_local_argmax_reduction` is rejected alongside sampled drafting, PR #71); `prod.conf` keeps probabilistic + full head = unaffected. Dual-lane wiring + fk3-verified 09-29 |
+| `patch_mtp_draft_vocab_v030.py` + the 47k/65k draft-vocab files | reduced-vocabulary drafting slices the drafter lm_head (1.18 -> 0.22 GiB); coverage decides its worth: en+code 47k is ~flat for English, but fr/de/zh/ja/ru/pt prose is under-covered (fr 69 %) — the vendored per-language 65k files lift it to ~99.5 % (measured +10…+77 % decode by language, `recipes/prod-fr.conf`) | the slice engages only via greedy drafting (`use_local_argmax_reduction` is rejected alongside sampled drafting, PR #71); `prod.conf` keeps probabilistic + full head = unaffected. Dual-lane wiring verified on the fake-docker pair smoke harness 09-29 |
 | fp8dense overlay: `model.py` `mtp.py` `hyperconnection.py` (`FP8DENSE=1` mounts) | stock v0.30 still hardcodes `quant_config=None` in `GatedResidual` and misses the MTP HC mixer → FP8 weights load into bf16 Linears | upstream passes the resolved mixed-precision config through the HC mixers + final LM heads for `qwen4_exp` (then a stock NVFP4 checkpoint needs zero mounts, and this row dies with the re-port script `experiments/v30/port_v30.py`) |
 
 The block-drop lever is **not** a patch: `disable_eagle_block_drop` is a native v0.30
