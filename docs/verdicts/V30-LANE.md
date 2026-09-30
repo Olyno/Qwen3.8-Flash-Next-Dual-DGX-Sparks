@@ -177,3 +177,20 @@ still `lean-stock` (stock checkpoint, old memory model — NOT the product
 stack), corrected to `prod`; 120 GiB `q38-lean-hyb` verified byte-present on
 both nodes. Awaiting the user's stop/start moment; if thrash persists AFTER
 the swap at >95 % pool, reopen as a budget bug.
+
+## 09-30: the box-freeze class, root-caused to batch size
+Five unexplained reboots in 18 h, all silent (no OOM kill, no Xid, pstore
+empty), each 10-20 min into an engine boot. Dead-boot journals end the same
+way: journald "Under memory pressure" -> tailscale time-jump (a ~44 s full
+freeze) -> radio silence -> new boot record. Mechanism: the unified-pool
+compaction storm (vm.compaction_proactiveness=20 default; a boot churns the
+whole 120 G checkpoint through page cache; kcompactd spin can pin the box
+D-state — the README's own memory model, met at host level).
+Mitigations, in order of bite:
+  1. queue-wide BATCHED=2048 (this commit): the proven-live setting and the
+     one every banked row used; the 8192 row moves to a conditional slot.
+  2. sysctl vm.compaction_proactiveness=0 — needs user sudo, offered.
+  3. @reboot selfheal cron: re-arms the chain after a freeze, gated (avail
+     >=95 G + docker up) and throttled 2/h so a hang-loop can't brick.
+Verification: if CTX/R1 run to completion tonight under 2048, the batch-size
+correlation holds (5/5 freezes were 8192-boots; 0/many under 2048 historically).
