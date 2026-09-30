@@ -271,3 +271,22 @@ answer (R4 precedent)". DSD adoption for MTP: impossible on v0.30, awaiting
 upstream capture fixes (#49652/#56136 open). The paired static boot proceeds
 regardless — it is our first true 32-seat census row (G4 baseline under the
 new image guard), and R7's band is decided: NO (engine refuses).
+
+## Context verdict, v0.30 side (ctx2, 09-30 22:58): 200k prefill PASSES with the #57105 backport
+The registered rule was "native@200k passes needles + flat pool → 262K is
+shippable, ship cap-64". It fired. With SPARSE_MAX_LOGITS_MB=64 AND the
+#57105 worst-case-workspace backport mounted (QSA_RESERVE=1):
+  60k:  needles PASS, TTFT 28.2 s (≈2,130 tok/s prefill)
+  200k: needles PASS, TTFT 84.3 s, decode 28.0 tok/s — guard never fired,
+        the whole arm ran clean where run-1 bled 17→8 G and died at cap-256
+  500k/950k: refused by the 262K cap (by design; that refusal is data)
+Attribution: two knobs shipped together (smaller chunks + single worst-case
+reservation); the fragmentation mechanism is #57105's own, cap-64 was the
+issue's tested lever. v0.31 carries #57105 natively — another L1 argument.
+YaRN-1M arm boots at 23:0x; cells follow (~3 h). The 262K bump for prod
+lands AFTER the yarn cells + r1b confirm, with the engine-cap note updated.
+R7 census note: the 32-seat rows came back zero-token (late-first-token
+streams outliving the bench window under pool pressure) — the row is NOT
+the concurrency answer; r1b's pre-death census attempt + a redo decide it.
+R6 (DeepGEMM): 6/10 text-identical, logprob max|Δ| 0.0065 — review tomorrow;
+null-text rows and truncation need disambiguating before any corruption claim.
