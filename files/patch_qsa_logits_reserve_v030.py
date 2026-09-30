@@ -61,20 +61,19 @@ edits = [
     logits_workspace = q.new_empty(budget_bytes // 4, dtype=torch.float32)
 
     topk_workspace = torch.empty("""),
-    # 4. the single call site inside qsa_select_paged_prefill
-    ("""        query_start_loc,
-        visible_blocks,
-        max_query_len,
-        logits_width,
-        query_offset=query_start,""",
-     """        query_start_loc,
-        visible_blocks,
-        logits_workspace,
-        max_query_len,
-        logits_width,
-        query_offset=query_start,"""),
+    # 4. the single call site inside qsa_select_paged_prefill (12-space indent)
+    ("""            query_start_loc,
+            visible_blocks,
+            max_query_len,
+            logits_width,
+            query_offset=query_start,""",
+     """            query_start_loc,
+            visible_blocks,
+            logits_workspace,
+            max_query_len,
+            logits_width,
+            query_offset=query_start,"""),
 ]
-
 s = open(SRC).read()
 for old, new in edits:
     n = s.count(old)
