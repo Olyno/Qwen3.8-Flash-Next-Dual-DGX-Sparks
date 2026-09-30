@@ -21,8 +21,11 @@ FP8-KV kernel work vendored from
 | + lean thinking bake (A4 = **prod**) | **30.5** | **35.5** | 82.8 % baked / 81.3 % v0.30 re-gate | **×1.79 / ×2.00**, K6 +4-5 % free |
 
 Reactivity shipped since 09-28: persisted Triton JIT cache, breakable CUDA
-graphs off, native context only (YaRN 1M retired — acceptance collapse at
-long positions; prod ships 131K native, the pair recipe 262K). Every number: `docs/verdicts/` (ladder + gate math in
+graphs off, native context only (YaRN 1M retired; prod ships 131K native,
+the pair recipe 262K — and 131K sits just under the measured deep-prefill
+ceiling: a 200k chunked prefill on v0.30/GB10 bleeds the unified pool 17→8
+GiB over 12 min (upstream #56457/#57105, fixed only in 0.31), which the
+memory guard catches and kills before the box dies). Every number: `docs/verdicts/` (ladder + gate math in
 `V30-LANE.md`).
 
 ## Hardware
