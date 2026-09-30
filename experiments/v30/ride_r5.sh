@@ -38,7 +38,7 @@ docker run -d --name $NAME --gpus all --network host --ipc host \
   --speculative-config "$spec" --hf-overrides "$ho" \
   --gpu-memory-utilization 0.748 >> $LOG 2>&1 || { echo "R5 RUN-FAIL" >> $LOG; exit 2; }
 ok=0
-for i in $(seq 1 60); do sleep 60; curl -s -m 5 localhost:$PORT/health >/dev/null 2>&1 && { ok=1; break; }; docker ps --format '{{.Names}}' | grep -qx $NAME || break; done
+for i in $(seq 1 180); do sleep 30; curl -s -m 5 localhost:$PORT/health >/dev/null 2>&1 && { ok=1; break; }; docker ps --format '{{.Names}}' | grep -qx $NAME || break; done
 [ $ok -eq 1 ] || { docker logs $NAME 2>&1 | tail -30 >> $LOG; echo "R5 BOOT-FAIL $(date +%H:%M)" >> $LOG; docker rm -f $NAME >/dev/null 2>&1; exit 2; }
 echo "R5 HEALTHY $(date +%H:%M)" >> $LOG
 BENCH_PORT=$PORT python3 $HOME/fork/bench/decodebench.py --decode 600 --contexts 1000,100000 --temps 0.6 > $R/r5_pass1.txt 2>&1

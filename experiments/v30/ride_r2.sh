@@ -41,7 +41,7 @@ docker run -d --name $NAME --gpus all --network host --ipc host \
   --speculative-config "$spec" --hf-overrides "$ho" \
   --gpu-memory-utilization 0.748 >>"$LOG" 2>&1 || { echo "R2 RUN-FAIL" >>$LOG; exit 2; }
 t0=$(date +%s); ok=0
-while [ $(($(date +%s)-t0)) -lt 2400 ]; do
+while [ $(($(date +%s)-t0)) -lt 5400 ]; do
   curl -s -m 5 localhost:$PORT/health >/dev/null 2>&1 && { ok=1; break; }
   docker ps --format '{{.Names}}' | grep -qx $NAME || break
   sleep 15
