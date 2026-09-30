@@ -11,6 +11,10 @@ set -uo pipefail
 R=$HOME/v30_bench; LOG=$R/chainr2.log
 exec >>"$LOG" 2>&1
 echo "=== chain_r2 start $(date) ==="
+# startup-collapse guard (#56824 class): kills v30 engines below 6 G available
+# and samples thermal+pool every 5 s -> the freeze forensics record
+bash $HOME/gb10_guard.sh & GUARD=$!
+trap "kill $GUARD 2>/dev/null; rm -rf $R/gpu.lock" EXIT
 mkdir -p $R/gpu.lock && echo "PID=$$" > $R/gpu.lock/owner
 trap 'rm -rf $R/gpu.lock' EXIT
 preflight() {
