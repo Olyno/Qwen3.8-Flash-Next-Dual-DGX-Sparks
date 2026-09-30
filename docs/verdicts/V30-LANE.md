@@ -178,35 +178,20 @@ stack), corrected to `prod`; 120 GiB `q38-lean-hyb` verified byte-present on
 both nodes. Awaiting the user's stop/start moment; if thrash persists AFTER
 the swap at >95 % pool, reopen as a budget bug.
 
-## 09-30: the box-freeze class, root-caused to batch size
-Five unexplained reboots in 18 h, all silent (no OOM kill, no Xid, pstore
-empty), each 10-20 min into an engine boot. Dead-boot journals end the same
-way: journald "Under memory pressure" -> tailscale time-jump (a ~44 s full
-freeze) -> radio silence -> new boot record. Mechanism: the unified-pool
-compaction storm (vm.compaction_proactiveness=20 default; a boot churns the
-whole 120 G checkpoint through page cache; kcompactd spin can pin the box
-D-state — the README's own memory model, met at host level).
-Mitigations, in order of bite:
-  1. queue-wide BATCHED=2048 (this commit): the proven-live setting and the
-     one every banked row used; the 8192 row moves to a conditional slot.
-  2. sysctl vm.compaction_proactiveness=0 — needs user sudo, offered.
-  3. @reboot selfheal cron: re-arms the chain after a freeze, gated (avail
-     >=95 G + docker up) and throttled 2/h so a hang-loop can't brick.
-Verification, status 10:5x: the 10:06 and 10:31 re-arms exec'd launch_v30
-through the OVERLAY copy (what the drivers run) — its 2048 provenance at the
-freeze moments is unverifiable (the overlay sync shipped with the later full
-deploy; selfheal v1 died on a quoting bug before syncing anything). So the
-batch-size theory has not had a clean test; 6/6 freezes were boots where an
-8192 launcher cannot be excluded. The first provably-2048 boot is the next
-arm (deploy v3 syncs overlay + drivers before arming). Candidates if it
-still freezes:
-(a) kernel compaction storm — the sysctl (vm.compaction_proactiveness=0) is
-still unapplied and is now the prime suspect + cheapest test;
-(b) hardware degradation (thermal/PSU/RAM) — the journal pattern (pressure
-flush -> 44 s stall -> silence) is also consistent with a thermal shutdown
-loop after yesterday's heavy runs;
-(c) the desktop session (gdm/wireplumber churn visible in every dead boot —
-this box runs a full GNOME seat under the bench).
-Chain survives all of them via the @reboot selfheal (sync + re-arm, throttle
-2/h). Decision: proceed with 2048 (banked-comparable anyway), do NOT burn
-the queue on speculation, ask the user for the sysctl + a look at the box.
+## 09-30: the box-freeze class — RESOLVED: pinned-PLE boot, not power/thermal/batch
+Six freezes (16:50 + five on 09-30) all traced to ONE export bug: the chain's
+first arm (depth sweep) exports KV_FP8+MAXLEN but NOT PLE_MMAP, so launch_v30
+falls back to native PINNED PLE offload. The pool guard caught it at 5 s
+resolution (guard.log): weight load ramps 98->31 G available over ~4 min
+(normal lazy read), then the pinned-table phase slams 31->0 G in ONE tick,
+driver NV_ERR_NO_MEMORY (the #56824 curve, reproduced). Rescue kills fired
+3/3 and the box SURVIVED each at ~4 G available; thermal zones stayed 50-60 C
+(power/thermal theory EXONERATED); every arm that sets PLE_MMAP (R1/R2/R5/CTX/
+R7/a3retry) never collapsed once. Fixes: PLE_MMAP added to t1b/r3/r4/a6_k/r6
+(r3 also lacked KV_FP8 entirely: bf16 KV + pinned = double hit); the morning
+batch-size theory was wrong (2048 kept anyway: it is the banked-comparable
+setting). Instruments kept: gb10_guard (kill at 6 G + 5 s forensics), gated
+@reboot selfheal (sync-then-rearm, throttle 2/h), WoL wake from gx10 (the
+10:31/11:40 collapses still hard-hung the box — the guard's kill beats the
+kernel's, but a 0 G tick can outrun it; power cycle/WoL remains recovery).
+
