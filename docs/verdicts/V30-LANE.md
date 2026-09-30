@@ -162,3 +162,18 @@ Expectations written BEFORE data:
     reasons and the question closes.
   - Adoption rule: raise prod context (131K -> 262K) only on a needle PASS at
     250K + decode within 10 % of the 131K row; keep 131K otherwise.
+
+## Field row 2026-09-29 21:2x — the c=8 thrash (gx10, caught live)
+User's still-running 1M-YaRN boot at 10 streams: Engine log 155.3 tok/s ->
+12.6 -> 11.2 across 30 s with `GPU KV cache usage 92.4 -> 97.6 %` and
+`Waiting: 1` — pool saturation + chunked-prefill stealing decode steps:
+classic KV-thrash oscillation, not a scheduler bug. Compounding factors,
+each measured on our own lane: YaRN seats demand fragmentation headroom the
+fp8-KV pool doesn't have; MTP per-position acceptance collapses at long
+positions (drafted 18 tok/s -> 8 accepted = half the draft bandwidth spent
+for nothing). Fix = the recipe cutover (262K/131K native, no YaRN, prod
+stack), staged on the pair 09-30: checkout at fork tip, `.env RECIPE` was
+still `lean-stock` (stock checkpoint, old memory model — NOT the product
+stack), corrected to `prod`; 120 GiB `q38-lean-hyb` verified byte-present on
+both nodes. Awaiting the user's stop/start moment; if thrash persists AFTER
+the swap at >95 % pool, reopen as a budget bug.
