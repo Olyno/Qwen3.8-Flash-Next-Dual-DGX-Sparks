@@ -34,6 +34,7 @@ run R3    $HOME/ride_r3.sh
 run R4    $HOME/ride_r4.sh
 run R5    $HOME/ride_r5.sh
 run A3gap $HOME/ride_a3retry.sh
+run R7    $HOME/ride_r7.sh
 run R6    $HOME/ride_r6.sh
 [ -f $R/a6_request ] && K=$(sed -n 's/^K=\([0-9]*\).*/\1/p' $R/a6_request) bash $HOME/ride_a6_k.sh
 echo "=== chain_r2 complete $(date) ==="
