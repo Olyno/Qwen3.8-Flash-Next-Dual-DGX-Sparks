@@ -258,3 +258,16 @@ engine-era shift (baked-vs-A4 pair: 11-vs-4, p=.118). Verdict UNCHANGED and
 strengthened: prod.conf stands; quality lever = the v0.31 ladder, not a
 lean retune. tool: tools/gate_reanchor.py (replays this from the scored
 files; sign test reproduces the banked .33).
+
+## R7 dynamic arm: DSD-on-MTP confirmed dead on v0.30 (boot-fail evidence, 20:2x)
+The concurrency-scheduled-depth boot died at CUDA-graph capture, every time
+(three identical traces): v1/worker/gpu/cudagraph_utils.py:777
+prepare_inputs_to_capture -> input_batch.py:129 make_dummy ->
+`assert 0 < num_reqs <= num_tokens`. Same family as upstream #58692 (DSD +
+MTP on the V2 runner crashing the speculator's capture sizing) — our config
+reproduces it as a dummy-batch zero-token tier (the K=0 range and/or the
+derived draft query lengths), pre-registered outcome "boot-fail IS the
+answer (R4 precedent)". DSD adoption for MTP: impossible on v0.30, awaiting
+upstream capture fixes (#49652/#56136 open). The paired static boot proceeds
+regardless — it is our first true 32-seat census row (G4 baseline under the
+new image guard), and R7's band is decided: NO (engine refuses).
