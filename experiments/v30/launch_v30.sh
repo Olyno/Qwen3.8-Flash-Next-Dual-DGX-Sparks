@@ -68,7 +68,7 @@ if [[ -n "${PLE_MMAP:-}" ]]; then
         docker rm "$CID" >/dev/null
     fi
     python3 "$OV/patch_ple_mmap_v030.py" "$ORIG" "$NG_EMB" || { echo "launch_v30: mmap patch anchor drift" >&2; exit 1; }
-    PT_ENV=(-e "VLLM_PLE_MMAP_DIR=/root/.cache/vllm/ple_mmap_v030" -e VLLM_PLE_MMAP_ADVICE=1)
+    PT_ENV+=(-e "VLLM_PLE_MMAP_DIR=/root/.cache/vllm/ple_mmap_v030" -e VLLM_PLE_MMAP_ADVICE=1)   # += not =: a bare assignment here silently dropped the ALLOW_LONG env above (the YaRN arm's second death: the override WAS exported, the launcher clobbered it)
     mkdir -p "$HOME/.cache/vllm/ple_mmap_v030"
 fi
 
