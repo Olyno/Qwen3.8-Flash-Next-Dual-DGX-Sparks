@@ -38,7 +38,11 @@ boot() { # $1 = s|d, $2 = spec json
     local t0=$(date +%s)
     until curl -s -m 2 localhost:$PORT/health >/dev/null 2>&1; do
         sleep 10
-        [ $(($(date +%s)-t0)) -gt 3600 ] && { echo "BOOT-TIMEOUT $1 $(date +%H:%M)" >>"$LOG"; docker logs $NAME 2>&1 | tail -40 > $R/r7_${1}_FAIL.txt; docker rm -f $NAME >/dev/null 2>&1; return 1; }
+        # liveness, not just health: a container that died mid-init must fail
+        # NOW, not after the full window (observed tonight: the dynamic boot
+        # asserted at capture, the loop then polled a corpse for an hour)
+        docker ps -q -f name="^$NAME$" | grep -q . || { echo "CONTAINER-DIED $1 $(date +%H:%M)" >>"$LOG"; docker logs $NAME 2>&1 | tail -40 > $R/r7_${1}_FAIL.txt; docker rm -f $NAME >/dev/null 2>&1; return 1; }
+        [ $(($(date +%s)-t0)) -gt 5400 ] && { echo "BOOT-TIMEOUT $1 $(date +%H:%M)" >>"$LOG"; docker logs $NAME 2>&1 | tail -40 > $R/r7_${1}_FAIL.txt; docker rm -f $NAME >/dev/null 2>&1; return 1; }
     done
     echo "HEALTHY $1 $(($(date +%s)-t0))s $(date +%H:%M)" >>"$LOG"
     if [ "$1" = d ]; then
