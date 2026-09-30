@@ -16,6 +16,7 @@ echo "=== ride T1b start $(date) ==="
 for _ in $(seq 1 30); do
   n=$(docker ps -q --filter "name=v30" | wc -l)
   f=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1)
+  case "${f:-}" in ""|*[!0-9]*) f=999999;; esac   # GB10 answers [N/A]; non-numeric = pool-unknown, let the boot prove it
   [ "$n" -eq 0 ] && [ "${f:-0}" -ge 107520 ] && break
   echo "preflight: containers=$n free=${f}MiB $(date +%H:%M)"
   sleep 30
