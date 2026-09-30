@@ -195,3 +195,23 @@ setting). Instruments kept: gb10_guard (kill at 6 G + 5 s forensics), gated
 10:31/11:40 collapses still hard-hung the box — the guard's kill beats the
 kernel's, but a 0 G tick can outrun it; power cycle/WoL remains recovery).
 
+
+## CTX partial 09-30 14:2x — native arm data + the two harness bugs found
+native (262K seat, prod stack, 2048-batch):
+  60k: needle 3/3 PASS, TTFT 28.9 s (2,078 tok/s cold prefill), prose 21.3 tok/s
+  200k: engine DIED mid-cell — the pool guard FIRED (rescue 1, avail 5 G):
+        the #56457-class indexer-workspace cliff reproduced ON OUR STACK AT
+        ~200k prefill with SPARSE_MAX_LOGITS_MB=256; the 13:24 refusal was
+        NOT boot slowness. Guard saved the box (again).
+  500k/950k: REFUSED-NATIVE (expected; logged in ctx_verdict.txt)
+yarn 1M: BOOT-TIMEOUT was a pydantic max_model_len refusal (launcher lacked
+  VLLM_ALLOW_LONG_MAX_MODEL_LEN — start.sh has it, bench launcher never did).
+  Corrected rerun (ctx2: ALLOW_LONG, 90-min window) + t1b telemetry rerun
+  serialized on standby; they fire when chain_r2 completes.
+T1b all five K arms booted+benchmarked (rc=0) but acceptance dumps = zeros:
+  probe called --only (decodebench never had it; --tasks prose is real) —
+  argparse exit swallowed by || true. Speed ladder survives intact
+  (23.5/23.9/20.9/20.2/11.9); EV needs the per-pos dump → t1b2 tonight.
+Implication if ctx2's yarn@200k also guard-fires: 1M-YaRN is not just slow,
+it is UNSERVABLE at deep prefill on this engine+box — the retirement
+verdict would upgrade from inference to measured-crash evidence.
