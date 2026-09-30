@@ -15,6 +15,7 @@ echo "queue finished $(date +%H:%M) — firing corrected reruns"
 CHAIN_HELD=0 bash $HOME/ride_t1b2.sh
 CHAIN_HELD=0 bash $HOME/ride_ctx2.sh
 CHAIN_HELD=0 bash $HOME/ride_r1b.sh
+CHAIN_HELD=0 bash $HOME/ride_r8.sh   # decode-step anatomy (settles the kernel-lever shortlist)
 cd ~/fork && git fetch -q origin main && git reset -q --hard origin/main
 for n in R2 R3 R4 R6; do
     if grep -q "^$n rc=2" $R/chainr3.log 2>/dev/null; then
