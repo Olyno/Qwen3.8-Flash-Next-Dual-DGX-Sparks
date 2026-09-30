@@ -313,6 +313,13 @@ args=(docker run -d --name "$CONTAINER" --gpus all --network host --ipc host
 # opt-in passthrough (envs.py:721 Rust BPE shim; helps prompt-heavy TTFT,
 # inert when GPU-bound; default stays off — set VLLM_USE_FASTOKENS=1 to try)
 [[ -n "${VLLM_USE_FASTOKENS:-}" ]] && args+=(-e "VLLM_USE_FASTOKENS=$VLLM_USE_FASTOKENS")
+# deep-prefill pool safety on unified memory: the sparse indexer's logits
+# workspace is chunked to VLLM_SPARSE_INDEXER_MAX_LOGITS_MB (default 512);
+# measured 09-30: a 200k chunked prefill on GB10 v0.30 bled the pool 17->8 G
+# over 12 min (upstream #56457/#57105 fragmentation class, fixed in 0.31).
+# Opt-in shrink for long-context recipes; default unset = image default, so
+# the locked product's boot is untouched.
+[[ -n "${VLLM_SPARSE_INDEXER_MAX_LOGITS_MB:-}" ]] && args+=(-e "VLLM_SPARSE_INDEXER_MAX_LOGITS_MB=$VLLM_SPARSE_INDEXER_MAX_LOGITS_MB")
 # v0.30 auto-enables breakable CUDA graphs; on GB10 they re-capture mid-turn
 # and add +-15 % decode noise (upstream 34e7400 measured +-2 % with them off,
 # +4 % at 8 streams). Off by default; V030_BREAKABLE_CUDAGRAPH=1 re-enables.
