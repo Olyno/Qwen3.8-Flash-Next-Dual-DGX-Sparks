@@ -201,8 +201,14 @@ native (262K seat, prod stack, 2048-batch):
   60k: needle 3/3 PASS, TTFT 28.9 s (2,078 tok/s cold prefill), prose 21.3 tok/s
   200k: engine DIED mid-cell — the pool guard FIRED (rescue 1, avail 5 G):
         the #56457-class indexer-workspace cliff reproduced ON OUR STACK AT
-        ~200k prefill with SPARSE_MAX_LOGITS_MB=256; the 13:24 refusal was
-        NOT boot slowness. Guard saved the box (again).
+        ~200k prefill EVEN WITH SPARSE_MAX_LOGITS_MB=256 (guard curve: avail
+        bleeds 17->8 G over ~12 min of chunked prefill, monotonic — the
+        fragmentation growth pattern #57105 fixes, and that fix is 0.31-only).
+        Guard killed the engine at 5 G and the box survived. OPERATIONAL
+        CONSEQUENCE: deep prefills (~200k) are currently unservable on v0.30
+        on this box regardless of seat size — until ctx2 repeats it on the
+        YaRN arm and R1's 100k cell stays clean, treat ~100-130K as the
+        safe prefill ceiling (prod.conf's 131K sits exactly under it).
   500k/950k: REFUSED-NATIVE (expected; logged in ctx_verdict.txt)
 yarn 1M: BOOT-TIMEOUT was a pydantic max_model_len refusal (launcher lacked
   VLLM_ALLOW_LONG_MAX_MODEL_LEN — start.sh has it, bench launcher never did).
