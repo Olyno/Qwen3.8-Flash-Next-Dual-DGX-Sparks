@@ -14,7 +14,7 @@ KV_FP8=1 PLE_MMAP=$HOME/.cache/vllm/ple_mmap_v030 K=6 bash $OV/launch_v30.sh "$N
   --speculative-config '{"method":"mtp","num_speculative_tokens":4,"draft_sample_method":"probabilistic","rejection_sample_method":"block","disable_eagle_block_drop":true}' \
   --long-prefill-token-threshold 1024 >> $LOG 2>&1 &
 LP=$!
-for i in $(seq 1 40); do sleep 60; curl -s -m 5 localhost:$PORT/health >/dev/null 2>&1 && break; kill -0 $LP 2>/dev/null || break; done
+for i in $(seq 1 60); do sleep 60; curl -s -m 5 localhost:$PORT/health >/dev/null 2>&1 && break; kill -0 $LP 2>/dev/null || break; done
 if ! curl -s -m 5 localhost:$PORT/health >/dev/null 2>&1; then echo "R3 BOOT-FAIL $(date +%H:%M)" >> $LOG; docker logs $NAME 2>&1 | tail -30 >> $LOG; exit 2; fi
 echo "R3 HEALTHY $(date +%H:%M)" >> $LOG
 BENCH_PORT=$PORT python3 $HOME/fork/bench/decodebench.py --decode 600 --contexts 1000,100000 --temps 0.6 > $R/r3_pass1.txt 2>&1

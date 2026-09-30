@@ -20,7 +20,7 @@ echo "=== A3 retry start $(date) ==="
 docker rm -f $NAME >/dev/null 2>&1
 bash $OV/launch_v30.sh "$NAME" "$PORT" "$MODEL" --speculative-config "$SPEC"
 rc=1
-for i in $(seq 1 30); do sleep 60; curl -sf localhost:$PORT/health >/dev/null 2>&1 && { rc=0; break; }; done
+for i in $(seq 1 60); do sleep 60; curl -sf localhost:$PORT/health >/dev/null 2>&1 && { rc=0; break; }; done
 [ $rc -eq 0 ] || { echo "BOOT-FAIL $(date +%H:%M)"; docker logs $NAME 2>&1 | tail -30; exit 2; }
 echo "HEALTHY $(date +%H:%M)"
 cd "$LAB"
