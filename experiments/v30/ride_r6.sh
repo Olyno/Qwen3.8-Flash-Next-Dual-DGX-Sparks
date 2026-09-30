@@ -16,9 +16,9 @@ run() {  # $1=env assignment (may be empty), $2=tag
   local NAME=v30r6$2 DG_OPT=()
   docker rm -f $NAME >/dev/null 2>&1
   if [ -n "$1" ]; then DG_OPT=(-e "$1"); fi
-  env KV_FP8=1 MAXLEN=131072 BATCHED=8192 DG_EXTRA="${1:-}" bash -c '
+  env KV_FP8=1 MAXLEN=131072 BATCHED=2048 DG_EXTRA="${1:-}" bash -c '
     if [ -n "$DG_EXTRA" ]; then export $DG_EXTRA; fi
-    KV_FP8=1 MAXLEN=131072 BATCHED=8192 K=6 bash '"$OV"'/launch_v30.sh '"$NAME"' '"$PORT"' '"$MODEL"' --speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":4,\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"block\",\"disable_eagle_block_drop\":true}"' &
+    KV_FP8=1 MAXLEN=131072 BATCHED=2048 K=6 bash '"$OV"'/launch_v30.sh '"$NAME"' '"$PORT"' '"$MODEL"' --speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":4,\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"block\",\"disable_eagle_block_drop\":true}"' &
   local LP=$! ok=0
   for i in $(seq 1 40); do sleep 60; curl -s -m 5 localhost:$PORT/health >/dev/null 2>&1 && { ok=1; break; }; done
   if [ $ok -ne 1 ]; then

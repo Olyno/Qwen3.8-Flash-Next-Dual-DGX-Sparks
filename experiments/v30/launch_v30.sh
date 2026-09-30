@@ -22,7 +22,7 @@ MODEL=${3:-$HOME/models/Qwen3.8-Flash-Next-NVFP4-wk1}
 OV=${OV:-$HOME/upgrade/v30/overlay}
 # Boot-robustness overrides (hangs #3-5: v0.30 compile-warm died under stock
 # AND reduced-profile watermarks; PLE_OFFLOAD=0 tests the pinned-table path).
-GPU_UTIL=${GPU_UTIL:-}; BATCHED=${BATCHED:-8192}; MAXLEN=${MAXLEN:-131072}
+GPU_UTIL=${GPU_UTIL:-}; BATCHED=${BATCHED:-2048}; MAXLEN=${MAXLEN:-131072}
 PLE_OFFLOAD=${PLE_OFFLOAD:-1}; LOAD_STRAT=${LOAD_STRAT:-lazy}
 # GPU_UTIL empty => DERIVE like single-spark start.sh Step 2: budget =
 # min(weights+overhead5.6+mtp1.49+max(kv_need,12G), MemTotal - HOST_RESERVE26).

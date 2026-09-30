@@ -43,7 +43,7 @@ boot() { # $1 = label
       -v $HOME/upgrade/v30/overlay/qsa_patch/qsa.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/qsa.py:ro \
       -v $HOME/upgrade/v30/overlay/qsa_patch/ops/qsa.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ops/qsa.py:ro \
       vllm/vllm-openai@sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90 \
-      $MODEL --served-model-name qwen3.8-flash-next --max-num-seqs 8 --max-num-batched-tokens 8192 \
+      $MODEL --served-model-name qwen3.8-flash-next --max-num-seqs 8 --max-num-batched-tokens 2048 \
       --safetensors-load-strategy lazy --enable-chunked-prefill --reasoning-parser qwen3 \
       --quantization modelopt --kv-cache-dtype fp8_e4m3 --max-model-len 131072 \
       --speculative-config "$spec" --hf-overrides "$ho" \

@@ -30,7 +30,7 @@ fi
 
 boot() { # $1 = s|d, $2 = spec json
     docker rm -f $NAME >/dev/null 2>&1
-    export K=6 MAXLEN=131072 KV_FP8=1 BATCHED=8192 PLE_MMAP=$HOME/.cache/vllm/ple_mmap_v030 OV=$HOME/upgrade/v30/overlay
+    export K=6 MAXLEN=131072 KV_FP8=1 BATCHED=2048 PLE_MMAP=$HOME/.cache/vllm/ple_mmap_v030 OV=$HOME/upgrade/v30/overlay
     bash $HOME/fork/experiments/v30/launch_v30.sh $NAME $PORT $MODEL \
         --max-num-seqs 32 --speculative-config "$2" >>"$LOG" 2>&1 || {
         echo "RUN-FAIL $1 $(date +%H:%M)" >>"$LOG"
