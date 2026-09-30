@@ -67,13 +67,16 @@ def main():
     ap.add_argument("--decode", type=int, default=600)
     ap.add_argument("--contexts", default="1000,600000")
     ap.add_argument("--temps", default="0.0,0.8")
+    ap.add_argument("--tasks", default="all", help="comma list of prose,code,entropy,copy or 'all'")
     a = ap.parse_args()
     print(f"{'context':>9} {'temp':>5} {'content':<8} {'ptok':>9} {'ctok':>6} {'TTFT s':>9} {'dec tok/s':>10}")
     print("-" * 62)
     for c in [int(x) for x in a.contexts.split(",")]:
         ctx = build_ctx(c)
         for t in [float(x) for x in a.temps.split(",")]:
+            names = TASKS if a.tasks == "all" else a.tasks.split(",")
             for name, task in TASKS.items():
+                if name not in names: continue
                 p, ct, tt, dec = run(ctx, task, a.decode, t)
                 print(f"{c:>9,} {t:>5.1f} {name:<8} {p:>9,} {ct:>6,} {tt:>9.2f} {dec:>10.1f}", flush=True)
 

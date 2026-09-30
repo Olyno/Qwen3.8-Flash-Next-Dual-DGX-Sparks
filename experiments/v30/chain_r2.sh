@@ -27,6 +27,7 @@ preflight() {
 }
 run() { local name=$1; shift; preflight; echo "--- $name $(date +%H:%M) ---"; CHAIN_HELD=1 bash "$@"; echo "$name rc=$? $(date +%H:%M)"; }
 run T1b   $HOME/ride_t1b.sh
+run CTX   $HOME/ride_ctx.sh
 run R1    $HOME/ride_r1.sh
 run R2    $HOME/ride_r2.sh
 run R3    $HOME/ride_r3.sh
