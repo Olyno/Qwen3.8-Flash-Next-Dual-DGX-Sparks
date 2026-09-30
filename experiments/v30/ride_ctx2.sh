@@ -15,6 +15,11 @@
 # yarn boots LAST (rope re-init + huge-KV boot can take >30 min; the native
 # arm is already banked if it dies).
 #
+# v2b: SPARSE_MAX_LOGITS_MB=256 still bled the pool at 200k (17->8 G over 12
+# min of chunked prefill, #56457/#57105 fragmentation class; guard killed it,
+# box lived). The issue's own tested lever is 64 — half the temp workspace
+# churn. If ctx2 bleeds at 64 too, deep-prefill is a hard v0.30 wall and the
+# 200k+ cells get 'engine cannot serve this depth' as their honest result.
 # v2: ALLOW_LONG=1 (the 1M boot needs the rope-ceiling override;
 # the 09-30 14:24 timeout was a pydantic refusal spinning, not slowness)
 # Locks the chain GPU lock unless CHAIN_HELD is inherited (chain injects it).
@@ -45,7 +50,7 @@ health() {
 
 arm() { # $1 = native|yarn, $2 = maxlen, $3 = hf-overrides blob
     docker rm -f $NAME >/dev/null 2>&1
-    export K=6 MAXLEN=$2 KV_FP8=1 PLE_MMAP=$HOME/.cache/vllm/ple_mmap_v030 OV BATCHED=2048 ALLOW_LONG=1 SPARSE_MAX_LOGITS_MB=256   # 8192-boot freezes msi (3/3 today); 2048 = banked-reference-comparable + survives
+    export K=6 MAXLEN=$2 KV_FP8=1 PLE_MMAP=$HOME/.cache/vllm/ple_mmap_v030 OV BATCHED=2048 ALLOW_LONG=1 SPARSE_MAX_LOGITS_MB=64   # 8192-boot freezes msi (3/3 today); 2048 = banked-reference-comparable + survives
     bash $HOME/fork/experiments/v30/launch_v30.sh $NAME $PORT $MODEL \
         --speculative-config "$SPEC" --hf-overrides "$3" >>"$LOG" 2>&1 \
         || { echo "RUN-FAIL $1 $(date +%H:%M)" >>$LOG; docker logs $NAME 2>&1 | tail -30 > $R/ctx_${1}_FAIL.txt; docker rm -f $NAME >/dev/null 2>&1; return 1; }
