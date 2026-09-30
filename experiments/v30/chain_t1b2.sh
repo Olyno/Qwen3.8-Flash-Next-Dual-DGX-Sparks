@@ -17,7 +17,7 @@ CHAIN_HELD=0 bash $HOME/ride_ctx2.sh
 CHAIN_HELD=0 bash $HOME/ride_r1b.sh
 CHAIN_HELD=0 bash $HOME/ride_r8.sh   # decode-step anatomy (settles the kernel-lever shortlist)
 cd ~/fork && git fetch -q origin main && git reset -q --hard origin/main
-for n in R2 R3 R4 R6; do
+for n in R2 R3 R4 R5 R6; do
     if grep -q "^$n rc=2" $R/chainr3.log 2>/dev/null; then
         f=$(echo $n | tr A-Z a-z)
         echo "--- standby redo $n (failed rc=2 in the live queue; driver since fixed) $(date +%H:%M) ---"
