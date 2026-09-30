@@ -56,7 +56,11 @@ def metrics_pos(path):
                 acc[k] = acc.get(k, 0) + float(line.rsplit(" ", 1)[1])
     if not pos:
         return None
-    drafts = acc.get("drafted", 0) or 1
+    if not acc.get("drafted", 0):
+        # counters exist but zero = the workload never drove the drafter
+        # (dead probe / scraped before load): report ABSENT, never tau=1.0.
+        return None
+    drafts = acc.get("drafted", 0)
     q = [pos.get(i, 0.0) / drafts for i in range(4)]
     tau = 1 + sum(q)
     return {"q": [round(x, 3) for x in q], "tau": round(tau, 2),
