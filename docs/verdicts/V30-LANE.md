@@ -192,5 +192,17 @@ Mitigations, in order of bite:
   2. sysctl vm.compaction_proactiveness=0 — needs user sudo, offered.
   3. @reboot selfheal cron: re-arms the chain after a freeze, gated (avail
      >=95 G + docker up) and throttled 2/h so a hang-loop can't brick.
-Verification: if CTX/R1 run to completion tonight under 2048, the batch-size
-correlation holds (5/5 freezes were 8192-boots; 0/many under 2048 historically).
+Verification, first data 10:0x: the 10:06 re-arm (repo tip, BATCHED=2048
+everywhere incl. the overlay copy of launch_v30) froze the box again ~10 min
+into T1b. So batch size is NOT the cause — the constant is the weight/page-
+cache churn of any lean-hyb boot on this box since ~08:30. Candidates left:
+(a) kernel compaction storm — the sysctl (vm.compaction_proactiveness=0) is
+still unapplied and is now the prime suspect + cheapest test;
+(b) hardware degradation (thermal/PSU/RAM) — the journal pattern (pressure
+flush -> 44 s stall -> silence) is also consistent with a thermal shutdown
+loop after yesterday's heavy runs;
+(c) the desktop session (gdm/wireplumber churn visible in every dead boot —
+this box runs a full GNOME seat under the bench).
+Chain survives all of them via the @reboot selfheal (sync + re-arm, throttle
+2/h). Decision: proceed with 2048 (banked-comparable anyway), do NOT burn
+the queue on speculation, ask the user for the sysctl + a look at the box.
