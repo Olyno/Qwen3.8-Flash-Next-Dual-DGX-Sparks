@@ -38,7 +38,7 @@ health_t0() {
 echo "R1c START $(date +%H:%M)" >>"$LOG"
 docker rm -f $NAME >/dev/null 2>&1
 mkdir -p $HOME/.cache/vllm/triton_home $HOME/.cache/vllm/fi_autotune
-spec='{"method":"mtp","num_speculative_tokens":${KSPECS:-3},"draft_sample_method":"probabilistic","rejection_sample_method":"block","disable_eagle_block_drop":true}'
+spec="{\"method\":\"mtp\",\"num_speculative_tokens\":${KSPECS:-3},\"draft_sample_method\":\"probabilistic\",\"rejection_sample_method\":\"block\",\"disable_eagle_block_drop\":true}"
 ho='{"text_config": {"ple_embedding_dtype": "float8_e4m3fn", "num_experts_per_tok": 6}}'
 python3 ~/fork/files/evict_page_cache.py "$MODEL" >/dev/null 2>&1 || true
 docker run -d --name $NAME --gpus all --network host --ipc host \
@@ -74,7 +74,7 @@ BENCH_PORT=$PORT timeout 3600 python3 $HOME/fork/experiments/v30/concbench.py --
 BENCH_PORT=$PORT timeout 3000 python3 $HOME/fork/bench/longctx.py --target 130000 --max-tokens 512 > $R/r1c_needle131k.txt 2>&1; archive_logs after_needle
 # alive-proof: every phase file must have table lines, not a traceback tail
 for f in r1c_sanity r1c_pass1 r1c_conc_census r1c_conc_mintok r1c_needle131k; do
-    grep -qiE "URLError|Connection refused" $R/$f.txt && echo "R1b-DEATH after $f (logs archived)" >>"$LOG"
+    grep -qiE "URLError|Connection refused" $R/$f.txt && { echo "R1c-DEATH after $f (logs archived)" >>"$LOG"; break; }; true
 done
 docker rm -f $NAME >/dev/null 2>&1
 echo "R1b DONE $(date +%H:%M)" >>"$LOG"
