@@ -6,6 +6,13 @@ set -uo pipefail
 R=$HOME/v30_bench; OV=$HOME/upgrade/v30/overlay; MODEL=$HOME/models/q38-lean-hyb
 NAME=v30r5; PORT=8901; LOG=$R/ride_r5.log
 QP=$R/r5_qsa_patch
+
+# gpu.lock like every other arm — its absence caused the 04:55 triple-boot
+# collision (R5b + ctx3 + ctx4 raced; only R5 survived to a result).
+if [ -z "${CHAIN_HELD:-}" ]; then
+    while ! mkdir $R/gpu.lock 2>/dev/null; do sleep 60; done
+    echo "PID=$$" > $R/gpu.lock/owner; trap 'rm -rf $R/gpu.lock' EXIT
+fi
 rm -rf $QP; mkdir -p $QP/orig $QP/ops
 cp $OV/qsa_patch/qsa.py $QP/ 2>/dev/null
 sed 's/== (12, 0)/.major == 12/' $OV/qsa_patch/ops/qsa.py > $QP/ops/qsa.py
