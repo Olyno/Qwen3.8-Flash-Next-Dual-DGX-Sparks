@@ -308,3 +308,20 @@ prompts (arithmetic, code-print, exact-copy rows — the classes where a GEMM
 flip changes a token). Verdict predicate unchanged: any token divergence at
 greedy => DG stays off (product keeps cuBLAS); byte-identical => DG1 becomes
 a speed candidate worth a row.
+
+## K-acceptance telemetry CLOSED (t1b3, 02:17): k=2/k=3 win at c=1; k=4 is the worst legal point
+Clean per-K counters (drafts / draft-tokens / accepted, probe = prose 1k/600):
+  K=2: 295 drafts, acc/draft 1.03 | 23.4 tok/s
+  K=3: 247 drafts, acc/draft 1.43 | 23.7 tok/s   <- best speed AND best τ
+  K=4: 234 drafts, acc/draft 1.56 | 21.8 tok/s   <- product today
+  K=9: 227 drafts, acc/draft 1.64 | 14.0 tok/s
+Acceptance keeps rising but verification cost rises faster — the marginal
+draft token is net-negative past K=3 at c=1. +1.9 tok/s (k=4→k=3, +8.7 %) for
+zero quality risk (rejection sampling is exact either way). The K=1 boot was
+lost to the 00:54 collision; its row is r1b's sanity cell (k=1 engine row
+banked 09-27: 20.9 tok/s, τ 0.99 — consistent with the curve).
+DECISION GATE: pre-registered — t1b3 EV favored K2/K3 (it did, K=3), so the
+lean-hyb K-retune arm fires (depth-trim note in recipes: k=3 becomes the prod
+SPEC default pending an A3-style gate on the actual product prompt mix,
+since k=4 was the LOCKED product config — user ratifies any locked-constant
+change; the arm will show the number, not assume it).
