@@ -38,7 +38,7 @@ docker run -d --name $NAME --gpus all --network host --ipc host \
   $MODEL --served-model-name qwen3.8-flash-next --max-num-seqs 8 --max-num-batched-tokens 2048 \
   --safetensors-load-strategy lazy --enable-chunked-prefill --reasoning-parser qwen3 \
   --quantization modelopt --kv-cache-dtype fp8_e4m3 --max-model-len 131072 \
-  --speculative-config "$spec" --hf-overrides "$ho" \
+  --speculative-config "$spec" --hf-overrides "$ho" --port $PORT \
   --gpu-memory-utilization 0.748 >>"$LOG" 2>&1 || { echo "R2 RUN-FAIL" >>$LOG; exit 2; }
 t0=$(date +%s); ok=0
 while [ $(($(date +%s)-t0)) -lt 5400 ]; do
