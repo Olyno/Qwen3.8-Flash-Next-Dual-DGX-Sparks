@@ -19,13 +19,13 @@ Why this exists (measured on this box, see docs/HANDOFF-single-spark.md):
    layer 1, so the lost CPU/GPU overlap is negligible.
 
 2. The 26.8 GiB NVFP4 PLE table is memory-mapped from a pre-packed file
-   (files/build_ple_packed_table.py) instead of being copied into anonymous
+   (scripts/build_ple_packed_table.py) instead of being copied into anonymous
    RAM. On unified memory that is the difference between ~104 GiB and
    ~77 GiB of non-evictable footprint. Set VLLM_PLE_PACKED_TABLE_DIR to the
    directory holding "<layer_name>.ngram_embedding.packed_u8".
 
-Inputs:  files/ple_offload/orig/*.py   (extracted from the image)
-Outputs: files/ple_offload/*.py        (bind-mounted over the package)
+Inputs:  patches/ple_offload/orig/*.py   (extracted from the image)
+Outputs: patches/ple_offload/*.py        (bind-mounted over the package)
 """
 import os
 

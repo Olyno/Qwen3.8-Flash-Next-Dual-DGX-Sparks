@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CPU test for files/patch_mtp_draft_vocab.py's shard slicing and TP reduction.
+"""CPU test for patches/patch_mtp_draft_vocab.py's shard slicing and TP reduction.
 
 Runs the *real* patched functions against a fake vocab-parallel lm_head, with
 the collective stubbed, and compares the result to a full-vocabulary argmax
@@ -10,8 +10,8 @@ checking the ids.
 Run inside the image with the patched mtp.py mounted:
 
   docker run --rm --entrypoint bash \\
-    -v $PWD/files/mtp_patched.py:$VLLM/models/qwen3_8_flash_next/nvidia/mtp.py:ro \\
-    -v $PWD/files/test_draft_vocab.py:/tmp/t.py:ro \\
+    -v $PWD/patches/mtp_patched.py:$VLLM/models/qwen3_8_flash_next/nvidia/mtp.py:ro \\
+    -v $PWD/patches/test_draft_vocab.py:/tmp/t.py:ro \\
     vllm/vllm-openai:qwen38-flash-next -lc 'python3 /tmp/t.py'
 """
 import os

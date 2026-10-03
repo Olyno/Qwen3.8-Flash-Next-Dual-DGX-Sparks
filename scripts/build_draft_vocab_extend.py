@@ -16,10 +16,10 @@ Three rules from that failure, kept verbatim:
      where every inflected form weighs as much as "que".
 
 Usage:
-  python3 files/build_draft_vocab_extend.py \
-      --base files/draft_vocab_en_code_47k.txt \
+  python3 scripts/build_draft_vocab_extend.py \
+      --base vocab/draft_vocab_en_code_47k.txt \
       --corpus ~/.cache/draft-vocab-corpus/es.txt \
-      --size 65536 --out files/draft_vocab_es_en_code_65k.txt
+      --size 65536 --out vocab/draft_vocab_es_en_code_65k.txt
 
 Prints the per-shard id spread at --tp-report ranges, because this repo's
 lm_head is vocab-parallel: a decode step waits for the slowest rank, so a

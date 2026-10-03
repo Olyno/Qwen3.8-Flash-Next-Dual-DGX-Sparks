@@ -66,7 +66,7 @@ def snapshot():
 def nvrm_count(since, until):
     """NV_ERR_NO_MEMORY lines the kernel log gained in [since, until].
 
-    Same source and framing as files/memwatch.sh: journalctl -k needs no sudo
+    Same source and framing as scripts/memwatch.sh: journalctl -k needs no sudo
     here, and --since/--until are inclusive at second granularity.
     """
     try:

@@ -1,4 +1,4 @@
-# files/nfs-share.sh — share the head HuggingFace cache over NFS (ConnectX).
+# scripts/nfs-share.sh — share the head HuggingFace cache over NFS (ConnectX).
 # Sourced by start.sh and check-weights.sh. Requires: ssh_worker, info/ok/warn/err,
 # SCRIPT_DIR, IFACE, WORKER_IP, HF_CACHE_DIR.
 #
@@ -8,7 +8,7 @@
 NFS_IMAGE="${NFS_IMAGE:-vllm-fn-nfs:local}"
 NFS_CONTAINER="${NFS_CONTAINER:-vllm-fn-nfs}"
 NFS_VOLUME="${NFS_VOLUME:-vllm-fn-hf}"
-NFS_DOCKERFILE_DIR="${SCRIPT_DIR}/files/nfs-server"
+NFS_DOCKERFILE_DIR="${SCRIPT_DIR}/scripts/nfs-server"
 
 nfs_detect_server_ip() {
     if [[ -n "${NFS_SERVER_IP:-}" ]]; then

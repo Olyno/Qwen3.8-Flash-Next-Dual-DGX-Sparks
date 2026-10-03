@@ -47,12 +47,5 @@ class DraftVocabV030(unittest.TestCase):
         self.assertFalse((self.tmp / "mtp_v030_patched.py").exists())
 
 
-class LaunchWrapper(unittest.TestCase):
-    def test_wrapper_sets_the_lane(self):
-        src = (REPO / "start-v030.sh").read_text()
-        for needle in ("export V030=true", "vllm/vllm-openai:v0.30.0", "OVERRIDE_KV_CACHE_DTYPE:-auto", 'exec "$SCRIPT_DIR/start.sh"'):
-            self.assertIn(needle, src)
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -3,14 +3,14 @@
 # Copyright (C) 2026 MiaAI Lab (https://x.com/MiaAI_lab)
 # Vendored from MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark; default model id
 # repointed at this deployment's checkpoint.
-"""Build the reduced draft vocabulary for files/patch_mtp_draft_vocab.py.
+"""Build the reduced draft vocabulary for patches/patch_mtp_draft_vocab.py.
 
 Counts token frequencies over a corpus and writes the most frequent ids, one
 per line. The corpus that matters is the *model's own output distribution*,
 because that is what the drafter has to predict -- not a general text corpus
 and not the prompts.
 
-  python3 files/build_draft_vocab.py corpus.jsonl --out draft_vocab.txt --size 32768
+  python3 scripts/build_draft_vocab.py corpus.jsonl --out draft_vocab.txt --size 32768
 
 Reads .jsonl with a "text" field, or plain .txt. Always keeps every special /
 added token, whatever its frequency: those are cheap (a few hundred rows) and
