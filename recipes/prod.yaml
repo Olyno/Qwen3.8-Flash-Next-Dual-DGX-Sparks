@@ -5,6 +5,12 @@
 # thinking suppression needs no serving-side code). Local dir, bind-mounted
 # at /model, never downloaded. vLLM 0.30 lane: PLE handling and the
 # block-drop fix are native, FP8 KV comes from the v030 backport overlay.
+#
+# Serving shape targets a single Spark (NODES=1): TP follows the node count,
+# and the PLE mmap offload parks ~48 GiB of expert weights in a file-backed
+# host table so the model fits at TP=1. Context and concurrency are the
+# vendor-validated single-Spark values; raising max_model_len toward the
+# native 262144 is a KV-fit sweep, not a config default.
 name: prod
 image: vllm/vllm-openai:v0.30.0
 v030: true
@@ -15,23 +21,22 @@ served_model_name: Qwen3.8-Flash-Next-NVFP4  # what client tools match on /v1/mo
 # CoD (Chain-of-Draft) prior baked into the template's default reasoning
 # instructions — the overthinking-lab P2 arm, applied to every client.
 chat_template: chat_template_cod.jinja
-max_model_len: 262144
+max_model_len: 65536
 yarn_enable: false
 yarn_factor: 4.0
 gpu_memory_utilization: 0.80
-max_num_seqs: 32
+max_num_seqs: 4
 max_num_batched_tokens: 8192
 port: 8888
 master_port: 50000
 kv_cache_dtype: fp8
 mamba_ssm_cache_dtype: bfloat16
-tensor_parallel_size: 2
 enable_expert_parallel: true
 mm_encoder_tp_mode: data
 mtp_num_speculative_tokens: 4
 mtp_draft_vocab: vocab/draft_vocab_en_code_47k.txt
 mtp_index_share: true
-ple_offload: false
+ple_offload: true
 qsa_profile: stock
 fp8_dense: false
 require_idle_gpu: true
