@@ -11,7 +11,7 @@ FILES = REPO / "files"
 ORIG = FILES / "mtp_v030_patched.py.orig"
 
 
-@unittest.skipUnless(ORIG.is_file(), "no extracted v0.30 mtp.py; run ./start-v030.sh --launch once")
+@unittest.skipUnless(ORIG.is_file(), "no extracted v0.30 mtp.py; boot the prod recipe once (RECIPE=prod ./start.sh)")
 class DraftVocabV030(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
