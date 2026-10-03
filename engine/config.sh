@@ -34,19 +34,16 @@ HF_TOKEN="${HF_TOKEN:-}"
 ABLIT_MODEL_ID="drowzeys/keys-Qwen3.8-Flash-Next-NVFP4-dual-ablit-house-qsa-L3-47"
 ABLIT_PAGE="https://huggingface.co/${ABLIT_MODEL_ID}"
 
-# Topology: probe the worker — reachable -> dual-node (TP2 across two Sparks),
-# unset or unreachable -> single node. Everything downstream keys off NNODES;
-# TP follows it (one GPU per Spark) unless a recipe pins tensor_parallel_size.
+# Topology: NODES in .env picks single vs dual. Everything downstream keys off
+# NNODES; TP follows it (one GPU per Spark) unless a recipe pins
+# tensor_parallel_size.
+NODES="${NODES:-1}"
+[[ "$NODES" == "1" || "$NODES" == "2" ]] || err "NODES must be 1 or 2 (got: '$NODES')"
+NNODES=$NODES
 WORKER_IP="${WORKER_IP:-}"
 WORKER_USER="${WORKER_USER:-}"
-NNODES=1
-if [[ -n "$WORKER_IP" ]]; then
-    if ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
-        "${WORKER_USER:+${WORKER_USER}@}${WORKER_IP}" true 2>/dev/null; then
-        NNODES=2
-    else
-        warn "WORKER_IP=$WORKER_IP is set but unreachable — booting single-node."
-    fi
+if [[ "$NNODES" -eq 2 && -z "$WORKER_IP" ]]; then
+    err "NODES=2 but WORKER_IP is not set in .env"
 fi
 
 # Validate required variables (recipe or .env must provide them)
