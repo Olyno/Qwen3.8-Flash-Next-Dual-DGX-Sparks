@@ -6,6 +6,7 @@
     VLLM_ARGS=()
     VLLM_ARGS+=("--enable-prompt-tokens-details")
     VLLM_ARGS+=("--served-model-name" "$SERVED_MODEL_NAME")
+    [[ -n "$CHAT_TEMPLATE" ]] && VLLM_ARGS+=("--chat-template" "/chat_template.jinja")
     VLLM_ARGS+=("--tensor-parallel-size" "$TENSOR_PARALLEL_SIZE")
     VLLM_ARGS+=("--gpu-memory-utilization" "$GPU_MEMORY_UTILIZATION")
     VLLM_ARGS+=("--max-num-seqs" "$MAX_NUM_SEQS")
@@ -123,6 +124,7 @@ print(json.dumps({"text_config": tc}, separators=(",", ":")) if tc else "")
     DOCKER_ARGS+=("-e HF_HOME=/root/.cache/huggingface")
     DOCKER_ARGS+=("-v $HF_CACHE_DIR:/root/.cache/huggingface")
     DOCKER_ARGS+=("-v $HOME/.cache/vllm:/root/.cache/vllm")
+    [[ -n "$CHAT_TEMPLATE" ]] && DOCKER_ARGS+=("-v $CHAT_TEMPLATE:/chat_template.jinja:ro")
     if [[ -n "$EXTRA_DOCKER_ARGS" ]]; then
         # shellcheck disable=SC2206
         DOCKER_ARGS+=($EXTRA_DOCKER_ARGS)

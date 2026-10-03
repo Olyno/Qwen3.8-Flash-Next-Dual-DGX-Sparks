@@ -123,6 +123,13 @@ MTP_DRAFT_VOCAB="${MTP_DRAFT_VOCAB:-}"
 if [[ -n "$MTP_DRAFT_VOCAB" && "$MTP_DRAFT_VOCAB" != /* ]]; then
     MTP_DRAFT_VOCAB="$SCRIPT_DIR/$MTP_DRAFT_VOCAB"
 fi
+# Custom chat template (e.g. chat_template_cod.jinja for the CoD prior).
+# Resolved like MTP_DRAFT_VOCAB; bind-mounted and passed via --chat-template.
+CHAT_TEMPLATE="${CHAT_TEMPLATE:-}"
+if [[ -n "$CHAT_TEMPLATE" ]]; then
+    [[ "$CHAT_TEMPLATE" != /* ]] && CHAT_TEMPLATE="$SCRIPT_DIR/$CHAT_TEMPLATE"
+    [[ -f "$CHAT_TEMPLATE" ]] || err "chat_template not found: $CHAT_TEMPLATE"
+fi
 # QSA Triton launch profile: stock | gb10 | path to JSON from overlays/qsa_gb10/bench_qsa_kernels.py
 QSA_PROFILE="${QSA_PROFILE:-stock}"
 MTP_DISABLE_BLOCK_DROP="${MTP_DISABLE_BLOCK_DROP:-0}"
