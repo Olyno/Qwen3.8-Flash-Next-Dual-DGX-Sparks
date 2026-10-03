@@ -28,7 +28,7 @@ class TestRecipeBooleans(unittest.TestCase):
         self.addCleanup(__import__("shutil").rmtree, self.tmp, True)
 
     def test_booleans_emit_shell_true_false(self):
-        env = self.emit('v030: "true"\nskip_ple_patch: "true"\nnfs_share: false\n')
+        env = self.emit('v030: true\nskip_ple_patch: true\nnfs_share: false\n')
         self.assertEqual(env["V030"], "true")
         self.assertEqual(env["SKIP_PLE_PATCH"], "true")
         self.assertEqual(env["NFS_SHARE"], "false")
