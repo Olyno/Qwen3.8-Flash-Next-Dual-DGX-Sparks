@@ -66,7 +66,6 @@ PLE_OFFLOAD="${PLE_OFFLOAD:-false}"
 # NVFP4 kernels require input features % 16 == 0, so replicate the encoder on each GPU.
 MM_ENCODER_TP_MODE="${MM_ENCODER_TP_MODE:-data}"
 EXTRA_VLLM_ARGS="${EXTRA_VLLM_ARGS:-}"
-EXTRA_DOCKER_ARGS="${EXTRA_DOCKER_ARGS:-}"
 # Weight distribution. false (default) = each node keeps its own copy of the
 # checkpoint, worker seeded by rsync from the head. true = head exports its
 # cache over NFS on ConnectX and the worker mounts it read-only (HF models only).

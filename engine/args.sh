@@ -87,49 +87,6 @@ print(json.dumps({"text_config": tc}, separators=(",", ":")) if tc else "")
     VLLM_ARGS_STR="${VLLM_ARGS[*]}"
     OVERLAY_ENV_STR="${OVERLAY_ENV[*]:-}"
 
-    # Build docker run args (base, without node-specific VLLM_HOST_IP)
-    DOCKER_ARGS=()
-    DOCKER_ARGS+=(-d --name vllm-fn)
-    DOCKER_ARGS+=(--gpus all --network host --ipc host)
-    DOCKER_ARGS+=(--cap-add SYS_NICE --ulimit memlock=-1 --ulimit stack=67108864)
-    DOCKER_ARGS+=(--device /dev/infiniband:/dev/infiniband)
-    # NCCL / fabric env (VLLM_HOST_IP set per-node below)
-    DOCKER_ARGS+=(-e "GLOO_SOCKET_IFNAME=$IFACE")
-    DOCKER_ARGS+=(-e "NCCL_SOCKET_IFNAME=$IFACE")
-    DOCKER_ARGS+=(-e "TP_SOCKET_IFNAME=$IFACE")
-    DOCKER_ARGS+=(-e "NCCL_IB_DISABLE=0")
-    DOCKER_ARGS+=(-e "NCCL_IB_HCA=$IB_HCA")
-    DOCKER_ARGS+=(-e "NCCL_IB_GID_INDEX=$IB_GID_INDEX")
-    DOCKER_ARGS+=(-e "NCCL_IB_AUTO_DETECT=0")
-    DOCKER_ARGS+=(-e "NCCL_DEBUG=WARN")
-    # Offline mode
-    DOCKER_ARGS+=(-e "HF_HUB_OFFLINE=1")
-    DOCKER_ARGS+=(-e "TRANSFORMERS_OFFLINE=1")
-    # YaRN: allow max_model_len > 262K
-    if [[ -n "$VLLM_ALLOW_LONG_MAX_MODEL_LEN" ]]; then
-        DOCKER_ARGS+=(-e "VLLM_ALLOW_LONG_MAX_MODEL_LEN=$VLLM_ALLOW_LONG_MAX_MODEL_LEN")
-    fi
-    if [[ "$PLE_OFFLOAD" == "true" ]]; then
-        DOCKER_ARGS+=(-e "VLLM_PLE_CPU_OFFLOAD=1")
-    fi
-    # Volumes — single elements (flag + value together) for eval to parse correctly
-    # NOTE: the container runs as root (HOME=/root), so cache mounts must target /root,
-    # not the host user's $HOME — otherwise offline HF lookups fail.
-    if [[ -n "$HEAD_PLE_MOUNT" ]]; then
-        DOCKER_ARGS+=("$HEAD_PLE_MOUNT")
-    fi
-    if [[ -n "$HEAD_MODELOPT_MOUNT" ]]; then
-        DOCKER_ARGS+=("$HEAD_MODELOPT_MOUNT")
-    fi
-    DOCKER_ARGS+=("-e HF_HOME=/root/.cache/huggingface")
-    DOCKER_ARGS+=("-v $HF_CACHE_DIR:/root/.cache/huggingface")
-    DOCKER_ARGS+=("-v $HOME/.cache/vllm:/root/.cache/vllm")
-    [[ -n "$CHAT_TEMPLATE" ]] && DOCKER_ARGS+=("-v $CHAT_TEMPLATE:/chat_template.jinja:ro")
-    if [[ -n "$EXTRA_DOCKER_ARGS" ]]; then
-        # shellcheck disable=SC2206
-        DOCKER_ARGS+=($EXTRA_DOCKER_ARGS)
-    fi
-
     # -----------------------------------------------------------------------
     # Launch: worker (rank 1) first, then head (rank 0).
     # The head node serves the API; the worker runs headless.
