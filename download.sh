@@ -2,9 +2,9 @@
 # ============================================================================
 # download.sh — Fetch HuggingFace weights onto the HEAD node only.
 #
-# The worker never gets a local copy. After this, ./start.sh --launch (or
-# ./start-fp8.sh --launch) exports the head cache over NFS on ConnectX, or
-# start.sh rsyncs the worker copy (default).
+# The worker never gets a local copy. After this, ./start.sh --launch exports
+# the head cache over NFS on ConnectX, or start.sh rsyncs the worker copy
+# (default).
 #
 # Usage:
 #   ./download.sh                 # MODEL_ID from .env (stock NVFP4, ABLIT=0)
@@ -39,8 +39,8 @@ for arg in "$@"; do
 done
 
 if [[ ! -f .env ]]; then
-    echo "ERROR: .env not found. Copy .env.sample to .env and edit it."
-    echo "  cp .env.sample .env"
+    echo "ERROR: .env not found. Copy .env.example to .env and edit it."
+    echo "  cp .env.example .env"
     exit 1
 fi
 
@@ -111,7 +111,7 @@ next_start_hint() {
 
 # Prints a snapshot hash. Exit 0 = complete, 1 = incomplete, 2 = none.
 resolve_snapshot() {
-    python3 "$SCRIPT_DIR/files/resolve_snapshot.py" "$1"
+    python3 "$SCRIPT_DIR/scripts/resolve_snapshot.py" "$1"
 }
 
 info "Downloading $MODEL_ID"
