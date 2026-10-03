@@ -51,6 +51,16 @@
     fi
     HEAD_OVERLAY_MOUNTS="${OVERLAY_MOUNTS[*]:-}"
 
+    # Chat template: the worker runs the same vllm CLI and validates
+    # --chat-template even when --headless, so copy it over like the overlays.
+    WORKER_CHAT_MOUNT=""
+    HEAD_CHAT_MOUNT=""
+    if [[ -n "$CHAT_TEMPLATE" ]]; then
+        scp -q "$CHAT_TEMPLATE" "${WORKER_USER:+${WORKER_USER}@}${WORKER_IP}:/tmp/chat_template.jinja"
+        WORKER_CHAT_MOUNT="-v /tmp/chat_template.jinja:/chat_template.jinja:ro"
+        HEAD_CHAT_MOUNT="-v $CHAT_TEMPLATE:/chat_template.jinja:ro"
+    fi
+
     # PLE offload env flag (only set when explicitly true — avoids the ${VAR:+}
     # pitfall where "false" is non-empty and would wrongly enable the flag)
     PLE_OFFLOAD_ENV=""
@@ -82,6 +92,7 @@ docker run \
     $WORKER_PLE_MOUNT \
     $WORKER_MODELOPT_MOUNT \
     $WORKER_OVERLAY_MOUNTS \
+    $WORKER_CHAT_MOUNT \
     $OVERLAY_ENV_STR \
     $WORKER_HF_MOUNT \
     $WORKER_MODEL_MOUNT \
@@ -145,6 +156,7 @@ docker run \
     $HEAD_PLE_MOUNT \
     $HEAD_MODELOPT_MOUNT \
     $HEAD_OVERLAY_MOUNTS \
+    $HEAD_CHAT_MOUNT \
     $OVERLAY_ENV_STR \
     -v $HF_CACHE_DIR:/root/.cache/huggingface \
     $HEAD_MODEL_MOUNT \
