@@ -11,7 +11,10 @@ v030: true
 skip_ple_patch: true
 model_path: ~/models/Qwen3.8-Flash-Next-NVFP4-lean
 do_download_default: false
-served_model_name: qwen3.8-flash-next
+served_model_name: Qwen3.8-Flash-Next-NVFP4  # what client tools match on /v1/models
+# CoD (Chain-of-Draft) prior baked into the template's default reasoning
+# instructions — the overthinking-lab P2 arm, applied to every client.
+chat_template: chat_template_cod.jinja
 max_model_len: 262144
 yarn_enable: false
 yarn_factor: 4.0
