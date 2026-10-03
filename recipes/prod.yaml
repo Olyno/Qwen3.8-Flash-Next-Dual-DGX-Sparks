@@ -12,7 +12,7 @@
 # vendor-validated single-Spark values; raising max_model_len toward the
 # native 262144 is a KV-fit sweep, not a config default.
 name: prod
-image: vllm/vllm-openai:v0.30.0
+image: vllm/vllm-openai:v0.30.0@sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90
 v030: true
 skip_ple_patch: true
 model_path: ~/models/Qwen3.8-Flash-Next-NVFP4-lean
