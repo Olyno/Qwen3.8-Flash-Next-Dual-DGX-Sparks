@@ -9,7 +9,7 @@ else
     err "HEAD  ($HEAD_IP): $HEAD_MODEL_PATH — NOT FOUND"
 fi
 
-if ! $DO_LAUNCH; then
+if ! $DO_LAUNCH && [[ "$NNODES" -eq 2 ]]; then
     if [[ -n "$MODEL_PATH" ]]; then
         if ssh_worker "test -d '$WORKER_MODEL_PATH'" 2>/dev/null; then
             WORKER_SIZE=$(ssh_worker "du -sh '$WORKER_MODEL_PATH' 2>/dev/null | cut -f1" || true)
@@ -42,13 +42,16 @@ gpu_tenants() {  # prints "pid,name,mem" lines for compute apps, empty if idle
 if $DO_LAUNCH && [[ "$REQUIRE_IDLE_GPU" == "true" ]]; then
     info "=== Step 4b: GPU preflight ==="
     HEAD_TENANTS=$(gpu_tenants || true)
-    WORKER_TENANTS=$(ssh_worker "nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader 2>/dev/null | sed '/^\$/d'" || true)
+    WORKER_TENANTS=""
+    if [[ "$NNODES" -eq 2 ]]; then
+        WORKER_TENANTS=$(ssh_worker "nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader 2>/dev/null | sed '/^\$/d'" || true)
+    fi
     if [[ -n "$HEAD_TENANTS" || -n "$WORKER_TENANTS" ]]; then
         echo "HEAD:   ${HEAD_TENANTS:-idle}"
-        echo "WORKER: ${WORKER_TENANTS:-idle}"
-        err "GPU is in use on at least one node (set REQUIRE_IDLE_GPU=false to override)."
+        [[ "$NNODES" -eq 2 ]] && echo "WORKER: ${WORKER_TENANTS:-idle}"
+        err "GPU is in use (set REQUIRE_IDLE_GPU=false to override)."
     fi
-    ok "Both GPUs idle."
+    ok "GPU idle."
 fi
 
 # ---------------------------------------------------------------------------
@@ -86,8 +89,9 @@ if $DO_LAUNCH && [[ "$EVICT_PAGE_CACHE" == "true" ]]; then
     #                NFS 4.2: fadvise evicts there exactly as it does locally
     #                (3.00 GiB -> 0.00 GiB resident, measured with mincore).
     #
-    # One copy of the script on the worker serves both modes.
-    if scp -q "$EVICT_PY" \
+    # One copy of the script on the worker serves both modes. Skipped entirely
+    # on a single node.
+    if [[ "$NNODES" -eq 2 ]] && scp -q "$EVICT_PY" \
         "${WORKER_USER:+${WORKER_USER}@}${WORKER_IP}:/tmp/evict_page_cache.py" 2>/dev/null
     then
         if [[ -n "$MODEL_PATH" ]]; then
@@ -107,7 +111,7 @@ if $DO_LAUNCH && [[ "$EVICT_PAGE_CACHE" == "true" ]]; then
                 '$REMOTE_HUB/models--${ORG}--${NAME}'" 2>&1 \
                 | sed 's/^/  WORKER /' || true
         fi
-    else
+    elif [[ "$NNODES" -eq 2 ]]; then
         warn "  Could not copy the evictor to the worker; skipping its pass."
     fi
 fi

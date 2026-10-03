@@ -153,6 +153,7 @@ SNAPSHOT_SHA=$(basename "${PLE_CONFIG_DIR%/}")
 # Resolve the worker's HF cache. It mirrors the head's absolute path unless that
 # path lives under $HOME (then the prefix is rewritten to the worker's $HOME), or
 # WORKER_HF_HOME overrides it outright.
+if [[ "$NNODES" -eq 2 ]]; then
 REMOTE_HOME=$(ssh_worker "echo \"\$HOME\"")
 [[ -n "$REMOTE_HOME" ]] || err "Could not resolve \$HOME on worker ($WORKER_IP). Check SSH / WORKER_USER."
 if [[ -n "${WORKER_HF_HOME:-}" ]]; then
@@ -169,4 +170,7 @@ if [[ -n "$MODEL_PATH" ]]; then
 else
     info "Head HF cache:   $HF_CACHE_DIR"
     info "Worker HF cache: $REMOTE_HF"
+fi
+else
+info "Head HF cache:   $HF_CACHE_DIR (single node)"
 fi
