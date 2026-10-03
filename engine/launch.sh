@@ -6,10 +6,19 @@
     HEAD_CHAT_MOUNT=""
     [[ -n "$CHAT_TEMPLATE" ]] && HEAD_CHAT_MOUNT="-v $CHAT_TEMPLATE:/chat_template.jinja:ro"
 
-    # PLE offload env flag (only set when explicitly true — avoids the ${VAR:+}
-    # pitfall where "false" is non-empty and would wrongly enable the flag)
-    PLE_OFFLOAD_ENV=""
-    [[ "$PLE_OFFLOAD" == "true" ]] && PLE_OFFLOAD_ENV="-e VLLM_PLE_CPU_OFFLOAD=1"
+    # PLE offload env. v0.30 defaults VLLM_PLE_CPU_OFFLOAD to True, which parks
+    # the table in pinned anonymous host memory (~32 GiB/node) — so the flag is
+    # always explicit, never inherited. On the v030 lane with ple_offload the
+    # mmap overlay (patches/v030_ple) reroutes that class to a file-backed
+    # table via VLLM_PLE_MMAP_DIR in OVERLAY_ENV; leave the flag at its default
+    # there so the pinned-host class the patch intercepts stays selected.
+    if [[ "$V030" == "true" && "$PLE_OFFLOAD" == "true" ]]; then
+        PLE_OFFLOAD_ENV=""
+    elif [[ "$PLE_OFFLOAD" == "true" ]]; then
+        PLE_OFFLOAD_ENV="-e VLLM_PLE_CPU_OFFLOAD=1"
+    else
+        PLE_OFFLOAD_ENV="-e VLLM_PLE_CPU_OFFLOAD=0"
+    fi
 
     # Inter-node NCCL/IB env for the head container. Single node is TP=1: no
     # cross-node traffic, so none of this is needed (and IFACE may be unset).
