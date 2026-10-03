@@ -36,6 +36,7 @@ mm_encoder_tp_mode: data
 mtp_num_speculative_tokens: 4
 mtp_draft_vocab: vocab/draft_vocab_en_code_47k.txt
 mtp_index_share: true
+mtp_disable_block_drop: 1
 ple_offload: true
 qsa_profile: stock
 fp8_dense: false
