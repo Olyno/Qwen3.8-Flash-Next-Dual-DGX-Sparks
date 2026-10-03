@@ -29,8 +29,8 @@
 # in .env points the fetch at a mirror.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # scripts/
+cd "$SCRIPT_DIR/.."
 
 DO_VERIFY=false
 DO_DRY_RUN=false
@@ -268,8 +268,8 @@ check_node() {
     fi
 }
 
-# shellcheck source=files/nfs-share.sh
-source "$SCRIPT_DIR/files/nfs-share.sh"
+# shellcheck source=scripts/nfs-share.sh
+source "$SCRIPT_DIR/nfs-share.sh"
 
 echo "Checking weights for: $MODEL_ID"
 if [[ "$ABLIT" == "1" && "$MODEL_ID" == "$ABLIT_MODEL_ID" ]]; then

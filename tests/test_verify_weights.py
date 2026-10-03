@@ -24,7 +24,7 @@ os.chdir(REPO_ROOT)
 import importlib.util  # noqa: E402
 
 _SPEC = importlib.util.spec_from_file_location(
-    "verify_weights", os.path.join(REPO_ROOT, "verify-weights.py"))
+    "verify_weights", os.path.join(REPO_ROOT, "scripts", "verify-weights.py"))
 vw = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(vw)  # noqa: E402
 

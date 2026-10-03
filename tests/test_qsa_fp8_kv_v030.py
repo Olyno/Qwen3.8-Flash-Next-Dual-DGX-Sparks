@@ -1,4 +1,4 @@
-"""CPU checks for files/patch_qsa_fp8_kv_v030.py (vllm#55557 backport onto vLLM 0.30.0).
+"""CPU checks for patches/patch_qsa_fp8_kv_v030.py (vllm#55557 backport onto vLLM 0.30.0).
 
 QSA_V030_SRC points at the v0.30.0 models/qwen4_exp/nvidia directory. Inside the image:
 
@@ -15,7 +15,7 @@ import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRIPT = os.path.join(ROOT, "files", "patch_qsa_fp8_kv_v030.py")
+SCRIPT = os.path.join(ROOT, "patches", "patch_qsa_fp8_kv_v030.py")
 SRC = os.environ.get(
     "QSA_V030_SRC",
     "/tmp/claude-1000/-home-jvr0x/a5ecbb00-2895-4187-83fa-bb98b246ccc2/scratchpad"

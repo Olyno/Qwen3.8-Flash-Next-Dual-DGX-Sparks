@@ -25,15 +25,15 @@ support sliding windows. The upstream tests are not part of the image.
 
 start.sh runs this only when MTP_DISABLE_BLOCK_DROP=1 and MTP is on.
 
-Inputs:  files/block_drop/orig/<path>   (start.sh extracts them from the image)
-Outputs: files/block_drop/<path>        (start.sh mounts them over the package)
+Inputs:  patches/block_drop/orig/<path>   (start.sh extracts them from the image)
+Outputs: patches/block_drop/<path>        (start.sh mounts them over the package)
 <path> is the path under the vllm package, for example v1/core/sched/scheduler.py.
 
 When the image already has the option, the script removes old outputs and
 writes nothing, and start.sh mounts nothing.
 
-    python3 files/patch_block_drop.py [orig_dir] [out_dir]
-    python3 files/patch_block_drop.py --list    # the paths, one on each line
+    python3 patches/patch_block_drop.py [orig_dir] [out_dir]
+    python3 patches/patch_block_drop.py --list    # the paths, one on each line
 """
 import os
 import sys

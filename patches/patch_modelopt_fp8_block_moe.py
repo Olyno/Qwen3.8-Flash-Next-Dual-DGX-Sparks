@@ -18,7 +18,7 @@ vLLM already ships the machinery — Fp8MoEMethod sets block_quant from
 Fp8Config.weight_block_size and then names its scales `weight_scale_inv`, which
 is exactly what the checkpoint stores. This patch only wires the dispatch.
 
-Operates in place on files/modelopt_patched.py (the output of
+Operates in place on patches/modelopt_patched.py (the output of
 patch_modelopt_mxfp8.py), so both patches stack.
 """
 import os

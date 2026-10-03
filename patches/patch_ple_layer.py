@@ -771,7 +771,7 @@ def main() -> None:
             "            # same packed row the on-device lookup produces:\n"
             "            # NVFP4 -> cat(codes[head_dim/2], scales[head_dim/16]).\n"
             "            # Prefer a memory-mapped pre-packed table (built by\n"
-            "            # files/build_ple_packed_table.py); otherwise assemble\n"
+            "            # scripts/build_ple_packed_table.py); otherwise assemble\n"
             "            # the row from the separate code/scale parameters.\n"
             "            emb = self.ngram_embedding\n"
             "            ids = ngram_ids.reshape(-1)\n"
@@ -806,7 +806,7 @@ def main() -> None:
             "            return output\n",
         ),
 
-        # ---- GB10 offload placeholder fixes (see files/patch_ple_offload.py) ----
+        # ---- GB10 offload placeholder fixes (see patches/patch_ple_offload.py) ----
         # (a) The GPU-worker placeholder skips its constructor, so it has no
         #     ngram_embedding/quant_method. Give it the quant method from config
         #     so load_weights() can capture the global scale + LUT and

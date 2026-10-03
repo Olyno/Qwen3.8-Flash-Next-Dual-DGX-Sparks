@@ -629,7 +629,7 @@ class Qwen3_8FlashNextNGramEmbedding(PleOffloadLayer):
             # same packed row the on-device lookup produces:
             # NVFP4 -> cat(codes[head_dim/2], scales[head_dim/16]).
             # Prefer a memory-mapped pre-packed table (built by
-            # files/build_ple_packed_table.py); otherwise assemble
+            # scripts/build_ple_packed_table.py); otherwise assemble
             # the row from the separate code/scale parameters.
             emb = self.ngram_embedding
             ids = ngram_ids.reshape(-1)

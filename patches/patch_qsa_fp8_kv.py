@@ -26,9 +26,9 @@ Inert unless --kv-cache-dtype is fp8: KV_QUANT_MODE is a tl.constexpr, so the
 cast/scale branches are eliminated at Triton compile time and the BF16 path
 emits the same code as before.
 
-Inputs:  files/qsa_ops_patched.py.orig     (nvidia/ops/qsa.py from the image)
-         files/qsa_nvidia_patched.py.orig  (nvidia/qsa.py from the image)
-Outputs: files/qsa_ops_patched.py, files/qsa_nvidia_patched.py
+Inputs:  patches/qsa_ops_patched.py.orig     (nvidia/ops/qsa.py from the image)
+         patches/qsa_nvidia_patched.py.orig  (nvidia/qsa.py from the image)
+Outputs: patches/qsa_ops_patched.py, patches/qsa_nvidia_patched.py
 """
 import ast
 import os

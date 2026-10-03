@@ -33,8 +33,8 @@ Both the logit scale and the tanh soft cap are monotonic and applied
 identically on every rank, so skipping them leaves both the local argmax and
 the cross-rank comparison unchanged.
 
-Inputs:  files/mtp_patched.py.orig   (nvidia/mtp.py from the image)
-Outputs: files/mtp_patched.py
+Inputs:  patches/mtp_patched.py.orig   (nvidia/mtp.py from the image)
+Outputs: patches/mtp_patched.py
 """
 import ast
 import os
@@ -49,7 +49,7 @@ DRAFT_VOCAB_BLOCK = '''
 def _attach_draft_vocab(model: nn.Module) -> None:
     """Slice this rank's lm_head shard down to VLLM_MTP_DRAFT_VOCAB's token ids.
 
-    The file is one integer token id per line (see files/build_draft_vocab.py).
+    The file is one integer token id per line (see scripts/build_draft_vocab.py).
     The full head is left in place and untouched; only get_top_tokens below
     reads the slice.
     """

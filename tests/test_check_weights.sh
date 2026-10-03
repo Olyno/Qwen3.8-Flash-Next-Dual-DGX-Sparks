@@ -28,7 +28,7 @@ printf 'all the weights' > "$SNAPSHOT/model.safetensors"
 printf 'rev1' > "$MODEL_ROOT/refs/main"
 
 # Build a manifest describing exactly that fixture, using the verifier itself.
-python3 - "$REPO_ROOT/verify-weights.py" "$SNAPSHOT" "$WORK/manifest.json" <<'PY'
+python3 - "$REPO_ROOT/scripts/verify-weights.py" "$SNAPSHOT" "$WORK/manifest.json" <<'PY'
 import importlib.util, json, os, sys
 spec = importlib.util.spec_from_file_location("vw", sys.argv[1])
 vw = importlib.util.module_from_spec(spec); spec.loader.exec_module(vw)
@@ -155,18 +155,18 @@ run() {
 echo "== check-weights.sh shell tests =="
 
 # 1. No-argument fast check: presence + size, no manifest, no python verify.
-run "no-arg fast check" env PATH="$WORK/bin:$PATH" ./check-weights.sh
+run "no-arg fast check" env PATH="$WORK/bin:$PATH" ./scripts/check-weights.sh
 
 # 2. --verify end to end: fetch via mock API, verify head, verify "worker".
 run "--verify end to end (head + worker)" \
-    env PATH="$WORK/bin:$PATH" ./check-weights.sh --verify >/dev/null
+    env PATH="$WORK/bin:$PATH" ./scripts/check-weights.sh --verify >/dev/null
 
 # 3. A corrupt shard makes --verify exit nonzero (blocking, not warning).
 cp "$SNAPSHOT/model.safetensors" "$WORK/model.safetensors.bak"
 printf 'corrupt!!!' > "$SNAPSHOT/model.safetensors"
 run "corrupt shard is blocking (non-zero exit)" bash -c "
     set +e
-    PATH=$WORK/bin:\$PATH ./check-weights.sh --verify >/dev/null 2>&1
+    PATH=$WORK/bin:\$PATH ./scripts/check-weights.sh --verify >/dev/null 2>&1
     rc=\$?
     set -e
     [[ \$rc -ne 0 ]]
@@ -175,13 +175,13 @@ mv "$WORK/model.safetensors.bak" "$SNAPSHOT/model.safetensors"
 
 # 3b. --dry-run succeeds, fetches the manifest, checks presence/size, no hash.
 run "--dry-run succeeds (presence + size only)" \
-    env PATH="$WORK/bin:$PATH" ./check-weights.sh --dry-run >/dev/null 2>&1
+    env PATH="$WORK/bin:$PATH" ./scripts/check-weights.sh --dry-run >/dev/null 2>&1
 
 # 3c. --dry-run still flags a missing file (presence check, not just a plan).
 mv "$SNAPSHOT/model.safetensors" "$WORK/model.safetensors.hidden"
 run "--dry-run flags missing file (non-zero exit)" bash -c "
     set +e
-    PATH=$WORK/bin:\$PATH ./check-weights.sh --dry-run >/dev/null 2>&1
+    PATH=$WORK/bin:\$PATH ./scripts/check-weights.sh --dry-run >/dev/null 2>&1
     rc=\$?
     set -e
     [[ \$rc -ne 0 ]]
@@ -192,7 +192,7 @@ mv "$WORK/model.safetensors.hidden" "$SNAPSHOT/model.safetensors"
 #     HF_API_BASE points at a dead port, so any fetch attempt would fail.
 run "--manifest uses the saved manifest (no API call)" \
     env PATH="$WORK/bin:$PATH" HF_API_BASE="http://127.0.0.1:1" \
-    ./check-weights.sh --verify --manifest "$WORK/manifest.json" >/dev/null 2>&1
+    ./scripts/check-weights.sh --verify --manifest "$WORK/manifest.json" >/dev/null 2>&1
 
 # 3e. --manifest still catches a corrupt shard.
 cp "$SNAPSHOT/model.safetensors" "$WORK/model.safetensors.bak"
@@ -200,7 +200,7 @@ printf 'corrupt!!!' > "$SNAPSHOT/model.safetensors"
 run "--manifest catches a corrupt shard (non-zero exit)" bash -c "
     set +e
     PATH=$WORK/bin:\$PATH HF_API_BASE=http://127.0.0.1:1 \
-        ./check-weights.sh --manifest $WORK/manifest.json >/dev/null 2>&1
+        ./scripts/check-weights.sh --manifest $WORK/manifest.json >/dev/null 2>&1
     rc=\$?
     set -e
     [[ \$rc -ne 0 ]]
@@ -210,7 +210,7 @@ mv "$WORK/model.safetensors.bak" "$SNAPSHOT/model.safetensors"
 # 3f. A --manifest path that does not exist is a hard error (exit 1).
 run "--manifest missing file fails (exit 1)" bash -c "
     set +e
-    PATH=$WORK/bin:\$PATH ./check-weights.sh --manifest $WORK/nope.json >/dev/null 2>&1
+    PATH=$WORK/bin:\$PATH ./scripts/check-weights.sh --manifest $WORK/nope.json >/dev/null 2>&1
     rc=\$?
     set -e
     [[ \$rc -eq 1 ]]
@@ -219,7 +219,7 @@ run "--manifest missing file fails (exit 1)" bash -c "
 # 3g. --manifest without its argument is a usage error (exit 2).
 run "--manifest without argument rejected (exit 2)" bash -c "
     set +e
-    PATH=$WORK/bin:\$PATH ./check-weights.sh --manifest >/dev/null 2>&1
+    PATH=$WORK/bin:\$PATH ./scripts/check-weights.sh --manifest >/dev/null 2>&1
     rc=\$?
     set -e
     [[ \$rc -eq 2 ]]
@@ -228,7 +228,7 @@ run "--manifest without argument rejected (exit 2)" bash -c "
 # 4. Unknown flag is rejected with exit 2.
 run "unknown flag rejected (exit 2)" bash -c "
     set +e
-    PATH=$WORK/bin:\$PATH ./check-weights.sh --bogus >/dev/null 2>&1
+    PATH=$WORK/bin:\$PATH ./scripts/check-weights.sh --bogus >/dev/null 2>&1
     rc=\$?
     set -e
     [[ \$rc -eq 2 ]]
@@ -238,7 +238,7 @@ run "unknown flag rejected (exit 2)" bash -c "
 run "missing .env fails (exit 1)" bash -c "
     set +e
     mv .env \$WORK/.env.saved
-    ./check-weights.sh >/dev/null 2>&1
+    ./scripts/check-weights.sh >/dev/null 2>&1
     rc=\$?
     mv \$WORK/.env.saved .env
     set -e
@@ -248,7 +248,7 @@ run "missing .env fails (exit 1)" bash -c "
 # 6. Manifest fetch failure is blocking: an unreachable API must fail, not pass.
 run "API fetch failure is blocking (non-zero exit)" bash -c "
     set +e
-    PATH=$WORK/bin:\$PATH HF_API_BASE=http://127.0.0.1:1 ./check-weights.sh --verify >/dev/null 2>&1
+    PATH=$WORK/bin:\$PATH HF_API_BASE=http://127.0.0.1:1 ./scripts/check-weights.sh --verify >/dev/null 2>&1
     rc=\$?
     set -e
     [[ \$rc -ne 0 ]]
