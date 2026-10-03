@@ -1,0 +1,239 @@
+# ---------------------------------------------------------------------------
+# 4c. vLLM overlay patches (bind-mounted files, no image rebuild).
+#     overlays/fp8dense/*.py   -> FP8-dense loader support (only with FP8_DENSE=true)
+#     overlays/qsa_gb10/qsa.py -> QSA launch-profile override (only with QSA_PROFILE != stock)
+# ---------------------------------------------------------------------------
+VLLM_PKG=/usr/local/lib/python3.12/dist-packages/vllm
+OVERLAY_MOUNTS=()        # head-side "-v host:container:ro"
+OVERLAY_FILES=()         # host files to scp to the worker (/tmp/vllm-overlay/<name>)
+OVERLAY_ENV=()
+add_overlay() {          # add_overlay <host file> <container path>
+    [[ -f "$1" ]] || err "overlay file missing: $1"
+    # Two overlays on one container path would silently race in docker run, and
+    # the worker copies land in a flat /tmp/vllm-overlay keyed by basename, so a
+    # basename clash would have one file quietly overwrite the other there.
+    for existing in "${OVERLAY_FILES[@]:-}"; do
+        if [[ "${existing#*|}" == "$2" ]]; then
+            err "overlay conflict on $2: already claimed by ${existing%%|*}, now $1"
+        fi
+        if [[ "$(basename "${existing%%|*}")" == "$(basename "$1")" ]]; then
+            err "overlay basename clash on $(basename "$1"): ${existing%%|*} vs $1
+       (worker overlays share a flat /tmp/vllm-overlay directory)"
+        fi
+    done
+    OVERLAY_MOUNTS+=("-v $1:$2:ro")
+    OVERLAY_FILES+=("$1|$2")
+}
+extract_from_image() {   # extract_from_image <container path> <host dest>
+    [[ -f "$2" ]] && return 0
+    info "  Extracting $(basename "$1") from image..."
+    local c; c=$(docker create "$IMAGE" /bin/true)
+    docker cp "$c:$1" "$2" >/dev/null
+    docker rm "$c" >/dev/null 2>&1
+    [[ -f "$2" ]] || err "Failed to extract $1 from image."
+}
+if $DO_LAUNCH && [[ "$FP8_DENSE" == "true" ]]; then
+    info "=== Step 4c: FP8-dense overlay ==="
+    OV="$SCRIPT_DIR/overlays/fp8dense"
+    [[ -f "$OV/modelopt.py" ]] || python3 "$OV/apply_patches.py"
+    add_overlay "$OV/modelopt.py"        "$VLLM_PKG/model_executor/layers/quantization/modelopt.py"
+    add_overlay "$OV/model.py"           "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/model.py"
+    add_overlay "$OV/hyperconnection.py" "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/hyperconnection.py"
+    add_overlay "$OV/mtp.py"             "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/mtp.py"
+    ok "FP8-dense overlay: 4 files"
+fi
+if $DO_LAUNCH && [[ "$QSA_PROFILE" != "stock" ]]; then
+    info "=== Step 4d: QSA profile overlay ($QSA_PROFILE) ==="
+    QO="$SCRIPT_DIR/overlays/qsa_gb10"
+    [[ -f "$QO/qsa.py" ]] || python3 "$QO/apply_patch.py"
+    add_overlay "$QO/qsa.py" "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/ops/qsa.py"
+    if [[ -f "$QSA_PROFILE" ]]; then
+        add_overlay "$QSA_PROFILE" "/etc/vllm-qsa-profile.json"
+        OVERLAY_ENV+=("-e VLLM_QSA_PROFILE_JSON=/etc/vllm-qsa-profile.json")
+    else
+        OVERLAY_ENV+=("-e VLLM_QSA_PROFILE=$QSA_PROFILE")
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# 4d. Reduced-vocabulary MTP drafting (FR-Spec style).
+#     The drafter owns a full 248,320-row BF16 lm_head that is read once per
+#     draft step; slicing it to a frequency-ranked subset is the single largest
+#     bandwidth lever in a decode step. Output-safe: a draft outside the subset
+#     is rejected at verification, never emitted. See patches/patch_mtp_draft_vocab.py.
+# ---------------------------------------------------------------------------
+if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
+    [[ "$FP8_DENSE" == "true" ]] && err "V030: FP8_DENSE is not supported on the vLLM 0.30 lane."
+    [[ "$QSA_PROFILE" == "stock" ]] || err "V030: QSA_PROFILE=$QSA_PROFILE is not supported on the vLLM 0.30 lane."
+    if [[ "$KV_CACHE_DTYPE" == fp8* ]]; then
+        mkdir -p "$SCRIPT_DIR/patches/v030_fp8kv/orig/ops"
+        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/qsa.py" "$SCRIPT_DIR/patches/v030_fp8kv/orig/qsa.py"
+        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa.py" "$SCRIPT_DIR/patches/v030_fp8kv/orig/ops/qsa.py"
+        python3 "$SCRIPT_DIR/patches/patch_qsa_fp8_kv_v030.py" || err "patch_qsa_fp8_kv_v030.py failed"
+        cp "$SCRIPT_DIR/patches/v030_fp8kv/qsa.py" "$SCRIPT_DIR/patches/v030_fp8kv/qsa_nvidia_v030.py"
+        cp "$SCRIPT_DIR/patches/v030_fp8kv/ops/qsa.py" "$SCRIPT_DIR/patches/v030_fp8kv/qsa_ops_v030.py"
+        add_overlay "$SCRIPT_DIR/patches/v030_fp8kv/qsa_nvidia_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/qsa.py"
+        add_overlay "$SCRIPT_DIR/patches/v030_fp8kv/qsa_ops_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa.py"
+    fi
+    [[ "$VLLM_QSA_DET_TOPK" == "1" || "$VLLM_MOE_DET_FINALIZE" == "1" ]] && err "V030: the determinism knobs are not ported to vLLM 0.30."
+    OVERLAY_ENV+=("-e VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/tmp/fi_autotune")
+    OVERLAY_ENV+=("-e VLLM_USE_BREAKABLE_CUDAGRAPH=${V030_BREAKABLE_CUDAGRAPH:-0}")
+fi
+if $DO_LAUNCH && [[ -n "$MTP_DRAFT_VOCAB" && "$V030" == "true" ]]; then
+    info "=== Step 4e: MTP reduced draft vocabulary (vLLM 0.30) ==="
+    [[ "$MTP_NUM_SPECULATIVE_TOKENS" == "0" ]] && err "MTP_DRAFT_VOCAB is set but MTP_NUM_SPECULATIVE_TOKENS=0 - nothing drafts."
+    [[ -f "$MTP_DRAFT_VOCAB" ]] || err "MTP_DRAFT_VOCAB file not found: $MTP_DRAFT_VOCAB"
+    extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/mtp.py" \
+                       "$SCRIPT_DIR/patches/mtp_v030_patched.py.orig"
+    python3 "$SCRIPT_DIR/patches/patch_mtp_draft_vocab_v030.py" || err "patch_mtp_draft_vocab_v030.py failed"
+    add_overlay "$SCRIPT_DIR/patches/mtp_v030_patched.py" \
+                "$VLLM_PKG/models/qwen4_exp/nvidia/mtp.py"
+    add_overlay "$MTP_DRAFT_VOCAB" "/etc/vllm-draft-vocab.txt"
+    OVERLAY_ENV+=("-e VLLM_MTP_DRAFT_VOCAB=/etc/vllm-draft-vocab.txt")
+    ok "Draft vocab: $(wc -l < "$MTP_DRAFT_VOCAB") ids from $MTP_DRAFT_VOCAB"
+elif $DO_LAUNCH && [[ -n "$MTP_DRAFT_VOCAB" ]]; then
+    info "=== Step 4e: MTP reduced draft vocabulary ==="
+    if [[ "$MTP_NUM_SPECULATIVE_TOKENS" == "0" ]]; then
+        err "MTP_DRAFT_VOCAB is set but MTP_NUM_SPECULATIVE_TOKENS=0 - nothing drafts."
+    fi
+    [[ -f "$MTP_DRAFT_VOCAB" ]] || err "MTP_DRAFT_VOCAB file not found: $MTP_DRAFT_VOCAB
+       Build one with: python3 scripts/build_draft_vocab.py <corpus.jsonl> --out draft_vocab.txt --size 65536"
+    if [[ "$FP8_DENSE" == "true" ]]; then
+        err "MTP_DRAFT_VOCAB and FP8_DENSE both overlay nvidia/mtp.py - pick one."
+    fi
+    extract_from_image "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/mtp.py" \
+                       "$SCRIPT_DIR/patches/mtp_patched.py.orig"
+    python3 "$SCRIPT_DIR/patches/patch_mtp_draft_vocab.py"
+    add_overlay "$SCRIPT_DIR/patches/mtp_patched.py" \
+                "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/mtp.py"
+    add_overlay "$MTP_DRAFT_VOCAB" "/etc/vllm-draft-vocab.txt"
+    OVERLAY_ENV+=("-e VLLM_MTP_DRAFT_VOCAB=/etc/vllm-draft-vocab.txt")
+    ok "Draft vocab: $(wc -l < "$MTP_DRAFT_VOCAB") ids from $MTP_DRAFT_VOCAB"
+elif $DO_LAUNCH && [[ "$MTP_NUM_SPECULATIVE_TOKENS" != "0" ]]; then
+    warn "MTP=$MTP_NUM_SPECULATIVE_TOKENS is drafting over the FULL 248,320-token head"
+    warn "     (0.59 GiB/rank at TP=2, read once per draft step). Setting MTP_DRAFT_VOCAB"
+    warn "     to vocab/draft_vocab_en_code_47k.txt cuts that ~5x; see the recipes."
+fi
+
+# ---------------------------------------------------------------------------
+# 4e. FP8 KV cache. The stock QSA kernels hard-refuse anything but BF16 KV
+#     (supported_kv_cache_dtypes = ["auto","bfloat16"]); this teaches them to
+#     read an FP8-e4m3 cache with per-tensor scales applied after the dots.
+#     A capacity trade, not a free win - see the README before enabling.
+# ---------------------------------------------------------------------------
+if $DO_LAUNCH && [[ "$KV_CACHE_DTYPE" == fp8* && "$V030" != "true" ]]; then
+    info "=== Step 4f: FP8 KV cache patch ($KV_CACHE_DTYPE) ==="
+    if [[ "$QSA_PROFILE" != "stock" ]]; then
+        err "KV_CACHE_DTYPE=$KV_CACHE_DTYPE and QSA_PROFILE=$QSA_PROFILE both overlay ops/qsa.py - pick one."
+    fi
+    extract_from_image "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/ops/qsa.py" \
+                       "$SCRIPT_DIR/patches/qsa_ops_patched.py.orig"
+    extract_from_image "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/qsa.py" \
+                       "$SCRIPT_DIR/patches/qsa_nvidia_patched.py.orig"
+    python3 "$SCRIPT_DIR/patches/patch_qsa_fp8_kv.py"
+    add_overlay "$SCRIPT_DIR/patches/qsa_ops_patched.py" \
+                "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/ops/qsa.py"
+    add_overlay "$SCRIPT_DIR/patches/qsa_nvidia_patched.py" \
+                "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/qsa.py"
+    warn "FP8 KV is a quality trade on sparse attention - validate reasoning on your workload."
+fi
+
+# ---------------------------------------------------------------------------
+# 4d. MTP layer-index alias overlay.
+#     vLLM builds the MTP draft layer at the absolute index that continues the
+#     main stack (mtp.layers.48 for num_hidden_layers=48) and matches that
+#     prefix against quantization_config.quantized_layers by exact string.
+#     nvidia/... records only mtp.layers.0, so the lookup misses, the MTP MoE is
+#     built unquantized, and its FP8 weight_scale_inv tensors fail to load. We
+#     bind-mount a config.json carrying both names (what the known-good
+#     local-inference-lab checkpoint ships) — the HF cache is left untouched.
+# ---------------------------------------------------------------------------
+if $DO_LAUNCH && [[ -n "${SNAPSHOT_SHA:-}" && "$V030" != "true" ]]; then
+    info "=== Step 4g: MTP layer-index alias ==="
+    if [[ -n "$MODEL_PATH" ]]; then
+        CONTAINER_SNAPSHOT="/model"
+    else
+        CONTAINER_SNAPSHOT="/root/.cache/huggingface/hub/models--${ORG}--${NAME}/snapshots/${SNAPSHOT_SHA}"
+    fi
+    rm -f "$SCRIPT_DIR/patches/config_patched.json" \
+          "$SCRIPT_DIR/patches/hf_quant_config_patched.json"
+    PATCHED_FILES=$(python3 "$SCRIPT_DIR/patches/patch_checkpoint_config.py" \
+        "$PLE_CONFIG_DIR" "$SCRIPT_DIR/patches")
+    if [[ -z "$PATCHED_FILES" ]]; then
+        ok "Checkpoint already declares absolute MTP layer indices"
+    else
+        # quantized_layers lives in BOTH config.json and the legacy
+        # hf_quant_config.json, and the two can disagree: nvidia/... rev
+        # fc694b54 says FP8_PB_WO in config.json and FP8_BLOCK_SCALES in the
+        # sidecar. Runtime evidence (issue #38) shows the MoE dispatch
+        # consumes config.json, so that mount is the one that must be right.
+        # The sidecar is mounted too, for consistency, not because it wins.
+        for cfg_name in $PATCHED_FILES; do
+            case "$cfg_name" in
+                config.json)         host_file="$SCRIPT_DIR/patches/config_patched.json" ;;
+                hf_quant_config.json) host_file="$SCRIPT_DIR/patches/hf_quant_config_patched.json" ;;
+                *) err "unexpected patched config: $cfg_name" ;;
+            esac
+            add_overlay "$host_file" "$CONTAINER_SNAPSHOT/$cfg_name"
+        done
+        ok "MTP experts alias added to: $PATCHED_FILES"
+    fi
+
+    # Speculative decoding needs the MTP routed experts to be built with a
+    # quantization method the mixed-precision dispatch actually implements.
+    # ModelOptMixedPrecisionConfig.get_quant_method covers FP8 / NVFP4 /
+    # W4A16_NVFP4 / MXFP8 for RoutedExperts and returns None for anything else,
+    # which yields a silently *unquantized* MoE that then dies ~7 min into the
+    # load. Fail fast here instead.
+    if [[ "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]]; then
+        MTP_ALGO=$(python3 "$SCRIPT_DIR/patches/patch_checkpoint_config.py" \
+            --mtp-moe-algo "$PLE_CONFIG_DIR") && MTP_RC=0 || MTP_RC=$?
+        if [[ "$MTP_RC" -eq 3 ]]; then
+            err "MTP experts are ${MTP_ALGO}, which this image's mixed-precision MoE
+       dispatch cannot build (supports FP8 / NVFP4 / W4A16_NVFP4 / MXFP8 /
+       FP8_BLOCK_SCALES; FP8_PB_WO with group_size 128 is treated as
+       FP8_BLOCK_SCALES). Set MTP_NUM_SPECULATIVE_TOKENS=0 to serve
+       without speculative decoding, or use a checkpoint whose MTP experts
+       are NVFP4."
+        fi
+        ok "MTP experts quantization: ${MTP_ALGO:-unquantized} (supported)"
+    fi
+fi
+
+if $DO_LAUNCH && [[ "$MTP_DISABLE_BLOCK_DROP" == "1" && "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 && "$V030" != "true" ]]; then
+    info "=== Step 4h: vllm#53388 block-drop backport ==="
+    BD="$SCRIPT_DIR/patches/block_drop"
+    for f in $(python3 "$SCRIPT_DIR/patches/patch_block_drop.py" --list); do
+        mkdir -p "$(dirname "$BD/orig/$f")"
+        extract_from_image "$VLLM_PKG/$f" "$BD/orig/$f"
+    done
+    python3 "$SCRIPT_DIR/patches/patch_block_drop.py" || err "patch_block_drop.py failed"
+    for f in config/speculative.py v1/core/kv_cache_utils.py v1/core/sched/scheduler.py; do
+        [[ -f "$BD/$f" ]] && add_overlay "$BD/$f" "$VLLM_PKG/$f"
+    done
+fi
+if $DO_LAUNCH && [[ "$VLLM_QSA_DET_TOPK" == "1" || "$VLLM_MOE_DET_FINALIZE" == "1" ]]; then
+    info "=== Step 4i: reproducible greedy decoding ==="
+    if [[ "$KV_CACHE_DTYPE" != fp8* ]]; then
+        [[ "$QSA_PROFILE" == "stock" ]] || err "VLLM_QSA_DET_TOPK and QSA_PROFILE=$QSA_PROFILE both overlay ops/qsa.py - pick one."
+        extract_from_image "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/ops/qsa.py" \
+                           "$SCRIPT_DIR/patches/qsa_ops_patched.py.orig"
+        extract_from_image "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/qsa.py" \
+                           "$SCRIPT_DIR/patches/qsa_nvidia_patched.py.orig"
+        python3 "$SCRIPT_DIR/patches/patch_qsa_fp8_kv.py"
+        add_overlay "$SCRIPT_DIR/patches/qsa_ops_patched.py" \
+                    "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/ops/qsa.py"
+        add_overlay "$SCRIPT_DIR/patches/qsa_nvidia_patched.py" \
+                    "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/qsa.py"
+    fi
+    MOE_CUTLASS="model_executor/layers/fused_moe/experts/flashinfer_cutlass_moe.py"
+    mkdir -p "$SCRIPT_DIR/patches/determinism/orig"
+    extract_from_image "$VLLM_PKG/$MOE_CUTLASS" "$SCRIPT_DIR/patches/determinism/orig/flashinfer_cutlass_moe.py"
+    python3 "$SCRIPT_DIR/patches/patch_determinism.py" || err "patch_determinism.py failed"
+    add_overlay "$SCRIPT_DIR/patches/determinism/flashinfer_cutlass_moe.py" "$VLLM_PKG/$MOE_CUTLASS"
+    [[ "$VLLM_QSA_DET_TOPK" == "1" ]] && OVERLAY_ENV+=("-e VLLM_QSA_DET_TOPK=1")
+    if [[ "$VLLM_MOE_DET_FINALIZE" == "1" ]]; then
+        OVERLAY_ENV+=("-e VLLM_MOE_DET_FINALIZE=1" "-e VLLM_FLASHINFER_MOE_FUSED_FINALIZE=0")
+        OVERLAY_ENV+=("-e VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/root/.cache/vllm/flashinfer_autotune_cache_unfused")
+    fi
+fi

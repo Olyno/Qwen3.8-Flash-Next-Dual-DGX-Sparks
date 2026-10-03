@@ -9,7 +9,10 @@ Exit codes:
 Prefers refs/main when that snapshot is complete, else the newest complete
 snapshot, else refs/main even if incomplete (so a partial tree can resume).
 
-Usage: resolve_snapshot.py <hub-repo-dir>
+A dir that itself holds model.safetensors.index.json (a plain checkpoint dir,
+e.g. a recipe's model_path) is checked directly and its basename printed.
+
+Usage: resolve_snapshot.py <hub-repo-dir|checkpoint-dir>
 """
 from __future__ import annotations
 
@@ -33,6 +36,10 @@ def main(argv: list[str]) -> int:
         print("usage: resolve_snapshot.py <hub-repo-dir>", file=sys.stderr)
         return 2
     repo = pathlib.Path(argv[1])
+    if (repo / "model.safetensors.index.json").is_file():
+        # Plain checkpoint dir (model_path), not a hub layout.
+        print(repo.name)
+        return 0 if complete(repo) else 1
     snap_root = repo / "snapshots"
     main_ref = ""
     ref_file = repo / "refs" / "main"
