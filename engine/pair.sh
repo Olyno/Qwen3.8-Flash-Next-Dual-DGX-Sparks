@@ -3,6 +3,10 @@
 #    Default: rsync into the worker's own storage (worker keeps a local copy).
 #    NFS_SHARE=true: export the head cache over NFS (ConnectX); no worker copy.
 # ---------------------------------------------------------------------------
+if [[ "$NNODES" -eq 1 ]]; then
+    info "=== Step 3: Single node — weights are local, no sync ==="
+    return 0 2>/dev/null || exit 0
+fi
 REMOTE_HUB="${REMOTE_HF}/hub"
 
 if [[ -n "$MODEL_PATH" ]]; then

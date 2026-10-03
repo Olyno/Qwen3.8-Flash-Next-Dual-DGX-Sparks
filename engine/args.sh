@@ -22,7 +22,7 @@
     VLLM_ARGS+=("--tool-call-parser" "qwen3_coder")
     VLLM_ARGS+=("--distributed-executor-backend" "mp")
     VLLM_ARGS+=("--mm-encoder-tp-mode" "$MM_ENCODER_TP_MODE")
-    VLLM_ARGS+=("--nnodes" "2")
+    VLLM_ARGS+=("--nnodes" "$NNODES")
     VLLM_ARGS+=("--master-addr" "$HEAD_IP")
     VLLM_ARGS+=("--master-port" "$MASTER_PORT")
 
@@ -105,11 +105,17 @@ print(json.dumps({"text_config": tc}, separators=(",", ":")) if tc else "")
     fi
     if [[ "$NFS_SHARE" == "true" ]]; then
         info "  Weights:    NFS from $NFS_SERVER_IP (head cache, no worker copy)"
-    else
+    elif [[ "$NNODES" -eq 2 ]]; then
         info "  Weights:    local copy on each node (worker copy synced from head)"
+    else
+        info "  Weights:    local (single node)"
     fi
     info "  Image:      $IMAGE"
-    info "  Nodes:      $HEAD_IP (head, rank 0) + $WORKER_IP (worker, rank 1)"
+    if [[ "$NNODES" -eq 2 ]]; then
+        info "  Nodes:      $HEAD_IP (head, rank 0) + $WORKER_IP (worker, rank 1)"
+    else
+        info "  Nodes:      $HEAD_IP (single node)"
+    fi
     info "  TP=$TENSOR_PARALLEL_SIZE  EP=$( [[ "$ENABLE_EXPERT_PARALLEL" == "true" ]] && echo on || echo off )  MTP=$MTP_NUM_SPECULATIVE_TOKENS"
     info "  Context:    $MAX_MODEL_LEN tokens"
     info "  GMU:        $GPU_MEMORY_UTILIZATION"

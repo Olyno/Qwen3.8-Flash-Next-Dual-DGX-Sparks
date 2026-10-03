@@ -7,9 +7,12 @@
     ok "Image ready on head."
 
     LOCAL_ID=$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || echo "")
-    REMOTE_ID=$(ssh_worker "docker image inspect --format '{{.Id}}' '$IMAGE' 2>/dev/null" || echo "")
+    REMOTE_ID=""
+    if [[ "$NNODES" -eq 2 ]]; then
+        REMOTE_ID=$(ssh_worker "docker image inspect --format '{{.Id}}' '$IMAGE' 2>/dev/null" || echo "")
+    fi
 
-    if [[ "$LOCAL_ID" != "$REMOTE_ID" ]]; then
+    if [[ "$NNODES" -eq 2 && "$LOCAL_ID" != "$REMOTE_ID" ]]; then
         info "Pulling image on worker..."
         ssh_worker "docker pull '$IMAGE'"
         ok "Image ready on worker."

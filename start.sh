@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================================
-# start.sh — Serve Qwen3.8-Flash-Next across a 2-node DGX Spark cluster
-#             with vLLM TP2+EP+MTP.
+# start.sh — Serve Qwen3.8-Flash-Next on one DGX Spark, or across a 2-node
+#             DGX Spark cluster (auto-detected: the WORKER_IP from .env is
+#             probed — reachable = dual, unreachable = single), with vLLM
+#             TP+EP+MTP.
 #
 # Based on: https://github.com/getrefined/Qwen3.8-Flash-Next-NVFP4-vLLM-DGX-Spark
 #

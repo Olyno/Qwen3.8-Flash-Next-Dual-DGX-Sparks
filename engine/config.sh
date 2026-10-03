@@ -34,24 +34,45 @@ HF_TOKEN="${HF_TOKEN:-}"
 ABLIT_MODEL_ID="drowzeys/keys-Qwen3.8-Flash-Next-NVFP4-dual-ablit-house-qsa-L3-47"
 ABLIT_PAGE="https://huggingface.co/${ABLIT_MODEL_ID}"
 
+# Topology: probe the worker — reachable -> dual-node (TP2 across two Sparks),
+# unset or unreachable -> single node. Everything downstream keys off NNODES;
+# TP follows it (one GPU per Spark) unless a recipe pins tensor_parallel_size.
+WORKER_IP="${WORKER_IP:-}"
+WORKER_USER="${WORKER_USER:-}"
+NNODES=1
+if [[ -n "$WORKER_IP" ]]; then
+    if ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
+        "${WORKER_USER:+${WORKER_USER}@}${WORKER_IP}" true 2>/dev/null; then
+        NNODES=2
+    else
+        warn "WORKER_IP=$WORKER_IP is set but unreachable — booting single-node."
+    fi
+fi
+
 # Validate required variables (recipe or .env must provide them)
-for var in HEAD_IP WORKER_IP IFACE IB_HCA IB_GID_INDEX \
-           MAX_MODEL_LEN GPU_MEMORY_UTILIZATION MAX_NUM_SEQS \
-           MAX_NUM_BATCHED_TOKENS PORT TENSOR_PARALLEL_SIZE IMAGE \
+for var in HEAD_IP MAX_MODEL_LEN GPU_MEMORY_UTILIZATION MAX_NUM_SEQS \
+           MAX_NUM_BATCHED_TOKENS PORT IMAGE \
            MASTER_PORT; do
     if [[ -z "${!var:-}" ]]; then
         err "Required variable $var is not set (checked recipes/$RECIPE.yaml and .env)"
     fi
 done
+if [[ "$NNODES" -eq 2 ]]; then
+    for var in IFACE IB_HCA IB_GID_INDEX; do
+        if [[ -z "${!var:-}" ]]; then
+            err "Required variable $var is not set (needed for dual-node; checked .env)"
+        fi
+    done
+fi
 
-WORKER_USER="${WORKER_USER:-}"
 # Numeric sanity: the YaRN guard below does an arithmetic comparison on MAX_MODEL_LEN
 [[ "$MAX_MODEL_LEN" =~ ^[1-9][0-9]*$ ]] || err "MAX_MODEL_LEN must be a positive integer (got: '$MAX_MODEL_LEN')"
 # Per-node overrides — the two nodes may be cross-wired (head port f1 ↔ worker port f0),
 # so the connected interface/HCA can have different names on each node.
-WORKER_IFACE="${WORKER_IFACE:-$IFACE}"
-WORKER_IB_HCA="${WORKER_IB_HCA:-$IB_HCA}"
+WORKER_IFACE="${WORKER_IFACE:-${IFACE:-}}"
+WORKER_IB_HCA="${WORKER_IB_HCA:-${IB_HCA:-}}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-qwen3.8-flash-next}"
+TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-$NNODES}"
 ENABLE_EXPERT_PARALLEL="${ENABLE_EXPERT_PARALLEL:-true}"
 MTP_NUM_SPECULATIVE_TOKENS="${MTP_NUM_SPECULATIVE_TOKENS:-3}"
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8}"   # fp8 needs patches/patch_qsa_fp8_kv.py, applied automatically in step 4f; auto = bf16

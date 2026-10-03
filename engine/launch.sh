@@ -1,9 +1,29 @@
+    # Head-side mounts (the worker block below computes its own variants over
+    # ssh; on a single node these are the only ones that exist).
+    HEAD_MODEL_MOUNT=""
+    [[ -n "$MODEL_PATH" ]] && HEAD_MODEL_MOUNT="-v $HEAD_MODEL_PATH:/model:ro"
+    HEAD_OVERLAY_MOUNTS="${OVERLAY_MOUNTS[*]:-}"
+    HEAD_CHAT_MOUNT=""
+    [[ -n "$CHAT_TEMPLATE" ]] && HEAD_CHAT_MOUNT="-v $CHAT_TEMPLATE:/chat_template.jinja:ro"
+
+    # PLE offload env flag (only set when explicitly true — avoids the ${VAR:+}
+    # pitfall where "false" is non-empty and would wrongly enable the flag)
+    PLE_OFFLOAD_ENV=""
+    [[ "$PLE_OFFLOAD" == "true" ]] && PLE_OFFLOAD_ENV="-e VLLM_PLE_CPU_OFFLOAD=1"
+
+    # Inter-node NCCL/IB env for the head container. Single node is TP=1: no
+    # cross-node traffic, so none of this is needed (and IFACE may be unset).
+    HEAD_NET_ENV=""
+    if [[ "$NNODES" -eq 2 ]]; then
+        HEAD_NET_ENV="-e GLOO_SOCKET_IFNAME=$IFACE -e NCCL_SOCKET_IFNAME=$IFACE -e TP_SOCKET_IFNAME=$IFACE -e NCCL_IB_DISABLE=0 -e NCCL_IB_HCA=$IB_HCA -e NCCL_IB_GID_INDEX=$IB_GID_INDEX -e NCCL_IB_AUTO_DETECT=0"
+    fi
+
     # ---- Worker (rank 1) ----
+    if [[ "$NNODES" -eq 2 ]]; then
     info "--- Launching worker (rank 1) on $WORKER_IP ---"
     ssh_worker "docker rm -f vllm-fn >/dev/null 2>&1 || true"
     ssh_worker "mkdir -p '$REMOTE_HF' ~/.cache/vllm"
     WORKER_MODEL_MOUNT=""
-    HEAD_MODEL_MOUNT=""
     if [[ -n "$MODEL_PATH" ]]; then
         if ! ssh_worker "test -d '$WORKER_MODEL_PATH'" 2>/dev/null; then
             err "WORKER is missing $WORKER_MODEL_PATH. Re-run ./start.sh without --launch to sync."
@@ -11,7 +31,6 @@
         ok "Worker has a local checkpoint copy"
         WORKER_HF_MOUNT="-v $REMOTE_HF:/root/.cache/huggingface"
         WORKER_MODEL_MOUNT="-v $WORKER_MODEL_PATH:/model:ro"
-        HEAD_MODEL_MOUNT="-v $HEAD_MODEL_PATH:/model:ro"
     elif [[ "$NFS_SHARE" == "true" ]]; then
         nfs_ensure_worker_volume recreate
         if nfs_worker_has_model "hub/models--${ORG}--${NAME}"; then
@@ -49,22 +68,14 @@
             WORKER_OVERLAY_MOUNTS+=" -v /tmp/vllm-overlay/$(basename "$host_file"):$container_path:ro"
         done
     fi
-    HEAD_OVERLAY_MOUNTS="${OVERLAY_MOUNTS[*]:-}"
 
     # Chat template: the worker runs the same vllm CLI and validates
     # --chat-template even when --headless, so copy it over like the overlays.
     WORKER_CHAT_MOUNT=""
-    HEAD_CHAT_MOUNT=""
     if [[ -n "$CHAT_TEMPLATE" ]]; then
         scp -q "$CHAT_TEMPLATE" "${WORKER_USER:+${WORKER_USER}@}${WORKER_IP}:/tmp/chat_template.jinja"
         WORKER_CHAT_MOUNT="-v /tmp/chat_template.jinja:/chat_template.jinja:ro"
-        HEAD_CHAT_MOUNT="-v $CHAT_TEMPLATE:/chat_template.jinja:ro"
     fi
-
-    # PLE offload env flag (only set when explicitly true — avoids the ${VAR:+}
-    # pitfall where "false" is non-empty and would wrongly enable the flag)
-    PLE_OFFLOAD_ENV=""
-    [[ "$PLE_OFFLOAD" == "true" ]] && PLE_OFFLOAD_ENV="-e VLLM_PLE_CPU_OFFLOAD=1"
 
     # Write worker launch script to a temp file and scp it (avoids SSH JSON quoting issues)
     WORKER_SCRIPT=$(mktemp /tmp/vllm_worker_XXXXXX.sh)
@@ -124,6 +135,7 @@ LAUNCH_EOF
     ok "Worker container started."
     info "  Waiting 15s for worker to initialize..."
     sleep 15
+    fi
 
     # ---- Head (rank 0) ----
     info "--- Launching head (rank 0) on $HEAD_IP ---"
@@ -139,13 +151,7 @@ docker run \
     --gpus all --network host --ipc host \
     --cap-add SYS_NICE --ulimit memlock=-1 --ulimit stack=67108864 \
     --device /dev/infiniband:/dev/infiniband \
-    -e GLOO_SOCKET_IFNAME=$IFACE \
-    -e NCCL_SOCKET_IFNAME=$IFACE \
-    -e TP_SOCKET_IFNAME=$IFACE \
-    -e NCCL_IB_DISABLE=0 \
-    -e NCCL_IB_HCA=$IB_HCA \
-    -e NCCL_IB_GID_INDEX=$IB_GID_INDEX \
-    -e NCCL_IB_AUTO_DETECT=0 \
+    $HEAD_NET_ENV \
     -e NCCL_DEBUG=WARN \
     -e HF_HUB_OFFLINE=1 \
     -e TRANSFORMERS_OFFLINE=1 \
