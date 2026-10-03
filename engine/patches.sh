@@ -76,6 +76,22 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         add_overlay "$SCRIPT_DIR/patches/v030_fp8kv/qsa_ops_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa.py"
     fi
     [[ "$VLLM_QSA_DET_TOPK" == "1" || "$VLLM_MOE_DET_FINALIZE" == "1" ]] && err "V030: the determinism knobs are not ported to vLLM 0.30."
+    if [[ "$PLE_OFFLOAD" == "true" ]]; then
+        info "=== Step 4c: PLE mmap offload (vLLM 0.30) ==="
+        # v0.30's PLE CPU offload parks the table in pinned anonymous host
+        # memory (~32 GiB/node). The mmap overlay reroutes it to a file-backed
+        # table read over ATS (VLLM_PLE_MMAP_DIR), persisted across launches
+        # under ~/.cache/vllm. Single-node Spark needs the offload to fit the
+        # model at TP=1; the mmap form avoids the pin on any topology.
+        mkdir -p "$SCRIPT_DIR/patches/v030_ple/orig"
+        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ngram_embedding.py" \
+                           "$SCRIPT_DIR/patches/v030_ple/orig/ngram_embedding.py"
+        python3 "$SCRIPT_DIR/patches/patch_ple_mmap_v030.py" || err "patch_ple_mmap_v030.py failed"
+        add_overlay "$SCRIPT_DIR/patches/v030_ple/ngram_embedding.py" \
+                    "$VLLM_PKG/models/qwen4_exp/nvidia/ngram_embedding.py"
+        OVERLAY_ENV+=("-e VLLM_PLE_MMAP_DIR=/root/.cache/vllm/ple_mmap_v030")
+        OVERLAY_ENV+=("-e VLLM_PLE_MMAP_ADVICE=1")
+    fi
     OVERLAY_ENV+=("-e VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/tmp/fi_autotune")
     OVERLAY_ENV+=("-e VLLM_USE_BREAKABLE_CUDAGRAPH=${V030_BREAKABLE_CUDAGRAPH:-0}")
 fi
