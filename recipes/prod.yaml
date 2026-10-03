@@ -1,0 +1,37 @@
+# recipes/prod.yaml — our serving config, and the default boot (RECIPE unset
+# -> prod). All new optimizations and deltas land here.
+#
+# Model: the lean checkpoint (P1 marker penalty baked into the weights — the
+# thinking suppression needs no serving-side code). Local dir, bind-mounted
+# at /model, never downloaded. vLLM 0.30 lane: PLE handling and the
+# block-drop fix are native, FP8 KV comes from the v030 backport overlay.
+name: prod
+image: vllm/vllm-openai:v0.30.0
+v030: "true"
+skip_ple_patch: "true"
+model_path: ~/models/Qwen3.8-Flash-Next-NVFP4-lean
+do_download_default: "false"
+served_model_name: qwen3.8-flash-next
+max_model_len: 262144
+yarn_enable: "false"
+yarn_factor: 4.0
+gpu_memory_utilization: 0.80
+max_num_seqs: 32
+max_num_batched_tokens: 8192
+port: 8888
+master_port: 50000
+kv_cache_dtype: fp8
+mamba_ssm_cache_dtype: bfloat16
+tensor_parallel_size: 2
+enable_expert_parallel: "true"
+mm_encoder_tp_mode: data
+mtp_num_speculative_tokens: 4
+mtp_draft_vocab: vocab/draft_vocab_en_code_47k.txt
+mtp_index_share: "true"
+ple_offload: "false"
+qsa_profile: stock
+fp8_dense: "false"
+require_idle_gpu: "true"
+evict_page_cache: "true"
+nfs_share: "false"
+vllm_allow_long_max_model_len: 1
