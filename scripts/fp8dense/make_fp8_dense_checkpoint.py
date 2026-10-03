@@ -284,7 +284,7 @@ def main() -> int:
         "quantized_layers": quantized_layers,
         "comment": "NVFP4 routed experts from RadixArk/Qwen3.8-Flash-Next-NVFP4; dense projections "
                    "requantized to FP8 E4M3 per-output-channel (dynamic per-token activations) by "
-                   "files/fp8dense/make_fp8_dense_checkpoint.py",
+                   "scripts/fp8dense/make_fp8_dense_checkpoint.py",
     }
     cfg["quantization_config"] = qc
     hfq = {

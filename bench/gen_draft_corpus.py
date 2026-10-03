@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sample the served model's own output distribution into a corpus .jsonl.
 
-files/build_draft_vocab.py needs the distribution the DRAFTER has to predict,
+scripts/build_draft_vocab.py needs the distribution the DRAFTER has to predict,
 which is the model's output, not a generic text corpus and not the prompts.
 This drives the live endpoint over a spread of task types and writes one JSON
 object per completion.
