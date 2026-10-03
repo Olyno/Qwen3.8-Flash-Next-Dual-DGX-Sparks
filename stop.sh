@@ -13,7 +13,10 @@ fi
 source .env
 
 WORKER_USER="${WORKER_USER:-}"
-WORKER_IP="${WORKER_IP:-}"   # unset = single node, nothing to stop over ssh
+WORKER_IP="${WORKER_IP:-}"
+NODES="${NODES:-1}"
+HAS_WORKER=false
+[[ "$NODES" == "2" && -n "$WORKER_IP" ]] && HAS_WORKER=true
 CONTAINER_NAME="vllm-fn"
 NFS_CONTAINER="${NFS_CONTAINER:-vllm-fn-nfs}"
 NFS_VOLUME="${NFS_VOLUME:-vllm-fn-hf}"
@@ -41,13 +44,7 @@ ssh_cmd() {
     ssh -o StrictHostKeyChecking=no "${user_prefix}$WORKER_IP" "$@"
 }
 
-worker_reachable() {
-    [[ -n "$WORKER_IP" ]] || return 1
-    ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
-        "${WORKER_USER:+${WORKER_USER}@}$WORKER_IP" true 2>/dev/null
-}
-
-if worker_reachable; then
+if $HAS_WORKER; then
     echo "Stopping $CONTAINER_NAME on worker ($WORKER_IP)..."
     ssh_cmd "docker rm -f $CONTAINER_NAME 2>/dev/null && echo '  Worker: stopped.' || echo '  Worker: not running.'"
 fi
@@ -63,7 +60,7 @@ if $STOP_NFS; then
     else
         echo "  NFS server: still running (could not kill). Leave it — start.sh will reuse it."
     fi
-    if worker_reachable; then
+    if $HAS_WORKER; then
         echo "Removing worker NFS volume ($NFS_VOLUME)..."
         ssh_cmd "docker volume rm $NFS_VOLUME 2>/dev/null && echo '  Worker volume: removed.' || echo '  Worker volume: not present.'"
     fi
