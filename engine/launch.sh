@@ -166,6 +166,13 @@ LAUNCH_EOF
     ok "Worker container started."
     info "  Waiting 15s for worker to initialize..."
     sleep 15
+    # `docker run -d` succeeding only means the container spawned — a worker
+    # that crashes in its first seconds (bad mount, missing checkpoint) would
+    # otherwise surface as a head-side NCCL hang.
+    if ! ssh_worker "docker ps --format '{{.Names}}'" 2>/dev/null | grep -q '^vllm-fn$'; then
+        ssh_worker "docker logs --tail 50 vllm-fn" 2>&1 || true
+        err "Worker container exited within 15s of start — see its log above; not launching the head."
+    fi
     fi
 
     # ---- Head (rank 0) ----
