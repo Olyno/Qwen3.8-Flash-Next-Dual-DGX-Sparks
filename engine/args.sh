@@ -130,8 +130,10 @@ print(json.dumps({"text_config": tc}, separators=(",", ":")) if tc else "")
     info "  GMU:        $GPU_MEMORY_UTILIZATION"
     info "  Max seqs:   $MAX_NUM_SEQS"
     info "  Port:       $PORT"
-    info "  IFACE:      $IFACE"
-    info "  IB_HCA:     $IB_HCA"
+    if [[ "$NNODES" -eq 2 ]]; then
+        info "  IFACE:      $IFACE"
+        info "  IB_HCA:     $IB_HCA"
+    fi
     info "  FP8 dense:  $FP8_DENSE   QSA profile: $QSA_PROFILE"
     info "  KV dtype:   $KV_CACHE_DTYPE   Draft vocab: ${MTP_DRAFT_VOCAB:-full}"
     info "  SSM state:  ${MAMBA_SSM_CACHE_DTYPE:-float32 (checkpoint)}"
