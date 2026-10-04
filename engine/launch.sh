@@ -25,9 +25,13 @@
 
     # Inter-node NCCL/IB env for the head container. Single node is TP=1: no
     # cross-node traffic, so none of this is needed (and IFACE may be unset).
+    # NCCL_MAX_NCHANNELS=4: with no GPUDirect RDMA on the GB10 every large
+    # message is copied through host memory; 64 channels (the default) only add
+    # host copies — 4 measured +10 % tok/s at 32 streams, +7 % at 64 in the
+    # vendor dual-Spark recipe. Dual-node only by construction.
     HEAD_NET_ENV=""
     if [[ "$NNODES" -eq 2 ]]; then
-        HEAD_NET_ENV="-e GLOO_SOCKET_IFNAME=$IFACE -e NCCL_SOCKET_IFNAME=$IFACE -e TP_SOCKET_IFNAME=$IFACE -e NCCL_IB_DISABLE=0 -e NCCL_IB_HCA=$IB_HCA -e NCCL_IB_GID_INDEX=$IB_GID_INDEX -e NCCL_IB_AUTO_DETECT=0"
+        HEAD_NET_ENV="-e GLOO_SOCKET_IFNAME=$IFACE -e NCCL_SOCKET_IFNAME=$IFACE -e TP_SOCKET_IFNAME=$IFACE -e NCCL_IB_DISABLE=0 -e NCCL_IB_HCA=$IB_HCA -e NCCL_IB_GID_INDEX=$IB_GID_INDEX -e NCCL_IB_AUTO_DETECT=0 -e NCCL_MAX_NCHANNELS=4"
     fi
 
     # Optional cpuset pinning (recipe key cpuset); same layout on both nodes.
@@ -111,6 +115,7 @@ docker run \
     -e NCCL_IB_HCA=$WORKER_IB_HCA \
     -e NCCL_IB_GID_INDEX=$IB_GID_INDEX \
     -e NCCL_IB_AUTO_DETECT=0 \
+    -e NCCL_MAX_NCHANNELS=4 \
     -e NCCL_DEBUG=WARN \
     -e HF_HUB_OFFLINE=1 \
     -e TRANSFORMERS_OFFLINE=1 \
