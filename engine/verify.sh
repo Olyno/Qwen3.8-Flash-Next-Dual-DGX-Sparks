@@ -9,6 +9,10 @@ else
     err "HEAD  ($HEAD_IP): $HEAD_MODEL_PATH — NOT FOUND"
 fi
 
+if [[ "$NNODES" -eq 2 ]]; then
+    ssh_worker true || err "passwordless ssh to $WORKER_IP failed — set up keys first (WORKER_USER=${WORKER_USER:-$USER})"
+fi
+
 if ! $DO_LAUNCH && [[ "$NNODES" -eq 2 ]]; then
     if [[ -n "$MODEL_PATH" ]]; then
         if ssh_worker "test -d '$WORKER_MODEL_PATH'" 2>/dev/null; then

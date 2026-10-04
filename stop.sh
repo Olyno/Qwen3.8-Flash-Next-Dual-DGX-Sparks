@@ -41,7 +41,7 @@ done
 ssh_cmd() {
     local user_prefix=""
     [[ -n "$WORKER_USER" ]] && user_prefix="${WORKER_USER}@"
-    ssh -o StrictHostKeyChecking=no "${user_prefix}$WORKER_IP" "$@"
+    ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no "${user_prefix}$WORKER_IP" "$@"
 }
 
 # Stop the memory watchdog first, so it cannot emergency-stop the container

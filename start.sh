@@ -42,7 +42,9 @@ ssh_worker() {
     if [[ -n "$WORKER_USER" ]]; then
         user_prefix="${WORKER_USER}@"
     fi
-    ssh -o StrictHostKeyChecking=no "${user_prefix}${WORKER_IP}" "$@"
+    # BatchMode+ConnectTimeout: first dual-node ssh use must fail fast, not
+    # hang on a password prompt or the default TCP timeout.
+    ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no "${user_prefix}${WORKER_IP}" "$@"
 }
 
 # 1. Download the model weights (head node) — HF recipes only; local
