@@ -40,6 +40,7 @@ mtp_disable_block_drop: 1
 ple_offload: true
 qsa_profile: stock
 fp8_dense: false
+skinny_gemm: false  # GB10 SM12x skinny-GEMM plan overlay; TP=2-tuned, off until boot-verified
 require_idle_gpu: true
 evict_page_cache: true
 nfs_share: false
