@@ -85,6 +85,13 @@ SKINNY_GEMM="${SKINNY_GEMM:-false}"
 # NVFP4 kernels require input features % 16 == 0, so replicate the encoder on each GPU.
 MM_ENCODER_TP_MODE="${MM_ENCODER_TP_MODE:-data}"
 EXTRA_VLLM_ARGS="${EXTRA_VLLM_ARGS:-}"
+# Optional docker --cpuset-cpus for the vLLM container (both ranks). The GB10
+# mixes ten 3.9 GHz Cortex-X925 cores (5-9,15-19) with ten 2.8 GHz A725 cores
+# (0-4,10-14); pinning to the X925 set measured +2-3 % at every concurrency in
+# the vendor single-Spark recipe. Pure scheduling, no output change. Empty =
+# all cores. Verified against /sys cpufreq on the target host.
+CPUSET="${CPUSET:-}"
+[[ -z "$CPUSET" || "$CPUSET" =~ ^[0-9,-]+$ ]] || err "cpuset must be a CPU list like 5-9,15-19 (got: '$CPUSET')"
 # Weight distribution. false (default) = each node keeps its own copy of the
 # checkpoint, worker seeded by rsync from the head. true = head exports its
 # cache over NFS on ConnectX and the worker mounts it read-only (HF models only).

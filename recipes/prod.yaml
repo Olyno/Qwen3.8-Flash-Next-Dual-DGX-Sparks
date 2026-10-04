@@ -36,6 +36,10 @@ kv_cache_dtype: fp8
 mamba_ssm_cache_dtype: bfloat16
 enable_expert_parallel: true
 mm_encoder_tp_mode: data
+# Pin the container to the ten 3.9 GHz X925 cores (0-4,10-14 are 2.8 GHz
+# A725) — measured +2-3 % at every concurrency in the vendor single-Spark
+# recipe; scheduling only, no output change.
+cpuset: "5-9,15-19"
 mtp_num_speculative_tokens: 4
 mtp_draft_vocab: vocab/draft_vocab_en_code_47k.txt
 mtp_index_share: true

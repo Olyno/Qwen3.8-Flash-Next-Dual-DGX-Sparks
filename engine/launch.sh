@@ -30,6 +30,10 @@
         HEAD_NET_ENV="-e GLOO_SOCKET_IFNAME=$IFACE -e NCCL_SOCKET_IFNAME=$IFACE -e TP_SOCKET_IFNAME=$IFACE -e NCCL_IB_DISABLE=0 -e NCCL_IB_HCA=$IB_HCA -e NCCL_IB_GID_INDEX=$IB_GID_INDEX -e NCCL_IB_AUTO_DETECT=0"
     fi
 
+    # Optional cpuset pinning (recipe key cpuset); same layout on both nodes.
+    CPUSET_ARG=""
+    [[ -n "$CPUSET" ]] && CPUSET_ARG="--cpuset-cpus $CPUSET"
+
     # ---- Worker (rank 1) ----
     if [[ "$NNODES" -eq 2 ]]; then
     info "--- Launching worker (rank 1) on $WORKER_IP ---"
@@ -99,6 +103,7 @@ docker run \
     --log-opt max-size=50m --log-opt max-file=3 \
     --cap-add SYS_NICE --ulimit memlock=-1 --ulimit stack=67108864 \
     --device /dev/infiniband:/dev/infiniband \
+    $CPUSET_ARG \
     -e GLOO_SOCKET_IFNAME=$WORKER_IFACE \
     -e NCCL_SOCKET_IFNAME=$WORKER_IFACE \
     -e TP_SOCKET_IFNAME=$WORKER_IFACE \
@@ -168,6 +173,7 @@ docker run \
     --log-opt max-size=50m --log-opt max-file=3 \
     --cap-add SYS_NICE --ulimit memlock=-1 --ulimit stack=67108864 \
     --device /dev/infiniband:/dev/infiniband \
+    $CPUSET_ARG \
     $HEAD_NET_ENV \
     -e NCCL_DEBUG=WARN \
     -e HF_HUB_OFFLINE=1 \
