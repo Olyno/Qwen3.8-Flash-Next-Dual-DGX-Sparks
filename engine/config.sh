@@ -104,8 +104,14 @@ LAZY_GDN="${LAZY_GDN:-false}"
 # reduced draft-vocab slice when MTP_DRAFT_VOCAB is set, else the full shard.
 # The target keeps its BF16 head for verify, so emitted tokens are unchanged.
 FP8_DRAFT_HEAD="${FP8_DRAFT_HEAD:-false}"
+# Fused multi-step MTP draft metadata for QSA (v0.30 lane only,
+# patches/patch_qsa_fused_draft_v030.py): the QSA metadata builder opts into
+# the speculator's in-place update between draft steps instead of a full
+# attention-metadata rebuild per step (vllm#58449 port). Needs k > 1.
+QSA_FUSED_DRAFT="${QSA_FUSED_DRAFT:-false}"
 [[ "$LAZY_GDN" != "true" || "$V030" == "true" ]] || err "lazy_gdn is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$FP8_DRAFT_HEAD" != "true" || "$V030" == "true" ]] || err "fp8_draft_head is only supported on the vLLM 0.30 lane (v030: true)."
+[[ "$QSA_FUSED_DRAFT" != "true" || "$V030" == "true" ]] || err "qsa_fused_draft is only supported on the vLLM 0.30 lane (v030: true)."
 # FP8-dense hybrid checkpoint (NVFP4 experts + FP8 per-channel dense projections,
 # built by scripts/fp8dense/make_fp8_dense_checkpoint.py). Needs the vLLM overlay
 # patches in overlays/fp8dense (bind-mounted, no image rebuild).
