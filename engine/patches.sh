@@ -92,6 +92,23 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         OVERLAY_ENV+=("-e VLLM_PLE_MMAP_DIR=/root/.cache/vllm/ple_mmap_v030")
         OVERLAY_ENV+=("-e VLLM_PLE_MMAP_ADVICE=1")
     fi
+    if [[ "$SKINNY_GEMM" == "true" ]]; then
+        info "=== Step 4c: GB10 skinny-GEMM plans (SM12x) ==="
+        # v0.30 already ships low_latency_gemm.py, wired into model.py and
+        # mtp.py, but its plan tables cover only SM103/SM90 TP=4 shapes, so on
+        # the GB10 the decode-sized BF16 projections stay on cuBLAS SM80 WMMA
+        # kernels. The overlay adds the SM12x table (myllmbox gb10-skinny-gemm,
+        # timed at TP=2). Plans are keyed by local (N, K) shape and exact
+        # token count M; a miss keeps the standard linear path, so any TP is
+        # safe — at TP!=2 only the replicated projections match.
+        SG="$SCRIPT_DIR/patches/gb10_skinny_gemm"
+        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/low_latency_gemm.py" \
+                           "$SG/low_latency_gemm.py.orig"
+        python3 "$SG/apply_patch.py" || err "apply_patch.py (gb10_skinny_gemm) failed"
+        add_overlay "$SG/low_latency_gemm.py" \
+                    "$VLLM_PKG/models/qwen4_exp/nvidia/low_latency_gemm.py"
+        [[ "$TENSOR_PARALLEL_SIZE" == "2" ]] || warn "SKINNY_GEMM: plans are TP=2 shapes; at TP=$TENSOR_PARALLEL_SIZE only replicated projections take the skinny path."
+    fi
     OVERLAY_ENV+=("-e VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/tmp/fi_autotune")
     OVERLAY_ENV+=("-e VLLM_USE_BREAKABLE_CUDAGRAPH=${V030_BREAKABLE_CUDAGRAPH:-0}")
 fi
