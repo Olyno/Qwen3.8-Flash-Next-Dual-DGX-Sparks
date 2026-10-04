@@ -66,6 +66,30 @@ curl http://localhost:8888/v1/chat/completions \
 
 `./stop.sh` stops the server (and the worker, when NODES=2).
 
+## Opt-in: ReplaySSM-GDN spec decode (`replayssm_gdn`)
+
+v0.30 lane only. Ports the GDN variant of upstream
+[vllm#47576](https://github.com/vllm-project/vllm/pull/47576): MTP verify
+reconstructs each window from an fp32 checkpoint plus a small circular ring of
+per-token d/k/g vectors instead of writing the full GDN state after every
+accepted token; the checkpoint is rewritten only when the ring fills. The
+mamba page grows to a 5-tuple that is ~2x smaller than the baseline spec page,
+and block-keyed ring cursors live in the GDN metadata builder.
+
+Requires MTP (`mtp_num_speculative_tokens > 0`, already the default) and
+is mutually exclusive with `lazy_gdn`. `replayssm_gdn_buffer_len` (default 16)
+is the ring history per block and must be `>= 1 + k`.
+
+```bash
+REPLAYSSM_GDN=true ./start.sh --launch   # or replayssm_gdn: true in the recipe
+python3 bench/sweep.py                   # A/B against the stock page
+```
+
+Overlay mechanics: `patches/replayssm_gdn/apply_patch.py` rewrites 6 stock
+files against extracted originals (fail-closed anchors) and mounts them plus
+two vendored Triton files; everything is gated on `VLLM_REPLAYSSM_GDN=1` at
+runtime. `tests/test_replayssm_gdn_v030.py` covers the patcher.
+
 ## Flags
 
 ```

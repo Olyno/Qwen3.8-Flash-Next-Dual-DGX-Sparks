@@ -132,6 +132,56 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
                     "$VLLM_PKG/v1/attention/backends/gdn_attn.py"
         OVERLAY_ENV+=("-e VLLM_QWEN38_GDN_LAZY=1")
     fi
+    if [[ "$REPLAYSSM_GDN" == "true" ]]; then
+        info "=== Step 4c: ReplaySSM-GDN spec decode (vLLM 0.30) ==="
+        # Port of vllm#47576's GDN variant (patches/replayssm_gdn/): spec
+        # verify runs a Triton kernel over an fp32 checkpoint + circular d/k/g
+        # rings instead of the per-token state slots; the block-keyed cursors
+        # live in the GDN metadata builder. python-only overlay (2 vendored
+        # Triton files + 6 patched stock files), env-gated, spec-only.
+        [[ "$LAZY_GDN" != "true" ]] || err "replayssm_gdn and lazy_gdn are mutually exclusive (same target files)."
+        [[ "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]] || err "replayssm_gdn needs speculative decoding (MTP_NUM_SPECULATIVE_TOKENS > 0)."
+        [[ "$REPLAYSSM_GDN_BUFFER_LEN" =~ ^[0-9]+$ ]] || err "replayssm_gdn_buffer_len must be an integer (got: '$REPLAYSSM_GDN_BUFFER_LEN')"
+        [[ "$REPLAYSSM_GDN_BUFFER_LEN" -gt "$MTP_NUM_SPECULATIVE_TOKENS" ]] || err "replayssm_gdn_buffer_len must be >= 1 + MTP_NUM_SPECULATIVE_TOKENS ($MTP_NUM_SPECULATIVE_TOKENS); got $REPLAYSSM_GDN_BUFFER_LEN."
+        if [[ -n "$MAMBA_SSM_CACHE_DTYPE" && "$MAMBA_SSM_CACHE_DTYPE" != "float32" ]]; then
+            warn "replayssm_gdn forces an fp32 GDN checkpoint regardless of MAMBA_SSM_CACHE_DTYPE=$MAMBA_SSM_CACHE_DTYPE (numerically >= the bf16 baseline)."
+        fi
+        RG="$SCRIPT_DIR/patches/replayssm_gdn"
+        mkdir -p "$RG/orig"
+        extract_from_image "$VLLM_PKG/model_executor/layers/mamba/mamba_utils.py" \
+                           "$RG/orig/mamba_utils.py"
+        extract_from_image "$VLLM_PKG/model_executor/layers/mamba/gdn/base.py" \
+                           "$RG/orig/base.py"
+        extract_from_image "$VLLM_PKG/model_executor/layers/mamba/abstract.py" \
+                           "$RG/orig/abstract.py"
+        extract_from_image "$VLLM_PKG/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py" \
+                           "$RG/orig/qwen_gdn_linear_attn.py"
+        extract_from_image "$VLLM_PKG/v1/attention/backends/gdn_attn.py" \
+                           "$RG/orig/gdn_attn.py"
+        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/model.py" \
+                           "$RG/orig/model.py"
+        extract_from_image "$VLLM_PKG/model_executor/layers/mamba/ops/replayssm_config.py" \
+                           "$RG/orig/replayssm_config.py"
+        python3 "$RG/apply_patch.py" || err "replayssm_gdn apply_patch.py failed"
+        add_overlay "$RG/mamba_utils_v030.py" \
+                    "$VLLM_PKG/model_executor/layers/mamba/mamba_utils.py"
+        add_overlay "$RG/gdn_base_v030.py" \
+                    "$VLLM_PKG/model_executor/layers/mamba/gdn/base.py"
+        add_overlay "$RG/mamba_abstract_v030.py" \
+                    "$VLLM_PKG/model_executor/layers/mamba/abstract.py"
+        add_overlay "$RG/qwen_gdn_linear_attn_v030.py" \
+                    "$VLLM_PKG/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py"
+        add_overlay "$RG/gdn_attn_v030.py" \
+                    "$VLLM_PKG/v1/attention/backends/gdn_attn.py"
+        add_overlay "$RG/qwen4_exp_model_v030.py" \
+                    "$VLLM_PKG/models/qwen4_exp/nvidia/model.py"
+        add_overlay "$RG/gdn_replayssm_spec_decode.py" \
+                    "$VLLM_PKG/model_executor/layers/mamba/ops/gdn_replayssm_spec_decode.py"
+        add_overlay "$RG/replayssm_config.py" \
+                    "$VLLM_PKG/model_executor/layers/mamba/ops/replayssm_config.py"
+        OVERLAY_ENV+=("-e VLLM_REPLAYSSM_GDN=1")
+        OVERLAY_ENV+=("-e VLLM_REPLAYSSM_GDN_BUFFER_LEN=$REPLAYSSM_GDN_BUFFER_LEN")
+    fi
     if [[ "$QSA_FUSED_DRAFT" == "true" ]]; then
         info "=== Step 4c: QSA fused multi-step draft metadata (vLLM 0.30) ==="
         # Port of myllmbox/vllm@c3f56fe (the code proposed upstream as
