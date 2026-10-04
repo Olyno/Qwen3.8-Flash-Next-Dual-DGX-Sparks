@@ -114,10 +114,15 @@ QSA_FUSED_DRAFT="${QSA_FUSED_DRAFT:-false}"
 # unchecked, and CUDA-graph warmup dummy positions can index past the table
 # (IMA on SM121/GB10).
 QSA_ROPE_CLAMP="${QSA_ROPE_CLAMP:-false}"
+# posix_fadvise(DONTNEED) on each checkpoint shard right after the loader
+# consumes it (v0.30 lane only, patches/patch_load_drop_cache_v030.py): keeps
+# the page cache one shard deep during the load on unified memory.
+LOAD_DROP_CACHE="${LOAD_DROP_CACHE:-false}"
 [[ "$LAZY_GDN" != "true" || "$V030" == "true" ]] || err "lazy_gdn is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$FP8_DRAFT_HEAD" != "true" || "$V030" == "true" ]] || err "fp8_draft_head is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$QSA_FUSED_DRAFT" != "true" || "$V030" == "true" ]] || err "qsa_fused_draft is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$QSA_ROPE_CLAMP" != "true" || "$V030" == "true" ]] || err "qsa_rope_clamp is only supported on the vLLM 0.30 lane (v030: true)."
+[[ "$LOAD_DROP_CACHE" != "true" || "$V030" == "true" ]] || err "load_drop_cache is only supported on the vLLM 0.30 lane (v030: true)."
 # FP8-dense hybrid checkpoint (NVFP4 experts + FP8 per-channel dense projections,
 # built by scripts/fp8dense/make_fp8_dense_checkpoint.py). Needs the vLLM overlay
 # patches in overlays/fp8dense (bind-mounted, no image rebuild).
