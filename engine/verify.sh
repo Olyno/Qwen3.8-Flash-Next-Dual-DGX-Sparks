@@ -37,6 +37,29 @@ if ! $DO_LAUNCH && [[ "$NNODES" -eq 2 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 4b-0. Dual-node network preflight: the RoCE link interface must exist with
+#       a sane MTU on both nodes before NCCL discovery depends on it.
+# ---------------------------------------------------------------------------
+if $DO_LAUNCH && [[ "$NNODES" -eq 2 ]]; then
+    info "=== Step 4b-0: Network preflight ($IFACE ↔ $WORKER_IFACE) ==="
+    ip -o link show "$IFACE" >/dev/null 2>&1 \
+        || err "IFACE=$IFACE not found on head — check .env (see: ip -o link)"
+    ssh_worker "ip -o link show '$WORKER_IFACE'" >/dev/null 2>&1 \
+        || err "WORKER_IFACE=$WORKER_IFACE not found on $WORKER_IP — set WORKER_IFACE in .env if the nodes are cross-wired"
+    HEAD_MTU=$(ip -o link show "$IFACE" | sed -n 's/.*mtu \([0-9]*\).*/\1/p')
+    WORKER_MTU=$(ssh_worker "ip -o link show '$WORKER_IFACE'" | sed -n 's/.*mtu \([0-9]*\).*/\1/p')
+    if [[ "$HEAD_MTU" != "$WORKER_MTU" ]]; then
+        warn "MTU mismatch: head $IFACE=$HEAD_MTU vs worker $WORKER_IFACE=$WORKER_MTU — RoCE needs both ends equal."
+    fi
+    # RoCE over ConnectX at the stock 1500 measurably hurts; 9000 is the
+    # jumbo-frame default for this link.
+    if [[ "${HEAD_MTU:-0}" -lt 9000 ]]; then
+        warn "MTU $HEAD_MTU < 9000 hurts RoCE on ConnectX — run on BOTH nodes: sudo ip link set <iface> mtu 9000"
+    fi
+    ok "Interfaces present (MTU head=$HEAD_MTU worker=$WORKER_MTU)."
+fi
+
+# ---------------------------------------------------------------------------
 # 4b. Preflight: both GPUs must be free (another vLLM/SGLang tenant would OOM us
 #     ten minutes into weight loading).
 # ---------------------------------------------------------------------------
