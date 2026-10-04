@@ -164,6 +164,21 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
                     "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_pre_indexer.py"
         OVERLAY_ENV+=("-e VLLM_QSA_ROPE_CLAMP=1")
     fi
+    if [[ "$LOAD_DROP_CACHE" == "true" ]]; then
+        info "=== Step 4c: loader page-cache drop (vLLM 0.30) ==="
+        # Port of myllmbox/vllm@354bfc2 (patches/patch_load_drop_cache_v030.py):
+        # posix_fadvise(DONTNEED) on each safetensors shard right after the
+        # loader consumes it. Step 4b-2 evicts the checkpoint from the host
+        # side before launch; this keeps the cache one shard deep during the
+        # load itself, on the same unified-memory pool the GPU allocates from.
+        mkdir -p "$SCRIPT_DIR/patches/v030_dropcache/orig"
+        extract_from_image "$VLLM_PKG/model_executor/model_loader/weight_utils.py" \
+                           "$SCRIPT_DIR/patches/v030_dropcache/orig/weight_utils.py"
+        python3 "$SCRIPT_DIR/patches/patch_load_drop_cache_v030.py" || err "patch_load_drop_cache_v030.py failed"
+        add_overlay "$SCRIPT_DIR/patches/v030_dropcache/weight_utils_v030.py" \
+                    "$VLLM_PKG/model_executor/model_loader/weight_utils.py"
+        OVERLAY_ENV+=("-e VLLM_LOAD_DROP_CACHE=1")
+    fi
     OVERLAY_ENV+=("-e VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/tmp/fi_autotune")
     OVERLAY_ENV+=("-e VLLM_USE_BREAKABLE_CUDAGRAPH=${V030_BREAKABLE_CUDAGRAPH:-0}")
 fi

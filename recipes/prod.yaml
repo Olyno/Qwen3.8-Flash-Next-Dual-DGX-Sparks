@@ -62,6 +62,9 @@ qsa_fused_draft: false
 # Clamp pre-indexer RoPE positions into the cos/sin table (fixes a CUDA-graph
 # warmup OOB read on SM121).
 qsa_rope_clamp: false
+# fadvise(DONTNEED) each checkpoint shard as the loader finishes it, keeping
+# the page cache one shard deep during the load.
+load_drop_cache: false
 require_idle_gpu: true
 evict_page_cache: true
 nfs_share: false
