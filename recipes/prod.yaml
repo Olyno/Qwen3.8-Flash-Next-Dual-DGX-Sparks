@@ -64,7 +64,7 @@ skinny_gemm: false  # GB10 SM12x skinny-GEMM plan overlay; TP=2-tuned, off until
 # fp8_draft_head: FP8 (E4M3/row-scale) copy of the drafter's lm_head rows
 # (~2x less draft-head bandwidth; composes with mtp_draft_vocab).
 lazy_gdn: false
-fp8_draft_head: false
+fp8_draft_head: true
 # Pass --async-scheduling explicitly. vLLM 0.30 already resolves it ON for
 # MTP + the mp executor, so false changes nothing today; true pins it.
 async_scheduling: false
