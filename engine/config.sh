@@ -111,6 +111,14 @@ SKIP_PLE_PATCH="${SKIP_PLE_PATCH:-false}"
 # (k=1..7) and an fp32 GDN state; a load-time self-test keeps the stock kernel
 # unless the Triton reimplementation is bitwise-identical on this GPU.
 LAZY_GDN="${LAZY_GDN:-false}"
+# ReplaySSM-GDN spec decode (v0.30 lane only, patches/replayssm_gdn/): port of
+# vllm#47576's GDN variant. MTP verify reconstructs each window from an fp32
+# checkpoint + a circular d/k/g ring instead of writing the full GDN state per
+# accepted token; the checkpoint is rewritten only when the ring fills
+# (REPLAYSSM_GDN_BUFFER_LEN + 1 + k tokens). Needs speculative decoding;
+# mutually exclusive with lazy_gdn. Buffer len must be >= 1 + k.
+REPLAYSSM_GDN="${REPLAYSSM_GDN:-false}"
+REPLAYSSM_GDN_BUFFER_LEN="${REPLAYSSM_GDN_BUFFER_LEN:-16}"
 # Draft-only FP8 (E4M3, per-row scale) copy of the MTP drafter's lm_head rows
 # (v0.30 lane only, patches/patch_mtp_draft_vocab_v030.py --fp8): quantizes the
 # reduced draft-vocab slice when MTP_DRAFT_VOCAB is set, else the full shard.
@@ -131,6 +139,7 @@ QSA_ROPE_CLAMP="${QSA_ROPE_CLAMP:-false}"
 # the page cache one shard deep during the load on unified memory.
 LOAD_DROP_CACHE="${LOAD_DROP_CACHE:-false}"
 [[ "$LAZY_GDN" != "true" || "$V030" == "true" ]] || err "lazy_gdn is only supported on the vLLM 0.30 lane (v030: true)."
+[[ "$REPLAYSSM_GDN" != "true" || "$V030" == "true" ]] || err "replayssm_gdn is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$FP8_DRAFT_HEAD" != "true" || "$V030" == "true" ]] || err "fp8_draft_head is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$QSA_FUSED_DRAFT" != "true" || "$V030" == "true" ]] || err "qsa_fused_draft is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$QSA_ROPE_CLAMP" != "true" || "$V030" == "true" ]] || err "qsa_rope_clamp is only supported on the vLLM 0.30 lane (v030: true)."
