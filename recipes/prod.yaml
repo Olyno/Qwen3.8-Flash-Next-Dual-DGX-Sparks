@@ -71,13 +71,13 @@ async_scheduling: false
 # myllmbox v030 port, default OFF until boot-verified: reuse one QSA
 # attention-metadata build across MTP draft steps (vllm#58449 port; needs
 # mtp_num_speculative_tokens > 1).
-qsa_fused_draft: false
+qsa_fused_draft: true
 # Clamp pre-indexer RoPE positions into the cos/sin table (fixes a CUDA-graph
 # warmup OOB read on SM121).
-qsa_rope_clamp: false
+qsa_rope_clamp: true
 # fadvise(DONTNEED) each checkpoint shard as the loader finishes it, keeping
 # the page cache one shard deep during the load.
-load_drop_cache: false
+load_drop_cache: true
 require_idle_gpu: true
 evict_page_cache: true
 nfs_share: false
