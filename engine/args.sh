@@ -67,6 +67,10 @@
     fi
 
     VLLM_ARGS+=("--compilation-config" "$(printf "'{\"mode\":0,\"cudagraph_mode\":\"FULL_DECODE_ONLY\"}'")")
+    # Known cross-node hazard (vllm#46253): CUDA-graph capture can die with an
+    # illegal memory access at capture_end on multi-node. If boot crashes
+    # there, rerun with EXTRA_VLLM_ARGS="--enforce-eager".
+    [[ "$NNODES" -eq 2 ]] && warn "dual-node: if boot dies at CUDA-graph capture (IMA at capture_end, vllm#46253), rerun with EXTRA_VLLM_ARGS=\"--enforce-eager\""
     [[ "$ASYNC_SCHEDULING" == "true" ]] && VLLM_ARGS+=("--async-scheduling")
 
     # hf-overrides: ONE merged payload, nested under "text_config".
