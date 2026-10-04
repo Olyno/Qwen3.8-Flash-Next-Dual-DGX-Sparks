@@ -132,6 +132,53 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
                     "$VLLM_PKG/v1/attention/backends/gdn_attn.py"
         OVERLAY_ENV+=("-e VLLM_QWEN38_GDN_LAZY=1")
     fi
+    if [[ "$QSA_FUSED_DRAFT" == "true" ]]; then
+        info "=== Step 4c: QSA fused multi-step draft metadata (vLLM 0.30) ==="
+        # Port of myllmbox/vllm@c3f56fe (the code proposed upstream as
+        # vllm#58449, patches/patch_qsa_fused_draft_v030.py): stock v0.30
+        # rebuilds attention metadata for the whole model between MTP draft
+        # steps because the QSA builder never opted into the speculator's
+        # in-place update; the overlay re-launches the builder's own metadata
+        # kernel on its persistent buffers instead.
+        [[ "$MTP_NUM_SPECULATIVE_TOKENS" -gt 1 ]] || err "qsa_fused_draft needs MTP_NUM_SPECULATIVE_TOKENS > 1 (with k <= 1 there is no inter-draft-step rebuild to fuse)."
+        mkdir -p "$SCRIPT_DIR/patches/v030_qsa_fused/orig"
+        extract_from_image "$VLLM_PKG/models/qwen4_exp/common/qsa_cache.py" \
+                           "$SCRIPT_DIR/patches/v030_qsa_fused/orig/qsa_cache.py"
+        python3 "$SCRIPT_DIR/patches/patch_qsa_fused_draft_v030.py" || err "patch_qsa_fused_draft_v030.py failed"
+        add_overlay "$SCRIPT_DIR/patches/v030_qsa_fused/qsa_cache_v030.py" \
+                    "$VLLM_PKG/models/qwen4_exp/common/qsa_cache.py"
+        OVERLAY_ENV+=("-e VLLM_QSA_FUSED_DRAFT=1")
+    fi
+    if [[ "$QSA_ROPE_CLAMP" == "true" ]]; then
+        info "=== Step 4c: QSA pre-indexer RoPE clamp (vLLM 0.30) ==="
+        # Port of myllmbox/vllm@9ff17c0 (patches/patch_qsa_rope_clamp_v030.py):
+        # the pre-indexer's _norm_rope loads cos_sin[pos] unchecked; CUDA-graph
+        # warmup dummy positions can index past the cos/sin table (IMA on
+        # SM121/GB10). The clamp compiles in only with VLLM_QSA_ROPE_CLAMP=1;
+        # the constexpr-off branch is the bit-exact stock kernel.
+        mkdir -p "$SCRIPT_DIR/patches/v030_qsa_rope/orig"
+        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_pre_indexer.py" \
+                           "$SCRIPT_DIR/patches/v030_qsa_rope/orig/qsa_pre_indexer.py"
+        python3 "$SCRIPT_DIR/patches/patch_qsa_rope_clamp_v030.py" || err "patch_qsa_rope_clamp_v030.py failed"
+        add_overlay "$SCRIPT_DIR/patches/v030_qsa_rope/qsa_pre_indexer_v030.py" \
+                    "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_pre_indexer.py"
+        OVERLAY_ENV+=("-e VLLM_QSA_ROPE_CLAMP=1")
+    fi
+    if [[ "$LOAD_DROP_CACHE" == "true" ]]; then
+        info "=== Step 4c: loader page-cache drop (vLLM 0.30) ==="
+        # Port of myllmbox/vllm@354bfc2 (patches/patch_load_drop_cache_v030.py):
+        # posix_fadvise(DONTNEED) on each safetensors shard right after the
+        # loader consumes it. Step 4b-2 evicts the checkpoint from the host
+        # side before launch; this keeps the cache one shard deep during the
+        # load itself, on the same unified-memory pool the GPU allocates from.
+        mkdir -p "$SCRIPT_DIR/patches/v030_dropcache/orig"
+        extract_from_image "$VLLM_PKG/model_executor/model_loader/weight_utils.py" \
+                           "$SCRIPT_DIR/patches/v030_dropcache/orig/weight_utils.py"
+        python3 "$SCRIPT_DIR/patches/patch_load_drop_cache_v030.py" || err "patch_load_drop_cache_v030.py failed"
+        add_overlay "$SCRIPT_DIR/patches/v030_dropcache/weight_utils_v030.py" \
+                    "$VLLM_PKG/model_executor/model_loader/weight_utils.py"
+        OVERLAY_ENV+=("-e VLLM_LOAD_DROP_CACHE=1")
+    fi
     OVERLAY_ENV+=("-e VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/tmp/fi_autotune")
     OVERLAY_ENV+=("-e VLLM_USE_BREAKABLE_CUDAGRAPH=${V030_BREAKABLE_CUDAGRAPH:-0}")
 fi
