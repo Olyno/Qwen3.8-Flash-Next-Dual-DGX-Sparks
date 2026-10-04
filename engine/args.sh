@@ -11,6 +11,10 @@
     VLLM_ARGS+=("--gpu-memory-utilization" "$GPU_MEMORY_UTILIZATION")
     VLLM_ARGS+=("--max-num-seqs" "$MAX_NUM_SEQS")
     VLLM_ARGS+=("--max-num-batched-tokens" "$MAX_NUM_BATCHED_TOKENS")
+    # Chunks long prefills below MAX_NUM_BATCHED_TOKENS: a full-budget 48K
+    # prefill spikes ~1.3 GiB in one step and trips the memwatch floor (sfxnz
+    # runs 4800 on this hardware).
+    [[ -n "$LONG_PREFILL_TOKEN_THRESHOLD" ]] && VLLM_ARGS+=("--long-prefill-token-threshold" "$LONG_PREFILL_TOKEN_THRESHOLD")
     VLLM_ARGS+=("--max-model-len" "$MAX_MODEL_LEN")
     VLLM_ARGS+=("--kv-cache-dtype" "$KV_CACHE_DTYPE")
     [[ -n "$MAMBA_SSM_CACHE_DTYPE" ]] && VLLM_ARGS+=("--mamba-ssm-cache-dtype" "$MAMBA_SSM_CACHE_DTYPE")
