@@ -24,7 +24,10 @@ chat_template: chat_template_cod.jinja
 max_model_len: 65536
 yarn_enable: false
 yarn_factor: 4.0
-gpu_memory_utilization: 0.80
+# 0.75 fits the unified-memory pool: ~23 GiB is always held by the host/driver,
+# and the budget must cover ~76 GiB on-GPU weights + KV + MTP (0.80 fails the
+# startup free-memory check on a desktop-equipped Spark).
+gpu_memory_utilization: 0.75
 max_num_seqs: 4
 max_num_batched_tokens: 8192
 port: 8888
