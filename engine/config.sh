@@ -85,6 +85,13 @@ SKINNY_GEMM="${SKINNY_GEMM:-false}"
 # NVFP4 kernels require input features % 16 == 0, so replicate the encoder on each GPU.
 MM_ENCODER_TP_MODE="${MM_ENCODER_TP_MODE:-data}"
 EXTRA_VLLM_ARGS="${EXTRA_VLLM_ARGS:-}"
+# Optional docker --cpuset-cpus for the vLLM container (both ranks). The GB10
+# mixes ten 3.9 GHz Cortex-X925 cores (5-9,15-19) with ten 2.8 GHz A725 cores
+# (0-4,10-14); pinning to the X925 set measured +2-3 % at every concurrency in
+# the vendor single-Spark recipe. Pure scheduling, no output change. Empty =
+# all cores. Verified against /sys cpufreq on the target host.
+CPUSET="${CPUSET:-}"
+[[ -z "$CPUSET" || "$CPUSET" =~ ^[0-9,-]+$ ]] || err "cpuset must be a CPU list like 5-9,15-19 (got: '$CPUSET')"
 # Weight distribution. false (default) = each node keeps its own copy of the
 # checkpoint, worker seeded by rsync from the head. true = head exports its
 # cache over NFS on ConnectX and the worker mounts it read-only (HF models only).
@@ -165,6 +172,12 @@ fi
 QSA_PROFILE="${QSA_PROFILE:-stock}"
 MTP_DISABLE_BLOCK_DROP="${MTP_DISABLE_BLOCK_DROP:-0}"
 MTP_INDEX_SHARE="${MTP_INDEX_SHARE:-false}"
+# Explicit --async-scheduling. vLLM 0.30 already resolves async scheduling ON
+# for MTP + the mp executor (config/vllm.py enables it unless incompatible;
+# mtp is in EagleModelTypes and the mp executor supports it), so false here
+# keeps the resolved default — it does NOT turn async scheduling off. true
+# pins the flag explicitly against future resolution changes.
+ASYNC_SCHEDULING="${ASYNC_SCHEDULING:-false}"
 # Optional spec-config sampling overrides (empty = vLLM defaults: greedy draft,
 # standard rejection). Both are lossless w.r.t. the target distribution.
 MTP_DRAFT_SAMPLE_METHOD="${MTP_DRAFT_SAMPLE_METHOD:-}"
