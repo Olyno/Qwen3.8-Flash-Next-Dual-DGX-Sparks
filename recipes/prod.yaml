@@ -46,7 +46,7 @@ mm_encoder_tp_mode: data
 # A725) — measured +2-3 % at every concurrency in the vendor single-Spark
 # recipe; scheduling only, no output change.
 cpuset: "5-9,15-19"
-mtp_num_speculative_tokens: 4
+mtp_num_speculative_tokens: 3
 mtp_draft_vocab: vocab/draft_vocab_en_code_47k.txt
 mtp_index_share: true
 mtp_disable_block_drop: 1
@@ -56,7 +56,7 @@ mtp_rejection_sample_method: block
 ple_offload: true
 qsa_profile: stock
 fp8_dense: false
-skinny_gemm: true  # GB10 SM12x skinny-GEMM plan overlay; TP=2-tuned, off until boot-verified
+skinny_gemm: false  # GB10 SM12x skinny-GEMM plan overlay; TP=2-tuned, off until boot-verified
 # sfxnz "bit-exact" v030 overlay ports, default OFF until boot-verified.
 # lazy_gdn: K3 lazy GDN state commit for MTP verify (~4x fewer GDN state
 # writes/step; bitwise-pinned to stock by a load-time self-test). Requires an
