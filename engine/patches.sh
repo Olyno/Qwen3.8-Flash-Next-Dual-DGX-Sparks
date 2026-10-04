@@ -97,17 +97,18 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         # v0.30 already ships low_latency_gemm.py, wired into model.py and
         # mtp.py, but its plan tables cover only SM103/SM90 TP=4 shapes, so on
         # the GB10 the decode-sized BF16 projections stay on cuBLAS SM80 WMMA
-        # kernels. The overlay adds the SM12x table (myllmbox gb10-skinny-gemm,
-        # timed at TP=2). Plans are keyed by local (N, K) shape and exact
-        # token count M; a miss keeps the standard linear path, so any TP is
-        # safe — at TP!=2 only the replicated projections match.
+        # kernels. The overlay adds the SM12x table: TP=1 shapes from upstream
+        # vllm#59753, TP=2 shapes from vllm#59632 and the myllmbox
+        # gb10-skinny-gemm patch. Plans are keyed by local (N, K) shape and
+        # exact token count M; a miss keeps the standard linear path, so any
+        # TP is safe — at TP>2 only the replicated projections match.
         SG="$SCRIPT_DIR/patches/gb10_skinny_gemm"
         extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/low_latency_gemm.py" \
                            "$SG/low_latency_gemm.py.orig"
         python3 "$SG/apply_patch.py" || err "apply_patch.py (gb10_skinny_gemm) failed"
         add_overlay "$SG/low_latency_gemm.py" \
                     "$VLLM_PKG/models/qwen4_exp/nvidia/low_latency_gemm.py"
-        [[ "$TENSOR_PARALLEL_SIZE" == "2" ]] || warn "SKINNY_GEMM: plans are TP=2 shapes; at TP=$TENSOR_PARALLEL_SIZE only replicated projections take the skinny path."
+        [[ "$TENSOR_PARALLEL_SIZE" == "1" || "$TENSOR_PARALLEL_SIZE" == "2" ]] || warn "SKINNY_GEMM: plans cover TP=1/TP=2 local shapes; at TP=$TENSOR_PARALLEL_SIZE only replicated projections take the skinny path."
     fi
     if [[ "$LAZY_GDN" == "true" ]]; then
         info "=== Step 4c: K3 lazy GDN state commit (vLLM 0.30) ==="
