@@ -44,6 +44,14 @@ ple_offload: true
 qsa_profile: stock
 fp8_dense: false
 skinny_gemm: false  # GB10 SM12x skinny-GEMM plan overlay; TP=2-tuned, off until boot-verified
+# sfxnz "bit-exact" v030 overlay ports, default OFF until boot-verified.
+# lazy_gdn: K3 lazy GDN state commit for MTP verify (~4x fewer GDN state
+# writes/step; bitwise-pinned to stock by a load-time self-test). Requires an
+# fp32 GDN state, so it refuses to boot with mamba_ssm_cache_dtype: bfloat16.
+# fp8_draft_head: FP8 (E4M3/row-scale) copy of the drafter's lm_head rows
+# (~2x less draft-head bandwidth; composes with mtp_draft_vocab).
+lazy_gdn: false
+fp8_draft_head: false
 require_idle_gpu: true
 evict_page_cache: true
 nfs_share: false
