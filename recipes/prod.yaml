@@ -55,6 +55,10 @@ skinny_gemm: false  # GB10 SM12x skinny-GEMM plan overlay; TP=2-tuned, off until
 # (~2x less draft-head bandwidth; composes with mtp_draft_vocab).
 lazy_gdn: false
 fp8_draft_head: false
+# myllmbox v030 port, default OFF until boot-verified: reuse one QSA
+# attention-metadata build across MTP draft steps (vllm#58449 port; needs
+# mtp_num_speculative_tokens > 1).
+qsa_fused_draft: false
 require_idle_gpu: true
 evict_page_cache: true
 nfs_share: false

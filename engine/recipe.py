@@ -9,7 +9,7 @@ import os, sys
 BOOL10 = {"true":"true","false":"false","yes":"true","no":"false","1":"true","0":"false"}
 BOOL_KEYS = {"YARN_ENABLE","ENABLE_EXPERT_PARALLEL","FP8_DENSE","PLE_OFFLOAD",
              "REQUIRE_IDLE_GPU","EVICT_PAGE_CACHE","NFS_SHARE","V030",
-             "SKIP_PLE_PATCH","DO_DOWNLOAD_DEFAULT"}
+             "SKIP_PLE_PATCH","DO_DOWNLOAD_DEFAULT","QSA_FUSED_DRAFT"}
 
 def die(msg): print(f"recipe error: {msg}", file=sys.stderr); sys.exit(2)
 
