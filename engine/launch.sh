@@ -1,3 +1,6 @@
+    # Deadline for the /health poll at the end of this file; overridable via env.
+    READY_TIMEOUT_S="${READY_TIMEOUT_S:-3600}"
+
     # Head-side mounts (the worker block below computes its own variants over
     # ssh; on a single node these are the only ones that exist).
     HEAD_MODEL_MOUNT=""
@@ -93,6 +96,7 @@
 docker run \
     -d --name vllm-fn \
     --gpus all --network host --ipc host \
+    --log-opt max-size=50m --log-opt max-file=3 \
     --cap-add SYS_NICE --ulimit memlock=-1 --ulimit stack=67108864 \
     --device /dev/infiniband:/dev/infiniband \
     -e GLOO_SOCKET_IFNAME=$WORKER_IFACE \
@@ -158,6 +162,7 @@ LAUNCH_EOF
 docker run \
     -d --name vllm-fn \
     --gpus all --network host --ipc host \
+    --log-opt max-size=50m --log-opt max-file=3 \
     --cap-add SYS_NICE --ulimit memlock=-1 --ulimit stack=67108864 \
     --device /dev/infiniband:/dev/infiniband \
     $HEAD_NET_ENV \
@@ -201,14 +206,31 @@ LAUNCH_EOF
     # Follow logs in background, poll /health until 200, then return to shell
     docker logs -f vllm-fn &
     LOGPID=$!
+    READY_DEADLINE=$(( $(date +%s) + READY_TIMEOUT_S ))
 
-    info "Waiting for /health to return 200..."
+    # On failure keep the evidence: archive the full container log under logs/
+    # and echo its error lines, so a crash during load stays diagnosable.
+    dump_failure_logs() {
+        kill $LOGPID 2>/dev/null || true
+        mkdir -p "$SCRIPT_DIR/logs"
+        local log="$SCRIPT_DIR/logs/vllm-fn-$(date +%s).log"
+        docker logs vllm-fn > "$log" 2>&1 || true
+        warn "Container log archived to $log"
+        grep -E 'ERROR|Traceback|Error' "$log" | tail -15
+    }
+
+    info "Waiting for /health to return 200 (deadline ${READY_TIMEOUT_S}s)..."
     while true; do
         sleep 10
         # Check if container is still running
         if ! docker ps --format '{{.Names}}' | grep -q '^vllm-fn$'; then
-            kill $LOGPID 2>/dev/null || true
-            err "Container vllm-fn exited unexpectedly. Check: docker logs vllm-fn"
+            dump_failure_logs
+            err "Container vllm-fn exited unexpectedly. See the archived log above."
+        fi
+        # Give up once the readiness deadline passes
+        if (( $(date +%s) > READY_DEADLINE )); then
+            dump_failure_logs
+            err "vLLM not ready after ${READY_TIMEOUT_S}s. See the archived log above."
         fi
         # Check health endpoint
         HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$PORT/health" 2>/dev/null || echo "000")
