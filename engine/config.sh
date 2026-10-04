@@ -172,6 +172,12 @@ fi
 QSA_PROFILE="${QSA_PROFILE:-stock}"
 MTP_DISABLE_BLOCK_DROP="${MTP_DISABLE_BLOCK_DROP:-0}"
 MTP_INDEX_SHARE="${MTP_INDEX_SHARE:-false}"
+# Explicit --async-scheduling. vLLM 0.30 already resolves async scheduling ON
+# for MTP + the mp executor (config/vllm.py enables it unless incompatible;
+# mtp is in EagleModelTypes and the mp executor supports it), so false here
+# keeps the resolved default — it does NOT turn async scheduling off. true
+# pins the flag explicitly against future resolution changes.
+ASYNC_SCHEDULING="${ASYNC_SCHEDULING:-false}"
 # Optional spec-config sampling overrides (empty = vLLM defaults: greedy draft,
 # standard rejection). Both are lossless w.r.t. the target distribution.
 MTP_DRAFT_SAMPLE_METHOD="${MTP_DRAFT_SAMPLE_METHOD:-}"
