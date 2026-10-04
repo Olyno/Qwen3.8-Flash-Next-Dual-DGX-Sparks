@@ -22,7 +22,7 @@ def load(name):
 class TestRecipes(unittest.TestCase):
     def test_prod_is_lean_local_v030(self):
         env = load("prod")
-        self.assertEqual(env["IMAGE"], "vllm/vllm-openai:v0.30.0")
+        self.assertTrue(env["IMAGE"].startswith("vllm/vllm-openai:v0.30.0@sha256:"))
         self.assertEqual(env["V030"], "true")
         self.assertIn("Qwen3.8-Flash-Next-NVFP4-lean", env["MODEL_PATH"])
         self.assertEqual(env["DO_DOWNLOAD_DEFAULT"], "false")
