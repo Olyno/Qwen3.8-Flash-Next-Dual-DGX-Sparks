@@ -56,6 +56,10 @@ fi
 # --ipc host that leaks the container's POSIX shm segments onto the host.
 if $HAS_WORKER; then
     echo "Stopping $CONTAINER_NAME on worker ($WORKER_IP)..."
+    # Archive the tail first: once the container is removed its log is gone,
+    # and a remote boot crash leaves no other copy.
+    mkdir -p logs
+    ssh_cmd "docker logs --tail 500 $CONTAINER_NAME" > "logs/$CONTAINER_NAME-worker-$(date +%s).log" 2>&1 || true
     ssh_cmd "if docker stop -t 30 $CONTAINER_NAME >/dev/null 2>&1; then docker rm $CONTAINER_NAME >/dev/null 2>&1; echo '  Worker: stopped.'; else echo '  Worker: not running.'; fi"
 fi
 
