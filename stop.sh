@@ -44,13 +44,28 @@ ssh_cmd() {
     ssh -o StrictHostKeyChecking=no "${user_prefix}$WORKER_IP" "$@"
 }
 
+# Stop the memory watchdog first, so it cannot emergency-stop the container
+# while we are gracefully stopping it ourselves.
+MEMWATCH_PIDFILE="logs/memwatch-$CONTAINER_NAME.pid"
+if [[ -f "$MEMWATCH_PIDFILE" ]]; then
+    kill "$(cat "$MEMWATCH_PIDFILE")" 2>/dev/null || true
+    rm -f "$MEMWATCH_PIDFILE"
+fi
+
+# SIGTERM with a 30s grace, then rm: `docker rm -f` SIGKILLs, and under
+# --ipc host that leaks the container's POSIX shm segments onto the host.
 if $HAS_WORKER; then
     echo "Stopping $CONTAINER_NAME on worker ($WORKER_IP)..."
-    ssh_cmd "docker rm -f $CONTAINER_NAME 2>/dev/null && echo '  Worker: stopped.' || echo '  Worker: not running.'"
+    ssh_cmd "if docker stop -t 30 $CONTAINER_NAME >/dev/null 2>&1; then docker rm $CONTAINER_NAME >/dev/null 2>&1; echo '  Worker: stopped.'; else echo '  Worker: not running.'; fi"
 fi
 
 echo "Stopping $CONTAINER_NAME on head..."
-docker rm -f "$CONTAINER_NAME" 2>/dev/null && echo "  Head: stopped." || echo "  Head: not running."
+if docker stop -t 30 "$CONTAINER_NAME" >/dev/null 2>&1; then
+    docker rm "$CONTAINER_NAME" >/dev/null 2>&1
+    echo "  Head: stopped."
+else
+    echo "  Head: not running."
+fi
 
 if $STOP_NFS; then
     echo "Stopping NFS share ($NFS_CONTAINER) on head..."
