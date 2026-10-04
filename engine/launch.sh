@@ -151,6 +151,9 @@ LAUNCH_EOF
     fi
 
     # ---- Head (rank 0) ----
+    if [[ "$EXTRA_VLLM_ARGS" != *--api-key* ]]; then
+        warn "Serving on 0.0.0.0 with no API key — anyone on the network can use it. Pass --api-key via EXTRA_VLLM_ARGS to require one."
+    fi
     info "--- Launching head (rank 0) on $HEAD_IP ---"
     docker rm -f vllm-fn >/dev/null 2>&1 || true
     mkdir -p "$HOME/.cache/vllm"
