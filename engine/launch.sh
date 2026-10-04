@@ -237,10 +237,19 @@ LAUNCH_EOF
     dump_failure_logs() {
         kill $LOGPID 2>/dev/null || true
         mkdir -p "$SCRIPT_DIR/logs"
-        local log="$SCRIPT_DIR/logs/vllm-fn-$(date +%s).log"
+        local ts log
+        ts=$(date +%s)
+        log="$SCRIPT_DIR/logs/vllm-fn-$ts.log"
         docker logs vllm-fn > "$log" 2>&1 || true
         warn "Container log archived to $log"
         grep -E 'ERROR|Traceback|Error' "$log" | tail -15
+        # The head log alone hides the usual dual-node failure: the worker died
+        # first and the head blocked on NCCL. Archive the worker side too.
+        if [[ "$NNODES" -eq 2 ]]; then
+            local wlog="$SCRIPT_DIR/logs/vllm-fn-worker-$ts.log"
+            ssh_worker "docker logs --tail 3000 vllm-fn" > "$wlog" 2>&1 || true
+            warn "Worker container log archived to $wlog"
+        fi
     }
 
     info "Waiting for /health to return 200 (deadline ${READY_TIMEOUT_S}s)..."
@@ -250,6 +259,14 @@ LAUNCH_EOF
         if ! docker ps --format '{{.Names}}' | grep -q '^vllm-fn$'; then
             dump_failure_logs
             err "Container vllm-fn exited unexpectedly. See the archived log above."
+        fi
+        # A dead worker otherwise costs the full timeout: the head just blocks
+        # in NCCL init and stays "running" until the deadline.
+        if [[ "$NNODES" -eq 2 ]] && ! ssh_worker "docker ps --format '{{.Names}}'" 2>/dev/null | grep -q '^vllm-fn$'; then
+            warn "Worker container vllm-fn is not running on $WORKER_IP — last 100 log lines:"
+            ssh_worker "docker logs --tail 100 vllm-fn" 2>&1 || true
+            dump_failure_logs
+            err "Worker container exited during boot. See its log above and the archived logs."
         fi
         # Give up once the readiness deadline passes
         if (( $(date +%s) > READY_DEADLINE )); then
