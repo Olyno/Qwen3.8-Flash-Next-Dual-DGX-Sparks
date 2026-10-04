@@ -93,6 +93,19 @@ NFS_SHARE="${NFS_SHARE:-false}"
 NFS_SERVER_IP="${NFS_SERVER_IP:-}"
 V030="${V030:-false}"
 SKIP_PLE_PATCH="${SKIP_PLE_PATCH:-false}"
+# K3 lazy GDN state commit for MTP verify (v0.30 lane only,
+# patches/patch_gdn_lazy_v030.py): the verify kernel commits the fp32 GDN state
+# once per step instead of after every token. Needs speculative decoding
+# (k=1..7) and an fp32 GDN state; a load-time self-test keeps the stock kernel
+# unless the Triton reimplementation is bitwise-identical on this GPU.
+LAZY_GDN="${LAZY_GDN:-false}"
+# Draft-only FP8 (E4M3, per-row scale) copy of the MTP drafter's lm_head rows
+# (v0.30 lane only, patches/patch_mtp_draft_vocab_v030.py --fp8): quantizes the
+# reduced draft-vocab slice when MTP_DRAFT_VOCAB is set, else the full shard.
+# The target keeps its BF16 head for verify, so emitted tokens are unchanged.
+FP8_DRAFT_HEAD="${FP8_DRAFT_HEAD:-false}"
+[[ "$LAZY_GDN" != "true" || "$V030" == "true" ]] || err "lazy_gdn is only supported on the vLLM 0.30 lane (v030: true)."
+[[ "$FP8_DRAFT_HEAD" != "true" || "$V030" == "true" ]] || err "fp8_draft_head is only supported on the vLLM 0.30 lane (v030: true)."
 # FP8-dense hybrid checkpoint (NVFP4 experts + FP8 per-channel dense projections,
 # built by scripts/fp8dense/make_fp8_dense_checkpoint.py). Needs the vLLM overlay
 # patches in overlays/fp8dense (bind-mounted, no image rebuild).
