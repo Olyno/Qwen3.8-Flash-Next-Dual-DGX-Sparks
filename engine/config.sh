@@ -93,11 +93,12 @@ KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8}"   # fp8 needs patches/patch_qsa_fp8_kv.p
 MAMBA_SSM_CACHE_DTYPE="${MAMBA_SSM_CACHE_DTYPE:-}"
 # PLE_OFFLOAD default is topology-derived in the NODES block above.
 
-# SM12x plan table is keyed by TP=2 local shapes; at other TP sizes no plan
-# matches and the standard linear path is kept (patches/gb10_skinny_gemm),
-# so default it on only where it can engage. Recipe true/false overrides.
+# SM12x plan table covers TP=1 and TP=2 shapes (vllm#59753 + vllm#59632); at
+# other TP sizes no plan matches and the standard linear path is kept
+# (patches/gb10_skinny_gemm), so default it on only where it can engage.
+# Recipe true/false overrides.
 if [[ -z "${SKINNY_GEMM:-}" ]]; then
-    [[ "$TENSOR_PARALLEL_SIZE" == "2" ]] && SKINNY_GEMM=true || SKINNY_GEMM=false
+    [[ "$TENSOR_PARALLEL_SIZE" == "1" || "$TENSOR_PARALLEL_SIZE" == "2" ]] && SKINNY_GEMM=true || SKINNY_GEMM=false
 fi
 # Vision MLP intermediate_size=4304 is not divisible by 16 after TP split (4304/2=2152).
 # NVFP4 kernels require input features % 16 == 0, so replicate the encoder on each GPU.
