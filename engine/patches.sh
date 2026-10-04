@@ -135,18 +135,32 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     OVERLAY_ENV+=("-e VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/tmp/fi_autotune")
     OVERLAY_ENV+=("-e VLLM_USE_BREAKABLE_CUDAGRAPH=${V030_BREAKABLE_CUDAGRAPH:-0}")
 fi
-if $DO_LAUNCH && [[ -n "$MTP_DRAFT_VOCAB" && "$V030" == "true" ]]; then
-    info "=== Step 4e: MTP reduced draft vocabulary (vLLM 0.30) ==="
-    [[ "$MTP_NUM_SPECULATIVE_TOKENS" == "0" ]] && err "MTP_DRAFT_VOCAB is set but MTP_NUM_SPECULATIVE_TOKENS=0 - nothing drafts."
-    [[ -f "$MTP_DRAFT_VOCAB" ]] || err "MTP_DRAFT_VOCAB file not found: $MTP_DRAFT_VOCAB"
+if $DO_LAUNCH && [[ "$V030" == "true" ]] && { [[ -n "$MTP_DRAFT_VOCAB" ]] || [[ "$FP8_DRAFT_HEAD" == "true" ]]; }; then
+    info "=== Step 4e: MTP draft head (vLLM 0.30) ==="
+    [[ "$MTP_NUM_SPECULATIVE_TOKENS" == "0" ]] && err "MTP_DRAFT_VOCAB/FP8_DRAFT_HEAD is set but MTP_NUM_SPECULATIVE_TOKENS=0 - nothing drafts."
+    if [[ -n "$MTP_DRAFT_VOCAB" ]]; then
+        [[ -f "$MTP_DRAFT_VOCAB" ]] || err "MTP_DRAFT_VOCAB file not found: $MTP_DRAFT_VOCAB"
+    fi
     extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/mtp.py" \
                        "$SCRIPT_DIR/patches/mtp_v030_patched.py.orig"
-    python3 "$SCRIPT_DIR/patches/patch_mtp_draft_vocab_v030.py" || err "patch_mtp_draft_vocab_v030.py failed"
+    if [[ "$FP8_DRAFT_HEAD" == "true" ]]; then
+        # One patched mtp.py carries both deltas, each gated by its own env
+        # (VLLM_MTP_DRAFT_VOCAB / VLLM_MTP_DRAFT_HEAD_FP8) so they compose
+        # independently. With no draft vocab the FP8 head covers the full
+        # shard and hooks compute_logits; with one it quantizes the slice.
+        python3 "$SCRIPT_DIR/patches/patch_mtp_draft_vocab_v030.py" --fp8 \
+            || err "patch_mtp_draft_vocab_v030.py --fp8 failed"
+        OVERLAY_ENV+=("-e VLLM_MTP_DRAFT_HEAD_FP8=1")
+    else
+        python3 "$SCRIPT_DIR/patches/patch_mtp_draft_vocab_v030.py" || err "patch_mtp_draft_vocab_v030.py failed"
+    fi
     add_overlay "$SCRIPT_DIR/patches/mtp_v030_patched.py" \
                 "$VLLM_PKG/models/qwen4_exp/nvidia/mtp.py"
-    add_overlay "$MTP_DRAFT_VOCAB" "/etc/vllm-draft-vocab.txt"
-    OVERLAY_ENV+=("-e VLLM_MTP_DRAFT_VOCAB=/etc/vllm-draft-vocab.txt")
-    ok "Draft vocab: $(wc -l < "$MTP_DRAFT_VOCAB") ids from $MTP_DRAFT_VOCAB"
+    if [[ -n "$MTP_DRAFT_VOCAB" ]]; then
+        add_overlay "$MTP_DRAFT_VOCAB" "/etc/vllm-draft-vocab.txt"
+        OVERLAY_ENV+=("-e VLLM_MTP_DRAFT_VOCAB=/etc/vllm-draft-vocab.txt")
+        ok "Draft vocab: $(wc -l < "$MTP_DRAFT_VOCAB") ids from $MTP_DRAFT_VOCAB"
+    fi
 elif $DO_LAUNCH && [[ -n "$MTP_DRAFT_VOCAB" ]]; then
     info "=== Step 4e: MTP reduced draft vocabulary ==="
     if [[ "$MTP_NUM_SPECULATIVE_TOKENS" == "0" ]]; then
