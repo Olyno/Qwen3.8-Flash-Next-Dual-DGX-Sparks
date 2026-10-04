@@ -69,3 +69,4 @@ vocab/draft_vocab_*.txt
 !/vocab/draft_vocab_fr_en_code_65k.txt
 !/vocab/draft_vocab_ru_en_code_65k.txt
 patches/v030_ple/
+patches/gb10_skinny_gemm/low_latency_gemm.py
