@@ -45,6 +45,13 @@
         _SPEC_EXTRA=""
         [[ "$MTP_DISABLE_BLOCK_DROP" == "1" ]] && _SPEC_EXTRA+=',"disable_eagle_block_drop":true'
         [[ "$MTP_INDEX_SHARE" == "true" ]] && _SPEC_EXTRA+=',"index_share_for_mtp_iteration":true'
+        [[ -n "$MTP_REJECTION_SAMPLE_METHOD" ]] && _SPEC_EXTRA+=",\"rejection_sample_method\":\"$MTP_REJECTION_SAMPLE_METHOD\""
+        if [[ -n "$MTP_DRAFT_SAMPLE_METHOD" ]]; then
+            # vLLM rejects probabilistic drafting with use_local_argmax_reduction,
+            # which the reduced draft vocab relies on.
+            [[ -z "$MTP_DRAFT_VOCAB" ]] || err "mtp_draft_sample_method requires mtp_draft_vocab to be unset"
+            _SPEC_EXTRA+=",\"draft_sample_method\":\"$MTP_DRAFT_SAMPLE_METHOD\""
+        fi
         if [[ -n "$MTP_DRAFT_VOCAB" ]]; then
             # get_top_tokens (added by patch_mtp_draft_vocab.py) is only reached
             # through this flag; it also cuts the draft all-gather from
