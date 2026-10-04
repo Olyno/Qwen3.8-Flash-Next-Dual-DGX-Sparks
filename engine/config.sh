@@ -165,6 +165,10 @@ fi
 QSA_PROFILE="${QSA_PROFILE:-stock}"
 MTP_DISABLE_BLOCK_DROP="${MTP_DISABLE_BLOCK_DROP:-0}"
 MTP_INDEX_SHARE="${MTP_INDEX_SHARE:-false}"
+# Optional spec-config sampling overrides (empty = vLLM defaults: greedy draft,
+# standard rejection). Both are lossless w.r.t. the target distribution.
+MTP_DRAFT_SAMPLE_METHOD="${MTP_DRAFT_SAMPLE_METHOD:-}"
+MTP_REJECTION_SAMPLE_METHOD="${MTP_REJECTION_SAMPLE_METHOD:-}"
 VLLM_QSA_DET_TOPK="${VLLM_QSA_DET_TOPK:-}"
 VLLM_MOE_DET_FINALIZE="${VLLM_MOE_DET_FINALIZE:-}"
 VLLM_ALLOW_LONG_MAX_MODEL_LEN="${VLLM_ALLOW_LONG_MAX_MODEL_LEN:-}"

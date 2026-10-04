@@ -40,6 +40,9 @@ mtp_num_speculative_tokens: 4
 mtp_draft_vocab: vocab/draft_vocab_en_code_47k.txt
 mtp_index_share: true
 mtp_disable_block_drop: 1
+# Block verification (Sun et al.) jointly verifies the draft block; lossless
+# w.r.t. the target distribution, gated by bench/output_gate.py.
+mtp_rejection_sample_method: block
 ple_offload: true
 qsa_profile: stock
 fp8_dense: false
