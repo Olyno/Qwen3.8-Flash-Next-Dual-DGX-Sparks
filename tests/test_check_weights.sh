@@ -129,10 +129,14 @@ SCP
 chmod +x "$WORK/bin/ssh" "$WORK/bin/scp"
 
 # --- .env for check-weights.sh ----------------------------------------------
+# Post-reorg, model config comes from the recipe (default prod, a local
+# model_path checkpoint). OVERRIDE_MODEL_ID pins the Hub repo this fixture
+# builds, and NODES=2 keeps the worker check (stub ssh) in the run.
 cat > .env <<ENV
 HEAD_IP=10.0.0.1
 WORKER_IP=10.0.0.2
-MODEL_ID=org/model
+NODES=2
+OVERRIDE_MODEL_ID=org/model
 IFACE=eth0
 HF_HOME=$HF_HOME
 ENV

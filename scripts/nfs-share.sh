@@ -112,5 +112,12 @@ nfs_ensure_worker_volume() {
 
 nfs_worker_has_model() {
     local rel="$1"
-    ssh_worker "docker run --rm -v '${NFS_VOLUME}:/hf:ro' alpine:latest test -d '/hf/${rel}'" >/dev/null 2>&1
+    local probe_err
+    if probe_err=$(ssh_worker "docker run --rm -v '${NFS_VOLUME}:/hf:ro' alpine:latest test -d '/hf/${rel}'" 2>&1 >/dev/null); then
+        return 0
+    fi
+    # A failed probe is not always "model missing": a docker/volume/pull error
+    # on the worker lands on stderr and would otherwise be misreported as such.
+    [[ -n "$probe_err" ]] && warn "NFS probe on worker failed: $probe_err"
+    return 1
 }

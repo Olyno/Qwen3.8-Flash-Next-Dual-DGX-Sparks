@@ -34,6 +34,15 @@
         HEAD_NET_ENV="-e GLOO_SOCKET_IFNAME=$IFACE -e NCCL_SOCKET_IFNAME=$IFACE -e TP_SOCKET_IFNAME=$IFACE -e NCCL_IB_DISABLE=0 -e NCCL_IB_HCA=$IB_HCA -e NCCL_IB_GID_INDEX=$IB_GID_INDEX -e NCCL_IB_AUTO_DETECT=0 -e NCCL_MAX_NCHANNELS=4"
     fi
 
+    # NCCL logging: INFO at NNODES=2 so a first dual boot shows the NET/IB
+    # bring-up in docker logs, WARN on a quiet single node. NCCL_DEBUG in the
+    # environment (or .env) overrides either way.
+    if [[ "$NNODES" -eq 2 ]]; then
+        NCCL_DEBUG="${NCCL_DEBUG:-INFO}"
+    else
+        NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
+    fi
+
     # Optional cpuset pinning (recipe key cpuset); same layout on both nodes.
     CPUSET_ARG=""
     [[ -n "$CPUSET" ]] && CPUSET_ARG="--cpuset-cpus $CPUSET"
@@ -51,11 +60,24 @@
     ssh_worker "docker rm -f vllm-fn >/dev/null 2>&1 || true"
     ssh_worker "mkdir -p '$REMOTE_HF' ~/.cache/vllm"
     WORKER_MODEL_MOUNT=""
-    if [[ -n "$MODEL_PATH" ]]; then
-        if ! ssh_worker "test -d '$WORKER_MODEL_PATH'" 2>/dev/null; then
-            err "WORKER is missing $WORKER_MODEL_PATH. Re-run ./start.sh without --launch to sync."
+    # --launch skips the sync, so test -d is not enough: probe completeness
+    # (indexed shards present) exactly like engine/pair.sh does before syncing.
+    worker_snapshot_ok() {  # worker_snapshot_ok <remote checkpoint dir>
+        local rc=2
+        if ssh_worker "test -d '$1'" 2>/dev/null; then
+            set +e
+            ssh_worker python3 - "$1" \
+                < "$SCRIPT_DIR/scripts/resolve_snapshot.py" >/dev/null
+            rc=$?
+            set -e
         fi
-        ok "Worker has a local checkpoint copy"
+        return "$rc"
+    }
+    if [[ -n "$MODEL_PATH" ]]; then
+        if ! worker_snapshot_ok "$WORKER_MODEL_PATH"; then
+            err "WORKER copy of $WORKER_MODEL_PATH is missing or incomplete. Re-run ./start.sh without --launch to sync."
+        fi
+        ok "Worker has a complete checkpoint copy"
         WORKER_HF_MOUNT="-v $REMOTE_HF:/root/.cache/huggingface"
         WORKER_MODEL_MOUNT="-v $WORKER_MODEL_PATH:/model:ro"
     elif [[ "$NFS_SHARE" == "true" ]]; then
@@ -67,10 +89,10 @@
         fi
         WORKER_HF_MOUNT="-v $NFS_VOLUME:/root/.cache/huggingface:ro"
     else
-        if ! ssh_worker "test -d '$REMOTE_HUB/models--${ORG}--${NAME}'" 2>/dev/null; then
-            err "WORKER is missing $REMOTE_HUB/models--${ORG}--${NAME}. Re-run ./start.sh without --launch to sync, or use --nfs."
+        if ! worker_snapshot_ok "$REMOTE_HUB/models--${ORG}--${NAME}"; then
+            err "WORKER snapshot $REMOTE_HUB/models--${ORG}--${NAME} is missing or incomplete. Re-run ./start.sh without --launch to sync, or use --nfs."
         fi
-        ok "Worker has a local checkpoint copy"
+        ok "Worker has a complete checkpoint copy"
         WORKER_HF_MOUNT="-v $REMOTE_HF:/root/.cache/huggingface"
     fi
 
@@ -124,11 +146,12 @@ docker run \
     -e NCCL_IB_GID_INDEX=$IB_GID_INDEX \
     -e NCCL_IB_AUTO_DETECT=0 \
     -e NCCL_MAX_NCHANNELS=4 \
-    -e NCCL_DEBUG=WARN \
+    -e NCCL_DEBUG=$NCCL_DEBUG \
     -e HF_HUB_OFFLINE=1 \
     -e TRANSFORMERS_OFFLINE=1 \
     -e VLLM_HOST_IP=$WORKER_IP \
     ${VLLM_ALLOW_LONG_MAX_MODEL_LEN:+-e VLLM_ALLOW_LONG_MAX_MODEL_LEN=$VLLM_ALLOW_LONG_MAX_MODEL_LEN} \
+    ${VLLM_BATCH_INVARIANT:+-e VLLM_BATCH_INVARIANT=$VLLM_BATCH_INVARIANT} \
     $PLE_OFFLOAD_ENV \
     -e HF_HOME=/root/.cache/huggingface \
     $WORKER_PLE_MOUNT \
@@ -166,6 +189,13 @@ LAUNCH_EOF
     ok "Worker container started."
     info "  Waiting 15s for worker to initialize..."
     sleep 15
+    # `docker run -d` succeeding only means the container spawned — a worker
+    # that crashes in its first seconds (bad mount, missing checkpoint) would
+    # otherwise surface as a head-side NCCL hang.
+    if ! ssh_worker "docker ps --format '{{.Names}}'" 2>/dev/null | grep -q '^vllm-fn$'; then
+        ssh_worker "docker logs --tail 50 vllm-fn" 2>&1 || true
+        err "Worker container exited within 15s of start — see its log above; not launching the head."
+    fi
     fi
 
     # ---- Head (rank 0) ----
@@ -189,7 +219,7 @@ docker run \
     $CPUSET_ARG \
     $ALLOC_ENV \
     $HEAD_NET_ENV \
-    -e NCCL_DEBUG=WARN \
+    -e NCCL_DEBUG=$NCCL_DEBUG \
     -e HF_HUB_OFFLINE=1 \
     -e TRANSFORMERS_OFFLINE=1 \
     -e VLLM_HOST_IP=$HEAD_IP \
@@ -237,10 +267,19 @@ LAUNCH_EOF
     dump_failure_logs() {
         kill $LOGPID 2>/dev/null || true
         mkdir -p "$SCRIPT_DIR/logs"
-        local log="$SCRIPT_DIR/logs/vllm-fn-$(date +%s).log"
+        local ts log
+        ts=$(date +%s)
+        log="$SCRIPT_DIR/logs/vllm-fn-$ts.log"
         docker logs vllm-fn > "$log" 2>&1 || true
         warn "Container log archived to $log"
         grep -E 'ERROR|Traceback|Error' "$log" | tail -15
+        # The head log alone hides the usual dual-node failure: the worker died
+        # first and the head blocked on NCCL. Archive the worker side too.
+        if [[ "$NNODES" -eq 2 ]]; then
+            local wlog="$SCRIPT_DIR/logs/vllm-fn-worker-$ts.log"
+            ssh_worker "docker logs --tail 3000 vllm-fn" > "$wlog" 2>&1 || true
+            warn "Worker container log archived to $wlog"
+        fi
     }
 
     info "Waiting for /health to return 200 (deadline ${READY_TIMEOUT_S}s)..."
@@ -250,6 +289,14 @@ LAUNCH_EOF
         if ! docker ps --format '{{.Names}}' | grep -q '^vllm-fn$'; then
             dump_failure_logs
             err "Container vllm-fn exited unexpectedly. See the archived log above."
+        fi
+        # A dead worker otherwise costs the full timeout: the head just blocks
+        # in NCCL init and stays "running" until the deadline.
+        if [[ "$NNODES" -eq 2 ]] && ! ssh_worker "docker ps --format '{{.Names}}'" 2>/dev/null | grep -q '^vllm-fn$'; then
+            warn "Worker container vllm-fn is not running on $WORKER_IP — last 100 log lines:"
+            ssh_worker "docker logs --tail 100 vllm-fn" 2>&1 || true
+            dump_failure_logs
+            err "Worker container exited during boot. See its log above and the archived logs."
         fi
         # Give up once the readiness deadline passes
         if (( $(date +%s) > READY_DEADLINE )); then
