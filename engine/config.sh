@@ -46,6 +46,17 @@ if [[ "$NNODES" -eq 2 && -z "$WORKER_IP" ]]; then
     err "NODES=2 but WORKER_IP is not set in .env"
 fi
 
+# Topology-derived serving defaults — a recipe can still pin any of these.
+# Dual-node halves per-rank weights/KV/state: the full checkpoint fits on-GPU
+# (no PLE host table in the decode loop), the native 262144 context fits in
+# the doubled KV pool, and 8 seqs keeps the MTP verify batch tiny (8*(1+k)
+# << max_num_batched_tokens; mtp_block.py re-validates).
+if [[ -z "${PLE_OFFLOAD:-}" ]]; then
+    [[ "$NNODES" == 2 ]] && PLE_OFFLOAD=false || PLE_OFFLOAD=true
+fi
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-$([[ "$NNODES" == 2 ]] && echo 262144 || echo 65536)}"
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-$([[ "$NNODES" == 2 ]] && echo 8 || echo 4)}"
+
 # Validate required variables (recipe or .env must provide them)
 for var in HEAD_IP MAX_MODEL_LEN GPU_MEMORY_UTILIZATION MAX_NUM_SEQS \
            MAX_NUM_BATCHED_TOKENS PORT IMAGE \
@@ -70,6 +81,7 @@ WORKER_IFACE="${WORKER_IFACE:-${IFACE:-}}"
 WORKER_IB_HCA="${WORKER_IB_HCA:-${IB_HCA:-}}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-qwen3.8-flash-next}"
 TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-$NNODES}"
+[[ "$TENSOR_PARALLEL_SIZE" == "$NNODES" ]] || err "tensor_parallel_size=$TENSOR_PARALLEL_SIZE but NODES=$NNODES (one GPU per Spark — fix the recipe pin or NODES)"
 ENABLE_EXPERT_PARALLEL="${ENABLE_EXPERT_PARALLEL:-true}"
 MTP_NUM_SPECULATIVE_TOKENS="${MTP_NUM_SPECULATIVE_TOKENS:-3}"
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8}"   # fp8 needs patches/patch_qsa_fp8_kv.py, applied automatically in step 4f; auto = bf16
@@ -79,7 +91,8 @@ KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8}"   # fp8 needs patches/patch_qsa_fp8_kv.p
 # costs to read and write every step, and halves the mamba page, which lets
 # vLLM pick a smaller attention block. Empty keeps the checkpoint's float32.
 MAMBA_SSM_CACHE_DTYPE="${MAMBA_SSM_CACHE_DTYPE:-}"
-PLE_OFFLOAD="${PLE_OFFLOAD:-false}"
+# PLE_OFFLOAD default is topology-derived in the NODES block above.
+
 # SM12x plan table is keyed by TP=2 local shapes; at other TP sizes no plan
 # matches and the standard linear path is kept (patches/gb10_skinny_gemm),
 # so default it on only where it can engage. Recipe true/false overrides.
@@ -104,6 +117,7 @@ NFS_SHARE="${NFS_SHARE:-false}"
 # Optional: head ConnectX address used as the NFS server (auto-detected from IFACE).
 NFS_SERVER_IP="${NFS_SERVER_IP:-}"
 V030="${V030:-false}"
+[[ "$SKINNY_GEMM" != "true" || "$V030" == "true" ]] || warn "skinny_gemm ignored: the SM12x plan overlay only exists on the v030 lane (v030: false)."
 SKIP_PLE_PATCH="${SKIP_PLE_PATCH:-false}"
 # K3 lazy GDN state commit for MTP verify (v0.30 lane only,
 # patches/patch_gdn_lazy_v030.py): the verify kernel commits the fp32 GDN state
