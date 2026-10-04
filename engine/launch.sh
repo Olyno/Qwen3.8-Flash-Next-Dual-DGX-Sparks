@@ -34,6 +34,15 @@
         HEAD_NET_ENV="-e GLOO_SOCKET_IFNAME=$IFACE -e NCCL_SOCKET_IFNAME=$IFACE -e TP_SOCKET_IFNAME=$IFACE -e NCCL_IB_DISABLE=0 -e NCCL_IB_HCA=$IB_HCA -e NCCL_IB_GID_INDEX=$IB_GID_INDEX -e NCCL_IB_AUTO_DETECT=0 -e NCCL_MAX_NCHANNELS=4"
     fi
 
+    # NCCL logging: INFO at NNODES=2 so a first dual boot shows the NET/IB
+    # bring-up in docker logs, WARN on a quiet single node. NCCL_DEBUG in the
+    # environment (or .env) overrides either way.
+    if [[ "$NNODES" -eq 2 ]]; then
+        NCCL_DEBUG="${NCCL_DEBUG:-INFO}"
+    else
+        NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
+    fi
+
     # Optional cpuset pinning (recipe key cpuset); same layout on both nodes.
     CPUSET_ARG=""
     [[ -n "$CPUSET" ]] && CPUSET_ARG="--cpuset-cpus $CPUSET"
@@ -137,7 +146,7 @@ docker run \
     -e NCCL_IB_GID_INDEX=$IB_GID_INDEX \
     -e NCCL_IB_AUTO_DETECT=0 \
     -e NCCL_MAX_NCHANNELS=4 \
-    -e NCCL_DEBUG=WARN \
+    -e NCCL_DEBUG=$NCCL_DEBUG \
     -e HF_HUB_OFFLINE=1 \
     -e TRANSFORMERS_OFFLINE=1 \
     -e VLLM_HOST_IP=$WORKER_IP \
@@ -210,7 +219,7 @@ docker run \
     $CPUSET_ARG \
     $ALLOC_ENV \
     $HEAD_NET_ENV \
-    -e NCCL_DEBUG=WARN \
+    -e NCCL_DEBUG=$NCCL_DEBUG \
     -e HF_HUB_OFFLINE=1 \
     -e TRANSFORMERS_OFFLINE=1 \
     -e VLLM_HOST_IP=$HEAD_IP \
