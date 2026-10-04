@@ -38,6 +38,13 @@
     CPUSET_ARG=""
     [[ -n "$CPUSET" ]] && CPUSET_ARG="--cpuset-cpus $CPUSET"
 
+    # Allocator tuning, quality-neutral and vendor-validated on this hardware.
+    # expandable_segments cuts CUDA-allocator fragmentation near the pool cap
+    # (sfxnz dual-Spark recipe, every evidence boot). The glibc thresholds make
+    # the loader return big freed blocks to the OS at once instead of keeping
+    # them resident — and eventually swapped (myllmbox single-Spark recipe).
+    ALLOC_ENV="-e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True -e MALLOC_MMAP_THRESHOLD_=65536 -e MALLOC_TRIM_THRESHOLD_=131072"
+
     # ---- Worker (rank 1) ----
     if [[ "$NNODES" -eq 2 ]]; then
     info "--- Launching worker (rank 1) on $WORKER_IP ---"
@@ -108,6 +115,7 @@ docker run \
     --cap-add SYS_NICE --ulimit memlock=-1 --ulimit stack=67108864 \
     --device /dev/infiniband:/dev/infiniband \
     $CPUSET_ARG \
+    $ALLOC_ENV \
     -e GLOO_SOCKET_IFNAME=$WORKER_IFACE \
     -e NCCL_SOCKET_IFNAME=$WORKER_IFACE \
     -e TP_SOCKET_IFNAME=$WORKER_IFACE \
@@ -179,6 +187,7 @@ docker run \
     --cap-add SYS_NICE --ulimit memlock=-1 --ulimit stack=67108864 \
     --device /dev/infiniband:/dev/infiniband \
     $CPUSET_ARG \
+    $ALLOC_ENV \
     $HEAD_NET_ENV \
     -e NCCL_DEBUG=WARN \
     -e HF_HUB_OFFLINE=1 \
