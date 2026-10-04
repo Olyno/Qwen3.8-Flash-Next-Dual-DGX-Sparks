@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # check-weights.sh — Verify the checkpoint on the head and on the worker.
 #
+# The model comes from the recipe (recipes/<RECIPE>.yaml, default prod), exactly
+# like start.sh: a recipe model_path is checked as a local checkpoint dir
+# (presence + size only — there is no HF manifest to hash against), a Hub repo
+# through the HF cache layout. OVERRIDE_MODEL_ID=<org/repo> pins a Hub repo
+# regardless of the recipe. The worker is checked only at NODES=2.
+#
 # Default (NFS_SHARE=false): the worker keeps its own copy (HF_HOME / WORKER_HF_HOME aware).
 # NFS_SHARE=true: the worker has no local copy and is checked through the NFS volume.
 #
@@ -86,34 +92,66 @@ ABLIT="${ABLIT:-0}"
 [[ -n "$_CLI_FP8_DENSE" ]] && FP8_DENSE="$_CLI_FP8_DENSE"
 
 WORKER_USER="${WORKER_USER:-}"
-WORKER_IP="${WORKER_IP:?WORKER_IP not set in .env}"
-MODEL_ID="${MODEL_ID:?MODEL_ID not set in .env}"
+NODES="${NODES:-1}"
+[[ "$NODES" == "1" || "$NODES" == "2" ]] || err "NODES must be 1 or 2 (got: '$NODES')"
+
+# Serving config comes from the recipe, exactly like engine/config.sh: the
+# recipe wins over .env for every key it sets. Post-reorg .env carries machine
+# truth only, so MODEL_ID / model_path live in recipes/<RECIPE>.yaml.
+RECIPE="${RECIPE:-prod}"
+eval "$(python3 "$SCRIPT_DIR/../engine/recipe.py" "$SCRIPT_DIR/../recipes" "$RECIPE")" \
+    || err "failed to load recipe '$RECIPE'"
+info "Recipe: recipes/$RECIPE.yaml"
+
+# A recipe's model_path is a local checkpoint dir (bind-mounted at /model,
+# never downloaded, no HF manifest); without one the model is a Hub repo.
+MODEL_PATH="${MODEL_PATH:-}"
+MODEL_PATH="${MODEL_PATH/#\~/$HOME}"
 ABLIT_MODEL_ID="drowzeys/keys-Qwen3.8-Flash-Next-NVFP4-dual-ablit-house-qsa-L3-47"
 FP8_DENSE="${FP8_DENSE:-false}"
 FP8_DENSE_MODEL_ID="${FP8_DENSE_MODEL_ID:-MiaAI-Lab/Qwen3.8-Flash-Next-NVFP4-FP8dense}"
 if [[ -n "${OVERRIDE_MODEL_ID:-}" ]]; then
+    # Explicit "check this Hub repo" — beats the recipe's checkpoint, local or not.
     MODEL_ID="$OVERRIDE_MODEL_ID"
+    MODEL_PATH=""
 fi
-if [[ "$FP8_DENSE" == "true" ]]; then
-    MODEL_ID="$FP8_DENSE_MODEL_ID"
-fi
-if [[ "$ABLIT" == "1" ]]; then
+if [[ -z "$MODEL_PATH" ]]; then
     if [[ "$FP8_DENSE" == "true" ]]; then
-        warn "ABLIT=1 ignored for checkpoint selection: FP8_DENSE=true (MODEL_ID=$MODEL_ID)"
-    elif [[ -n "${OVERRIDE_MODEL_ID:-}" && "$MODEL_ID" != "$ABLIT_MODEL_ID" ]]; then
-        warn "ABLIT=1 ignored for checkpoint selection: OVERRIDE_MODEL_ID=$MODEL_ID"
-    else
-        MODEL_ID="$ABLIT_MODEL_ID"
+        MODEL_ID="$FP8_DENSE_MODEL_ID"
     fi
+    if [[ "$ABLIT" == "1" ]]; then
+        if [[ "$FP8_DENSE" == "true" ]]; then
+            warn "ABLIT=1 ignored for checkpoint selection: FP8_DENSE=true (MODEL_ID=$MODEL_ID)"
+        elif [[ -n "${OVERRIDE_MODEL_ID:-}" && "$MODEL_ID" != "$ABLIT_MODEL_ID" ]]; then
+            warn "ABLIT=1 ignored for checkpoint selection: OVERRIDE_MODEL_ID=$MODEL_ID"
+        else
+            MODEL_ID="$ABLIT_MODEL_ID"
+        fi
+    fi
+    MODEL_ID="${MODEL_ID:-}"
+    [[ -n "$MODEL_ID" ]] || err "MODEL_ID is not set (checked recipes/$RECIPE.yaml and .env)"
 fi
-IFACE="${IFACE:?IFACE not set in .env}"
+if [[ "$NODES" == "2" ]]; then
+    WORKER_IP="${WORKER_IP:?NODES=2 but WORKER_IP is not set in .env}"
+fi
 NFS_SHARE="${NFS_SHARE:-false}"
 NFS_SERVER_IP="${NFS_SERVER_IP:-}"
+if [[ "$NFS_SHARE" == "true" && "$NODES" == "2" ]]; then
+    IFACE="${IFACE:?NFS_SHARE=true at NODES=2 but IFACE is not set in .env}"
+fi
 HF_CACHE_DIR="${HF_HOME:-$HOME/.cache/huggingface}"
 HUB_PATH="$HF_CACHE_DIR/hub"
-ORG="${MODEL_ID%%/*}"
-NAME="${MODEL_ID##*/}"
-MODEL_REL="hub/models--${ORG}--${NAME}"
+if [[ -n "$MODEL_PATH" ]]; then
+    MODEL_ID="${MODEL_ID:-local/$(basename "$MODEL_PATH")}"
+    if $DO_VERIFY; then
+        err "--verify hashes against the HF manifest and needs a Hub repo; recipe '$RECIPE' uses model_path ($MODEL_PATH). Pass OVERRIDE_MODEL_ID=<org/repo> to check a Hub repo."
+    fi
+    MODEL_REL=""
+else
+    ORG="${MODEL_ID%%/*}"
+    NAME="${MODEL_ID##*/}"
+    MODEL_REL="hub/models--${ORG}--${NAME}"
+fi
 
 # Resolve the local model directory exactly like start.sh does: the standard
 # hub path (blobs/refs/snapshots) first, then the `hf path` CLI if the hub dir
@@ -149,7 +187,11 @@ resolve_model_dir() {
     return 1
 }
 
-MODEL_PATH="$(resolve_model_dir 2>/dev/null || echo "$HUB_PATH/models--${ORG}--${NAME}")"
+if [[ -n "$MODEL_PATH" ]]; then
+    HEAD_DIR="$MODEL_PATH"
+else
+    HEAD_DIR="$(resolve_model_dir 2>/dev/null || echo "$HUB_PATH/models--${ORG}--${NAME}")"
+fi
 
 ssh_worker() {
     local user_prefix=""
@@ -164,22 +206,28 @@ ssh_worker() {
 # absolute roots per node (e.g. /home/user/models-gigabyte on head vs
 # /home/user/models on worker) with the same layout, so an explicit
 # WORKER_MODEL_PATH override in .env is the reliable way to pin it; without it
-# we mirror the head's HF_HOME under the worker's $HOME. The worker is
-# expected to keep the standard hub path there. No guessing beyond that, for
-# the same reason as resolve_model_dir above: check_node reports a missing
-# worker copy as NOT FOUND, which is honest, while a guessed dir would not be.
+# a local checkpoint defaults to the worker's ~/models/<name> (like
+# engine/cache.sh) and a Hub repo mirrors the head's HF_HOME under the
+# worker's $HOME. No guessing beyond that, for the same reason as
+# resolve_model_dir above: check_node reports a missing worker copy as
+# NOT FOUND, which is honest, while a guessed dir would not be.
+# Single node: no worker, no ssh.
 WORKER_MODEL_PATH="${WORKER_MODEL_PATH:-}"
-if [[ -z "$WORKER_MODEL_PATH" ]]; then
+if [[ "$NODES" == "2" && -z "$WORKER_MODEL_PATH" ]]; then
     REMOTE_HOME="$HOME"
     REMOTE_HOME=$(ssh_worker "echo \"\$HOME\"" 2>/dev/null || echo "$HOME")
-    if [[ -n "${WORKER_HF_HOME:-}" ]]; then
-        REMOTE_HF="$WORKER_HF_HOME"
-    elif [[ "$HF_CACHE_DIR" == "$HOME" || "$HF_CACHE_DIR" == "$HOME/"* ]]; then
-        REMOTE_HF="${REMOTE_HOME}${HF_CACHE_DIR#"$HOME"}"
+    if [[ -n "$MODEL_PATH" ]]; then
+        WORKER_MODEL_PATH="$REMOTE_HOME/models/$(basename "$MODEL_PATH")"
     else
-        REMOTE_HF="$HF_CACHE_DIR"
+        if [[ -n "${WORKER_HF_HOME:-}" ]]; then
+            REMOTE_HF="$WORKER_HF_HOME"
+        elif [[ "$HF_CACHE_DIR" == "$HOME" || "$HF_CACHE_DIR" == "$HOME/"* ]]; then
+            REMOTE_HF="${REMOTE_HOME}${HF_CACHE_DIR#"$HOME"}"
+        else
+            REMOTE_HF="$HF_CACHE_DIR"
+        fi
+        WORKER_MODEL_PATH="$REMOTE_HF/hub/models--${ORG}--${NAME}"
     fi
-    WORKER_MODEL_PATH="$REMOTE_HF/hub/models--${ORG}--${NAME}"
 fi
 
 # Translate the verifier's exit status into a message. verify-weights.py
@@ -276,8 +324,12 @@ echo "Checking weights for: $MODEL_ID"
 if [[ "$ABLIT" == "1" && "$MODEL_ID" == "$ABLIT_MODEL_ID" ]]; then
     echo "ABLIT=1 (gated Keys house QSA L3-47)"
 fi
-echo "Head cache:   $MODEL_PATH"
-echo "Worker cache: $WORKER_MODEL_PATH"
+echo "Head cache:   $HEAD_DIR"
+if [[ "$NODES" == "2" ]]; then
+    echo "Worker cache: $WORKER_MODEL_PATH"
+else
+    echo "Single node (NODES=1) — no worker check"
+fi
 echo ""
 
 # Export for verify-weights.py, which resolves the default model path from the
@@ -322,9 +374,11 @@ fi
 HEAD_OK=false
 WORKER_OK=false
 
-check_node "HEAD  ($HEAD_IP)" "$MODEL_PATH" "local" && HEAD_OK=true
+check_node "HEAD  ($HEAD_IP)" "$HEAD_DIR" "local" && HEAD_OK=true
 
-if [[ "$NFS_SHARE" == "true" ]]; then
+if [[ "$NODES" == "1" ]]; then
+    WORKER_OK=true
+elif [[ "$NFS_SHARE" == "true" ]]; then
     # Worker keeps no local copy; verify through the NFS volume instead.
     if docker ps --format '{{.Names}}' | grep -qx "$NFS_CONTAINER"; then
         nfs_detect_server_ip
@@ -346,15 +400,23 @@ fi
 echo ""
 
 if $HEAD_OK && $WORKER_OK; then
-    if [[ "$NFS_SHARE" == "true" ]]; then
+    if [[ "$NODES" == "1" ]]; then
+        echo "✅ Weights present on head (single node)."
+    elif [[ "$NFS_SHARE" == "true" ]]; then
         echo "✅ Weights on head, visible to worker over NFS (no local worker copy required)."
     else
         echo "✅ Weights present on both nodes."
     fi
     exit 0
 else
-    echo "❌ Weights not available on both sides."
-    [[ "$HEAD_OK" == "false" ]] && echo "   → Run: ./start.sh (no --no-download) to fetch to head"
+    echo "❌ Weights not available."
+    if [[ "$HEAD_OK" == "false" ]]; then
+        if [[ -n "$MODEL_PATH" ]]; then
+            echo "   → Stage the checkpoint at $MODEL_PATH (recipe '$RECIPE' model_path; nothing downloads it)"
+        else
+            echo "   → Run: ./start.sh (no --no-download) to fetch to head"
+        fi
+    fi
     if [[ "$WORKER_OK" == "false" ]]; then
         if [[ "$NFS_SHARE" == "true" ]]; then
             echo "   → Run: ./start.sh --no-launch --nfs to export the head cache over NFS"
