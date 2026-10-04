@@ -12,12 +12,14 @@
         REMOTE_ID=$(ssh_worker "docker image inspect --format '{{.Id}}' '$IMAGE' 2>/dev/null" || echo "")
     fi
 
-    if [[ "$NNODES" -eq 2 && "$LOCAL_ID" != "$REMOTE_ID" ]]; then
-        info "Pulling image on worker..."
-        ssh_worker "docker pull '$IMAGE'"
-        ok "Image ready on worker."
-    else
-        ok "Image already on worker."
+    if [[ "$NNODES" -eq 2 ]]; then
+        if [[ "$LOCAL_ID" != "$REMOTE_ID" ]]; then
+            info "Pulling image on worker..."
+            ssh_worker "docker pull '$IMAGE'"
+            ok "Image ready on worker."
+        else
+            ok "Image already on worker."
+        fi
     fi
 
     # ---------------------------------------------------------------------------
