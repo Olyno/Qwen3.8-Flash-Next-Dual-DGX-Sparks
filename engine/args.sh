@@ -63,6 +63,7 @@
     fi
 
     VLLM_ARGS+=("--compilation-config" "$(printf "'{\"mode\":0,\"cudagraph_mode\":\"FULL_DECODE_ONLY\"}'")")
+    [[ "$ASYNC_SCHEDULING" == "true" ]] && VLLM_ARGS+=("--async-scheduling")
 
     # hf-overrides: ONE merged payload, nested under "text_config".
     # vLLM's ModelConfig._apply_dict_overrides only recurses into keys that are
