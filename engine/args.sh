@@ -31,6 +31,15 @@
         VLLM_ARGS+=("--all2all-backend" "allgather_reducescatter")
     fi
 
+    # Refuse illegal MTP configs before weight loading (scripts/mtp_block.py:
+    # ring-capacity legality of k against the block the engine derives for
+    # this k + dtypes, k=1 dominated, widest verify batch vs token budget).
+    if [[ "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]]; then
+        python3 "$SCRIPT_DIR/scripts/mtp_block.py" "$PLE_CONFIG_DIR/config.json" \
+            "$MTP_NUM_SPECULATIVE_TOKENS" "$MAX_NUM_SEQS" "$MAX_NUM_BATCHED_TOKENS" \
+            "$MAMBA_SSM_CACHE_DTYPE" "$KV_CACHE_DTYPE" || err "illegal MTP config (see above)"
+    fi
+
     # JSON args: use printf to build properly quoted strings for the heredoc
     if [[ "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]]; then
         _SPEC_EXTRA=""
