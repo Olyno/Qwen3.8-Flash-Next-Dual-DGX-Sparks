@@ -3,7 +3,7 @@
 
 Uses ignore_eos so every run decodes exactly N tokens.
 
-  python3 bench/decodebench.py --decode 600 --contexts 1000,600000 --temps 0.0
+  python3 bench/decodebench.py --decode 600 --contexts 1000,48000 --temps 0.0
 
 Findings that motivated the shape of this script:
   * decode is dominated by MTP acceptance, not context length
@@ -16,7 +16,7 @@ Findings that motivated the shape of this script:
 """
 import json, time, argparse, urllib.request
 
-BASE, MODEL = "http://localhost:8888", "qwen3.8-flash-next"
+BASE, MODEL = "http://localhost:8888", "Qwen3.8-Flash-Next-NVFP4"
 FILLER = ("Entry {i:06d}: the quarterly logistics audit recorded a routine "
           "variance in the northbound depot inventory.\n")
 TASKS = {
@@ -64,7 +64,7 @@ def run(ctx, task, n, temp):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--decode", type=int, default=600)
-    ap.add_argument("--contexts", default="1000,600000")
+    ap.add_argument("--contexts", default="1000,48000")
     ap.add_argument("--temps", default="0.0,0.8")
     a = ap.parse_args()
     print(f"{'context':>9} {'temp':>5} {'content':<8} {'ptok':>9} {'ctok':>6} {'TTFT s':>9} {'dec tok/s':>10}")
