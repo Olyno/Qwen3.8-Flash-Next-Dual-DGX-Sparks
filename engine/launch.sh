@@ -51,11 +51,24 @@
     ssh_worker "docker rm -f vllm-fn >/dev/null 2>&1 || true"
     ssh_worker "mkdir -p '$REMOTE_HF' ~/.cache/vllm"
     WORKER_MODEL_MOUNT=""
-    if [[ -n "$MODEL_PATH" ]]; then
-        if ! ssh_worker "test -d '$WORKER_MODEL_PATH'" 2>/dev/null; then
-            err "WORKER is missing $WORKER_MODEL_PATH. Re-run ./start.sh without --launch to sync."
+    # --launch skips the sync, so test -d is not enough: probe completeness
+    # (indexed shards present) exactly like engine/pair.sh does before syncing.
+    worker_snapshot_ok() {  # worker_snapshot_ok <remote checkpoint dir>
+        local rc=2
+        if ssh_worker "test -d '$1'" 2>/dev/null; then
+            set +e
+            ssh_worker python3 - "$1" \
+                < "$SCRIPT_DIR/scripts/resolve_snapshot.py" >/dev/null
+            rc=$?
+            set -e
         fi
-        ok "Worker has a local checkpoint copy"
+        return "$rc"
+    }
+    if [[ -n "$MODEL_PATH" ]]; then
+        if ! worker_snapshot_ok "$WORKER_MODEL_PATH"; then
+            err "WORKER copy of $WORKER_MODEL_PATH is missing or incomplete. Re-run ./start.sh without --launch to sync."
+        fi
+        ok "Worker has a complete checkpoint copy"
         WORKER_HF_MOUNT="-v $REMOTE_HF:/root/.cache/huggingface"
         WORKER_MODEL_MOUNT="-v $WORKER_MODEL_PATH:/model:ro"
     elif [[ "$NFS_SHARE" == "true" ]]; then
@@ -67,10 +80,10 @@
         fi
         WORKER_HF_MOUNT="-v $NFS_VOLUME:/root/.cache/huggingface:ro"
     else
-        if ! ssh_worker "test -d '$REMOTE_HUB/models--${ORG}--${NAME}'" 2>/dev/null; then
-            err "WORKER is missing $REMOTE_HUB/models--${ORG}--${NAME}. Re-run ./start.sh without --launch to sync, or use --nfs."
+        if ! worker_snapshot_ok "$REMOTE_HUB/models--${ORG}--${NAME}"; then
+            err "WORKER snapshot $REMOTE_HUB/models--${ORG}--${NAME} is missing or incomplete. Re-run ./start.sh without --launch to sync, or use --nfs."
         fi
-        ok "Worker has a local checkpoint copy"
+        ok "Worker has a complete checkpoint copy"
         WORKER_HF_MOUNT="-v $REMOTE_HF:/root/.cache/huggingface"
     fi
 
