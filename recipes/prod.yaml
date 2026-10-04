@@ -56,7 +56,9 @@ mtp_rejection_sample_method: block
 ple_offload: true
 qsa_profile: stock
 fp8_dense: false
-skinny_gemm: false  # GB10 SM12x skinny-GEMM plan overlay; TP=2-tuned, off until boot-verified
+# skinny_gemm: GB10 SM12x skinny-GEMM plan overlay. Plans are TP=2 local
+# shapes, so config.sh auto-enables it at TP=2 (NODES=2); a plan miss keeps
+# the standard linear path. Set true/false here to override.
 # sfxnz "bit-exact" v030 overlay ports, default OFF until boot-verified.
 # lazy_gdn: K3 lazy GDN state commit for MTP verify (~4x fewer GDN state
 # writes/step; bitwise-pinned to stock by a load-time self-test). Requires an
