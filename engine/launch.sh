@@ -241,6 +241,9 @@ LAUNCH_EOF
             kill $LOGPID 2>/dev/null || true
             echo ""
             ok "vLLM is ready and serving on port $PORT!"
+            # Host-memory watchdog, now that the load-time memory ramp is over.
+            "$SCRIPT_DIR/scripts/start-memwatch.sh" vllm-fn >/dev/null
+            info "Memory watchdog running (logs/memwatch-vllm-fn.log)"
             info ""
             info "Test with:"
             info "  curl http://localhost:$PORT/v1/chat/completions \\"
