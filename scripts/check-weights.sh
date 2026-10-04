@@ -155,8 +155,9 @@ ssh_worker() {
     local user_prefix=""
     [[ -n "$WORKER_USER" ]] && user_prefix="${WORKER_USER}@"
     # Fail fast when the worker is unreachable (e.g. cluster in use elsewhere)
-    # instead of hanging on the default TCP timeout.
-    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "${user_prefix}$WORKER_IP" "$@"
+    # instead of hanging on the default TCP timeout, and never prompt for a
+    # password (BatchMode).
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 "${user_prefix}$WORKER_IP" "$@"
 }
 
 # Resolve the worker's model directory. Mirrored clusters often use different
