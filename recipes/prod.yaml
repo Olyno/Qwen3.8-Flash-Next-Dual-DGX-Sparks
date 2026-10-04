@@ -6,11 +6,11 @@
 # at /model, never downloaded. vLLM 0.30 lane: PLE handling and the
 # block-drop fix are native, FP8 KV comes from the v030 backport overlay.
 #
-# Serving shape targets a single Spark (NODES=1): TP follows the node count,
-# and the PLE mmap offload parks ~48 GiB of expert weights in a file-backed
-# host table so the model fits at TP=1. Context and concurrency are the
-# vendor-validated single-Spark values; raising max_model_len toward the
-# native 262144 is a KV-fit sweep, not a config default.
+# Serving shape follows the topology (NODES in .env): at NODES=1 the PLE mmap
+# offload parks ~48 GiB of expert weights in a file-backed host table so the
+# model fits at TP=1; at NODES=2 config.sh derives ple_offload: false,
+# max_model_len: 262144 (native, no YaRN) and max_num_seqs: 8 from the halved
+# per-rank footprint. Pin any of them here to override.
 name: prod
 image: vllm/vllm-openai:v0.30.0@sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90
 v030: true
@@ -21,7 +21,7 @@ served_model_name: Qwen3.8-Flash-Next-NVFP4  # what client tools match on /v1/mo
 # CoD (Chain-of-Draft) prior baked into the template's default reasoning
 # instructions — the overthinking-lab P2 arm, applied to every client.
 chat_template: chat_template_cod.jinja
-max_model_len: 65536
+# max_model_len: derived from NODES (65536 at 1 node, native 262144 at 2).
 yarn_enable: false
 yarn_factor: 4.0
 # 0.75 fits the unified-memory pool: ~23 GiB is always held by the host/driver,
@@ -31,7 +31,7 @@ yarn_factor: 4.0
 # (NV_ERR_NO_MEMORY) and memwatch stops the container. 0.72 keeps ~370K
 # tokens of KV (prod needs 262K) and ~11 GiB of host headroom.
 gpu_memory_utilization: 0.72
-max_num_seqs: 4
+# max_num_seqs: derived from NODES (4 at 1 node, 8 at 2).
 max_num_batched_tokens: 8192
 # Chunk long prefills at 4800: a full-budget 48K prefill spikes ~1.3 GiB in
 # one step and trips the memwatch 6 GiB floor (sfxnz runs this on GB10).
@@ -53,7 +53,8 @@ mtp_disable_block_drop: 1
 # Block verification (Sun et al.) jointly verifies the draft block; lossless
 # w.r.t. the target distribution, gated by bench/output_gate.py.
 mtp_rejection_sample_method: block
-ple_offload: true
+# ple_offload: derived from NODES (true at 1 node — experts don't fit on-GPU;
+# false at 2 — halved per-rank weights leave the host table out of the loop).
 qsa_profile: stock
 fp8_dense: false
 # skinny_gemm: GB10 SM12x skinny-GEMM plan overlay. Plans are TP=2 local
