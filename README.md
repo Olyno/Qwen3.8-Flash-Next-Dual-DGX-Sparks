@@ -1,8 +1,9 @@
-# Qwen3.8-Flash-Next on Dual DGX Sparks
+# Qwen3.8-Flash-Next on DGX Spark
 
 Serve [Qwen3.8-Flash-Next](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-NVFP4)
-across a 2-node DGX Spark cluster with vLLM: TP=2 over ConnectX, expert
-parallelism, MTP speculative decoding, 262K native context.
+on a single DGX Spark, or across a 2-node cluster, with vLLM: expert
+parallelism, MTP speculative decoding, PLE offload, up to 262K native context.
+Topology is `NODES=1|2` in `.env`; TP follows the node count.
 
 Based on [getrefined/Qwen3.8-Flash-Next-NVFP4-vLLM-DGX-Spark](https://github.com/getrefined/Qwen3.8-Flash-Next-NVFP4-vLLM-DGX-Spark).
 
@@ -10,7 +11,7 @@ Based on [getrefined/Qwen3.8-Flash-Next-NVFP4-vLLM-DGX-Spark](https://github.com
 
 ```
 start.sh          thin entrypoint: recipe → engine/* → boot
-stop.sh           tear down both nodes
+stop.sh           tear down the server (and the worker, when NODES=2)
 download.sh       fetch HF weights onto the head (HF recipes only)
 engine/           the boot pipeline, one file per step (config, cache, pair,
                   verify, patches, prepare, args, launch) + recipe.py loader
@@ -26,8 +27,9 @@ docs/             notes
 
 Config is split in two, on purpose:
 
-- **`.env`** — machine truth only: cluster IPs, interface, InfiniBand, secrets.
-  Copy `.env.example` and edit. Never holds serving knobs.
+- **`.env`** — machine truth only: `NODES` (1 = single Spark, 2 = head +
+  worker), cluster IPs, interface, InfiniBand, secrets. Copy `.env.example`
+  and edit. Never holds serving knobs.
 - **`recipes/<name>.yaml`** — the complete serving config: model, image, KV
   dtype, MTP, ports. A recipe wins over `.env` for every key it sets, so a
   stale `.env` value can never silently take effect. `RECIPE=<name> ./start.sh`
@@ -42,10 +44,11 @@ All new optimizations land in `prod.yaml`.
 
 ## Prerequisites
 
-- Two DGX Sparks wired over ConnectX, passwordless ssh from head to worker,
-  Docker on both.
-- `.env` filled in (`cp .env.example .env`): `HEAD_IP`, `WORKER_IP`, `IFACE`,
-  `IB_HCA`, `IB_GID_INDEX` — see the comments in the file.
+- One DGX Spark (NODES=1), or two wired over ConnectX with passwordless ssh
+  from head to worker (NODES=2). Docker on each.
+- `.env` filled in (`cp .env.example .env`): `NODES`, `HEAD_IP`, and for
+  NODES=2 also `WORKER_IP`, `IFACE`, `IB_HCA`, `IB_GID_INDEX` — see the
+  comments in the file.
 - For `prod`: the local checkpoint at the recipe's `model_path`
   (default `~/models/Qwen3.8-Flash-Next-NVFP4-lean`) on the head.
 - For `mia`: `./download.sh` once (fetches the nvidia checkpoint onto the head).
@@ -53,15 +56,15 @@ All new optimizations land in `prod.yaml`.
 ## Quick start
 
 ```bash
-./start.sh                 # prod: sync local weights to worker if needed → patch → launch
+./start.sh                 # default: patch → launch (syncs weights to the worker first when NODES=2)
 RECIPE=mia ./start.sh      # vendor reference: download (if needed) → sync → patch → launch
 
 curl http://localhost:8888/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3.8-flash-next","messages":[{"role":"user","content":"Hello"}]}'
+  -d '{"model":"Qwen3.8-Flash-Next-NVFP4","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-`./stop.sh` stops both nodes.
+`./stop.sh` stops the server (and the worker, when NODES=2).
 
 ## Flags
 
@@ -77,11 +80,11 @@ curl http://localhost:8888/v1/chat/completions \
 
 A recipe with `model_path: <dir>` serves a plain checkpoint directory — no HF
 repo, no download. The dir is verified (every shard in the safetensors index
-must exist), rsynced to the worker's `~/models/<name>` once, and bind-mounted
-at `/model` in both containers. `model_path` is mutually exclusive with
-`nfs_share` and `ABLIT=1`.
+must exist) and bind-mounted at `/model` in the container (on NODES=2 it is
+also rsynced to the worker's `~/models/<name>` once). `model_path` is mutually
+exclusive with `nfs_share` and `ABLIT=1`.
 
-## NFS weight sharing (optional, HF recipes)
+## NFS weight sharing (optional, HF recipes, NODES=2 only)
 
 Off by default: each node keeps its own checkpoint copy, rsynced from the head
 once. With NFS the head exports its HF cache over ConnectX and the worker
