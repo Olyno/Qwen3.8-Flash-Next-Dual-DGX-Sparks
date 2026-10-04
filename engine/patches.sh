@@ -232,6 +232,8 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     fi
     OVERLAY_ENV+=("-e VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/tmp/fi_autotune")
     OVERLAY_ENV+=("-e VLLM_USE_BREAKABLE_CUDAGRAPH=${V030_BREAKABLE_CUDAGRAPH:-0}")
+    [[ "${V030_BREAKABLE_CUDAGRAPH:-0}" == "1" && "$PLE_OFFLOAD" == "true" ]] && \
+        warn "breakable cudagraphs + PLE offload = silent nondeterminism (vllm#58489, unfixed in v0.30) — keep V030_BREAKABLE_CUDAGRAPH=0"
 fi
 if $DO_LAUNCH && [[ "$V030" == "true" ]] && { [[ -n "$MTP_DRAFT_VOCAB" ]] || [[ "$FP8_DRAFT_HEAD" == "true" ]]; }; then
     info "=== Step 4e: MTP draft head (vLLM 0.30) ==="
