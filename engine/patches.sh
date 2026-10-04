@@ -149,6 +149,21 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
                     "$VLLM_PKG/models/qwen4_exp/common/qsa_cache.py"
         OVERLAY_ENV+=("-e VLLM_QSA_FUSED_DRAFT=1")
     fi
+    if [[ "$QSA_ROPE_CLAMP" == "true" ]]; then
+        info "=== Step 4c: QSA pre-indexer RoPE clamp (vLLM 0.30) ==="
+        # Port of myllmbox/vllm@9ff17c0 (patches/patch_qsa_rope_clamp_v030.py):
+        # the pre-indexer's _norm_rope loads cos_sin[pos] unchecked; CUDA-graph
+        # warmup dummy positions can index past the cos/sin table (IMA on
+        # SM121/GB10). The clamp compiles in only with VLLM_QSA_ROPE_CLAMP=1;
+        # the constexpr-off branch is the bit-exact stock kernel.
+        mkdir -p "$SCRIPT_DIR/patches/v030_qsa_rope/orig"
+        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_pre_indexer.py" \
+                           "$SCRIPT_DIR/patches/v030_qsa_rope/orig/qsa_pre_indexer.py"
+        python3 "$SCRIPT_DIR/patches/patch_qsa_rope_clamp_v030.py" || err "patch_qsa_rope_clamp_v030.py failed"
+        add_overlay "$SCRIPT_DIR/patches/v030_qsa_rope/qsa_pre_indexer_v030.py" \
+                    "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_pre_indexer.py"
+        OVERLAY_ENV+=("-e VLLM_QSA_ROPE_CLAMP=1")
+    fi
     OVERLAY_ENV+=("-e VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/tmp/fi_autotune")
     OVERLAY_ENV+=("-e VLLM_USE_BREAKABLE_CUDAGRAPH=${V030_BREAKABLE_CUDAGRAPH:-0}")
 fi

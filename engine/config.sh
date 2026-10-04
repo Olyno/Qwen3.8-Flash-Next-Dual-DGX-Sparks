@@ -109,9 +109,15 @@ FP8_DRAFT_HEAD="${FP8_DRAFT_HEAD:-false}"
 # the speculator's in-place update between draft steps instead of a full
 # attention-metadata rebuild per step (vllm#58449 port). Needs k > 1.
 QSA_FUSED_DRAFT="${QSA_FUSED_DRAFT:-false}"
+# Clamp QSA pre-indexer RoPE positions into the cos/sin table (v0.30 lane
+# only, patches/patch_qsa_rope_clamp_v030.py): stock reads cos_sin[pos]
+# unchecked, and CUDA-graph warmup dummy positions can index past the table
+# (IMA on SM121/GB10).
+QSA_ROPE_CLAMP="${QSA_ROPE_CLAMP:-false}"
 [[ "$LAZY_GDN" != "true" || "$V030" == "true" ]] || err "lazy_gdn is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$FP8_DRAFT_HEAD" != "true" || "$V030" == "true" ]] || err "fp8_draft_head is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$QSA_FUSED_DRAFT" != "true" || "$V030" == "true" ]] || err "qsa_fused_draft is only supported on the vLLM 0.30 lane (v030: true)."
+[[ "$QSA_ROPE_CLAMP" != "true" || "$V030" == "true" ]] || err "qsa_rope_clamp is only supported on the vLLM 0.30 lane (v030: true)."
 # FP8-dense hybrid checkpoint (NVFP4 experts + FP8 per-channel dense projections,
 # built by scripts/fp8dense/make_fp8_dense_checkpoint.py). Needs the vLLM overlay
 # patches in overlays/fp8dense (bind-mounted, no image rebuild).
