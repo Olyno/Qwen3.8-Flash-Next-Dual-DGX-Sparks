@@ -68,6 +68,11 @@ fp8_dense: false
 # (~2x less draft-head bandwidth; composes with mtp_draft_vocab).
 lazy_gdn: false
 fp8_draft_head: false
+# replayssm_gdn: ReplaySSM-GDN spec decode (vllm#47576 port, spec-only): MTP
+# verify reads an fp32 checkpoint + d/k/g ring instead of the per-token GDN
+# state slots (~2x smaller mamba page, one checkpoint rewrite per ring fill).
+# Mutually exclusive with lazy_gdn; needs mtp_num_speculative_tokens > 0.
+replayssm_gdn: false
 # Pass --async-scheduling explicitly. vLLM 0.30 already resolves it ON for
 # MTP + the mp executor, so false changes nothing today; true pins it.
 async_scheduling: false
