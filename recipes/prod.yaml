@@ -46,7 +46,7 @@ mm_encoder_tp_mode: data
 # A725) — measured +2-3 % at every concurrency in the vendor single-Spark
 # recipe; scheduling only, no output change.
 cpuset: "5-9,15-19"
-mtp_num_speculative_tokens: 3
+mtp_num_speculative_tokens: 4
 mtp_draft_vocab: vocab/draft_vocab_en_code_47k.txt
 mtp_index_share: true
 mtp_disable_block_drop: 1
