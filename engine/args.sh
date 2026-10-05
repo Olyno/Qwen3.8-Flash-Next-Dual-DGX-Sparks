@@ -56,6 +56,7 @@
             [[ -z "$MTP_DRAFT_VOCAB" ]] || err "mtp_draft_sample_method requires mtp_draft_vocab to be unset"
             _SPEC_EXTRA+=",\"draft_sample_method\":\"$MTP_DRAFT_SAMPLE_METHOD\""
         fi
+        [[ -n "$DRAFT_MOE_BACKEND" ]] && _SPEC_EXTRA+=",\"moe_backend\":\"$DRAFT_MOE_BACKEND\""
         if [[ -n "$MTP_DRAFT_VOCAB" ]]; then
             # get_top_tokens (added by patch_mtp_draft_vocab.py) is only reached
             # through this flag; it also cuts the draft all-gather from
@@ -67,6 +68,7 @@
     fi
 
     VLLM_ARGS+=("--compilation-config" "$(printf "'{\"mode\":0,\"cudagraph_mode\":\"FULL_DECODE_ONLY\"}'")")
+    [[ -n "$MOE_BACKEND" ]] && VLLM_ARGS+=("--kernel-config" "$(printf "'{\"moe_backend\":\"%s\"}'" "$MOE_BACKEND")")
     # Known cross-node hazard (vllm#46253): CUDA-graph capture can die with an
     # illegal memory access at capture_end on multi-node. If boot crashes
     # there, rerun with EXTRA_VLLM_ARGS="--enforce-eager".
