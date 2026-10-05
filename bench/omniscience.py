@@ -19,6 +19,7 @@ import argparse
 import csv
 import json
 import sys
+import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
@@ -49,9 +50,15 @@ def chat(url, model, messages, max_tokens):
     req = urllib.request.Request(
         f"{url}/v1/chat/completions", data=body,
         headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=600) as r:
-        choice = json.load(r)["choices"][0]
-    return choice["message"].get("content") or "", choice.get("finish_reason")
+    for attempt in range(6):
+        try:
+            with urllib.request.urlopen(req, timeout=900) as r:
+                choice = json.load(r)["choices"][0]
+            return choice["message"].get("content") or "", choice.get("finish_reason")
+        except Exception:
+            if attempt == 5:
+                raise
+            time.sleep(min(30 * (attempt + 1), 120))  # server busy (shared 4-seq queue) or rebooting
 
 
 def classify(text):
