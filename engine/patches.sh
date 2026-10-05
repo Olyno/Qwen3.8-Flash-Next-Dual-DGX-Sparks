@@ -101,6 +101,17 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     add_overlay "$QP/qsa_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/qsa.py"
     add_overlay "$QP/indexer_qsa_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/indexer_qsa.py"
     add_overlay "$QP/qsa_prepare_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_prepare.py"
+    info "=== Step 4c: QSA prefill logits workspace (vllm#57105, vLLM 0.30) ==="
+    # Backport of vllm#57105 (patches/qsa_logits_workspace/): the chunked
+    # prefill scoring loop sliced a fresh torch.empty per chunk; the overlay
+    # allocates the worst-case fp32 workspace once and slices per-chunk views
+    # out of it, keeping large transients out of the (unified-memory)
+    # allocator. Quality-neutral (same kernel, same math), so no toggle.
+    QW="$SCRIPT_DIR/patches/qsa_logits_workspace"
+    mkdir -p "$QW/orig"
+    extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_indexer.py" "$QW/orig/qsa_indexer.py"
+    python3 "$QW/apply_patch.py" || err "qsa_logits_workspace apply_patch.py failed"
+    add_overlay "$QW/qsa_indexer_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_indexer.py"
     [[ "$VLLM_QSA_DET_TOPK" == "1" || "$VLLM_MOE_DET_FINALIZE" == "1" ]] && err "V030: the determinism knobs are not ported to vLLM 0.30."
     if [[ "$PLE_OFFLOAD" == "true" ]]; then
         info "=== Step 4c: PLE mmap offload (vLLM 0.30) ==="

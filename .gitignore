@@ -78,3 +78,5 @@ patches/replayssm_gdn/orig/
 patches/replayssm_gdn/*_v030.py
 patches/qsa_prepare/orig/
 patches/qsa_prepare/*_v030.py
+patches/qsa_logits_workspace/orig/
+patches/qsa_logits_workspace/*_v030.py
