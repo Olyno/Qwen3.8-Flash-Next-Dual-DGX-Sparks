@@ -112,6 +112,25 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_indexer.py" "$QW/orig/qsa_indexer.py"
     python3 "$QW/apply_patch.py" || err "qsa_logits_workspace apply_patch.py failed"
     add_overlay "$QW/qsa_indexer_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_indexer.py"
+    info "=== Step 4c: HC down+SiLU fused GEMM (vllm#58957, vLLM 0.30) ==="
+    # Backport of vllm#58957 (patches/hc_down_silu/): fuses the hyperconnection
+    # down-projection + SiLU gate into a single CuTe-DSL GEMM and registers a
+    # cutedsl warmup provider. Quality-neutral (production bf16 rounding
+    # boundary preserved; upstream pins against the ll_bf16+hc_silu reference)
+    # and the fused path self-gates (bf16 weight, K%8==0, SM90+, 1<=M<=48, not
+    # VLLM_BATCH_INVARIANT), so no toggle. model.py overlaps replayssm_gdn's
+    # target, which chains off this block's output below.
+    HC="$SCRIPT_DIR/patches/hc_down_silu"
+    mkdir -p "$HC/orig"
+    extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/hyperconnection.py" "$HC/orig/hyperconnection.py"
+    extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/model.py" "$HC/orig/model.py"
+    python3 "$HC/apply_patch.py" || err "hc_down_silu apply_patch.py failed"
+    add_overlay "$HC/hyperconnection_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/hyperconnection.py"
+    add_overlay "$HC/model_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/model.py"
+    add_overlay "$HC/__init__.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/__init__.py"
+    add_overlay "$HC/hc_down_silu.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/hc_down_silu.py"
+    add_overlay "$HC/_hc_down_silu_fma.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/_hc_down_silu_fma.py"
+    add_overlay "$HC/_hc_down_silu_mma.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/_hc_down_silu_mma.py"
     [[ "$VLLM_QSA_DET_TOPK" == "1" || "$VLLM_MOE_DET_FINALIZE" == "1" ]] && err "V030: the determinism knobs are not ported to vLLM 0.30."
     if [[ "$PLE_OFFLOAD" == "true" ]]; then
         info "=== Step 4c: PLE mmap offload (vLLM 0.30) ==="
@@ -195,8 +214,10 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
                            "$RG/orig/qwen_gdn_linear_attn.py"
         extract_from_image "$VLLM_PKG/v1/attention/backends/gdn_attn.py" \
                            "$RG/orig/gdn_attn.py"
-        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/model.py" \
-                           "$RG/orig/model.py"
+        # Chain off the hc_down_silu block's model.py output (always produced
+        # above); the two patchers touch non-overlapping regions of model.py.
+        cp "$SCRIPT_DIR/patches/hc_down_silu/model_v030.py" \
+           "$RG/orig/model.py"
         extract_from_image "$VLLM_PKG/model_executor/layers/mamba/ops/replayssm_config.py" \
                            "$RG/orig/replayssm_config.py"
         python3 "$RG/apply_patch.py" || err "replayssm_gdn apply_patch.py failed"
