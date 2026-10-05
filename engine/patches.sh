@@ -72,9 +72,35 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         python3 "$SCRIPT_DIR/patches/patch_qsa_fp8_kv_v030.py" || err "patch_qsa_fp8_kv_v030.py failed"
         cp "$SCRIPT_DIR/patches/v030_fp8kv/qsa.py" "$SCRIPT_DIR/patches/v030_fp8kv/qsa_nvidia_v030.py"
         cp "$SCRIPT_DIR/patches/v030_fp8kv/ops/qsa.py" "$SCRIPT_DIR/patches/v030_fp8kv/qsa_ops_v030.py"
-        add_overlay "$SCRIPT_DIR/patches/v030_fp8kv/qsa_nvidia_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/qsa.py"
+        # nvidia/qsa.py is NOT mounted here: the QSA-prepare block below
+        # re-patches this output with the vllm#57097 fusion and mounts the
+        # result (the two patches touch non-overlapping regions).
         add_overlay "$SCRIPT_DIR/patches/v030_fp8kv/qsa_ops_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa.py"
     fi
+    info "=== Step 4c: QSA prepare fusion (vllm#57097 backport, vLLM 0.30) ==="
+    # Backport of vllm#57097 (patches/qsa_prepare/): the indexer prepare
+    # launch also does the main attention's QK-norm/RoPE/gate and the main
+    # K/V cache write (ops/qsa_pre_indexer.py becomes ops/qsa_prepare.py), so
+    # _project_qkv_gate and do_kv_cache_update drop out of the hot path.
+    # Quality-neutral (same math, one launch instead of three), so no toggle:
+    # fused mode self-gates on use_fused_qk_norm_rope_gate and
+    # indexer.use_fused_pre_indexer and otherwise runs the stock paths. With
+    # KV_CACHE_DTYPE=fp8 the qsa.py input is the FP8-KV overlay output above;
+    # the fused kernel writes the e4m3 cache with the same per-tensor scales.
+    QP="$SCRIPT_DIR/patches/qsa_prepare"
+    mkdir -p "$QP/orig"
+    extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/qsa.py" "$QP/orig/qsa_stock.py"
+    extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/indexer_qsa.py" "$QP/orig/indexer_qsa.py"
+    extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_pre_indexer.py" "$QP/orig/qsa_pre_indexer.py"
+    if [[ "$KV_CACHE_DTYPE" == fp8* ]]; then
+        cp "$SCRIPT_DIR/patches/v030_fp8kv/qsa_nvidia_v030.py" "$QP/orig/qsa.py"
+    else
+        cp "$QP/orig/qsa_stock.py" "$QP/orig/qsa.py"
+    fi
+    python3 "$QP/apply_patch.py" || err "qsa_prepare apply_patch.py failed"
+    add_overlay "$QP/qsa_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/qsa.py"
+    add_overlay "$QP/indexer_qsa_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/indexer_qsa.py"
+    add_overlay "$QP/qsa_prepare_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_prepare.py"
     [[ "$VLLM_QSA_DET_TOPK" == "1" || "$VLLM_MOE_DET_FINALIZE" == "1" ]] && err "V030: the determinism knobs are not ported to vLLM 0.30."
     if [[ "$PLE_OFFLOAD" == "true" ]]; then
         info "=== Step 4c: PLE mmap offload (vLLM 0.30) ==="
@@ -202,17 +228,14 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     fi
     if [[ "$QSA_ROPE_CLAMP" == "true" ]]; then
         info "=== Step 4c: QSA pre-indexer RoPE clamp (vLLM 0.30) ==="
-        # Port of myllmbox/vllm@9ff17c0 (patches/patch_qsa_rope_clamp_v030.py):
-        # the pre-indexer's _norm_rope loads cos_sin[pos] unchecked; CUDA-graph
-        # warmup dummy positions can index past the cos/sin table (IMA on
-        # SM121/GB10). The clamp compiles in only with VLLM_QSA_ROPE_CLAMP=1;
-        # the constexpr-off branch is the bit-exact stock kernel.
-        mkdir -p "$SCRIPT_DIR/patches/v030_qsa_rope/orig"
-        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_pre_indexer.py" \
-                           "$SCRIPT_DIR/patches/v030_qsa_rope/orig/qsa_pre_indexer.py"
-        python3 "$SCRIPT_DIR/patches/patch_qsa_rope_clamp_v030.py" || err "patch_qsa_rope_clamp_v030.py failed"
-        add_overlay "$SCRIPT_DIR/patches/v030_qsa_rope/qsa_pre_indexer_v030.py" \
-                    "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_pre_indexer.py"
+        # The clamp (myllmbox/vllm@9ff17c0) now lives inside the qsa_prepare
+        # overlay above: the vllm#57097 backport replaces qsa_pre_indexer.py
+        # outright, so patches/patch_qsa_rope_clamp_v030.py's CLAMP_POS/
+        # MAX_POS deltas are folded into patches/qsa_prepare (main-attention
+        # section included), behind the same VLLM_QSA_ROPE_CLAMP constexpr
+        # gate — bit-exact stock kernel when off. Only the env flag is set
+        # here; the standalone patcher is kept for reference but no longer
+        # wired.
         OVERLAY_ENV+=("-e VLLM_QSA_ROPE_CLAMP=1")
     fi
     if [[ "$LOAD_DROP_CACHE" == "true" ]]; then
