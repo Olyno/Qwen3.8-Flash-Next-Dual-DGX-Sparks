@@ -76,3 +76,5 @@ patches/v030_qsa_rope/
 patches/v030_dropcache/
 patches/replayssm_gdn/orig/
 patches/replayssm_gdn/*_v030.py
+patches/qsa_prepare/orig/
+patches/qsa_prepare/*_v030.py
