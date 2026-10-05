@@ -104,6 +104,11 @@ fi
 # NVFP4 kernels require input features % 16 == 0, so replicate the encoder on each GPU.
 MM_ENCODER_TP_MODE="${MM_ENCODER_TP_MODE:-data}"
 EXTRA_VLLM_ARGS="${EXTRA_VLLM_ARGS:-}"
+# MoE backend overrides (v0.30 kernel config). Empty = vLLM auto per quant type.
+# flashinfer_b12x only supports NVFP4, so with our mixed checkpoint the FP8
+# block-scale draft experts must be pinned separately (DRAFT_MOE_BACKEND=auto).
+MOE_BACKEND="${MOE_BACKEND:-}"
+DRAFT_MOE_BACKEND="${DRAFT_MOE_BACKEND:-}"
 # Optional docker --cpuset-cpus for the vLLM container (both ranks). The GB10
 # mixes ten 3.9 GHz Cortex-X925 cores (5-9,15-19) with ten 2.8 GHz A725 cores
 # (0-4,10-14); pinning to the X925 set measured +2-3 % at every concurrency in
