@@ -131,6 +131,22 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     add_overlay "$HC/hc_down_silu.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/hc_down_silu.py"
     add_overlay "$HC/_hc_down_silu_fma.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/_hc_down_silu_fma.py"
     add_overlay "$HC/_hc_down_silu_mma.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/_hc_down_silu_mma.py"
+    info "=== Step 4c: PLE short-conv metadata sync removal (vllm#58114, vLLM 0.30) ==="
+    # Backport of vllm#58114 (patches/ple_metadata_syncs/): the PLE short-conv
+    # metadata builder computed causal_conv1d Triton metadata and CPU
+    # query-loc mirrors that no PLE consumer reads — pure GPU sync + host
+    # plumbing overhead per step. Behavior-neutral (removed fields default to
+    # None on BaseMambaAttentionMetadata; ple_layer now reads the already
+    # populated query_start_loc_p), so no toggle.
+    PM="$SCRIPT_DIR/patches/ple_metadata_syncs"
+    mkdir -p "$PM/orig"
+    extract_from_image "$VLLM_PKG/v1/attention/backends/mamba_attn.py" "$PM/orig/mamba_attn.py"
+    extract_from_image "$VLLM_PKG/v1/attention/backends/short_conv_attn.py" "$PM/orig/short_conv_attn.py"
+    extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ple_layer.py" "$PM/orig/ple_layer.py"
+    python3 "$PM/apply_patch.py" || err "ple_metadata_syncs apply_patch.py failed"
+    add_overlay "$PM/mamba_attn_v030.py" "$VLLM_PKG/v1/attention/backends/mamba_attn.py"
+    add_overlay "$PM/short_conv_attn_v030.py" "$VLLM_PKG/v1/attention/backends/short_conv_attn.py"
+    add_overlay "$PM/ple_layer_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ple_layer.py"
     [[ "$VLLM_QSA_DET_TOPK" == "1" || "$VLLM_MOE_DET_FINALIZE" == "1" ]] && err "V030: the determinism knobs are not ported to vLLM 0.30."
     if [[ "$PLE_OFFLOAD" == "true" ]]; then
         info "=== Step 4c: PLE mmap offload (vLLM 0.30) ==="

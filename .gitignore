@@ -84,3 +84,5 @@ patches/qsa_cache_views/orig/
 patches/qsa_cache_views/*_v030.py
 patches/hc_down_silu/orig/
 patches/hc_down_silu/*_v030.py
+patches/ple_metadata_syncs/orig/
+patches/ple_metadata_syncs/*_v030.py
