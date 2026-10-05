@@ -101,6 +101,17 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     add_overlay "$QP/qsa_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/qsa.py"
     add_overlay "$QP/indexer_qsa_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/indexer_qsa.py"
     add_overlay "$QP/qsa_prepare_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_prepare.py"
+    info "=== Step 4c: QSA prefill logits workspace (vllm#57105, vLLM 0.30) ==="
+    # Backport of vllm#57105 (patches/qsa_logits_workspace/): the chunked
+    # prefill scoring loop sliced a fresh torch.empty per chunk; the overlay
+    # allocates the worst-case fp32 workspace once and slices per-chunk views
+    # out of it, keeping large transients out of the (unified-memory)
+    # allocator. Quality-neutral (same kernel, same math), so no toggle.
+    QW="$SCRIPT_DIR/patches/qsa_logits_workspace"
+    mkdir -p "$QW/orig"
+    extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_indexer.py" "$QW/orig/qsa_indexer.py"
+    python3 "$QW/apply_patch.py" || err "qsa_logits_workspace apply_patch.py failed"
+    add_overlay "$QW/qsa_indexer_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_indexer.py"
     [[ "$VLLM_QSA_DET_TOPK" == "1" || "$VLLM_MOE_DET_FINALIZE" == "1" ]] && err "V030: the determinism knobs are not ported to vLLM 0.30."
     if [[ "$PLE_OFFLOAD" == "true" ]]; then
         info "=== Step 4c: PLE mmap offload (vLLM 0.30) ==="
@@ -222,10 +233,29 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         extract_from_image "$VLLM_PKG/models/qwen4_exp/common/qsa_cache.py" \
                            "$SCRIPT_DIR/patches/v030_qsa_fused/orig/qsa_cache.py"
         python3 "$SCRIPT_DIR/patches/patch_qsa_fused_draft_v030.py" || err "patch_qsa_fused_draft_v030.py failed"
-        add_overlay "$SCRIPT_DIR/patches/v030_qsa_fused/qsa_cache_v030.py" \
-                    "$VLLM_PKG/models/qwen4_exp/common/qsa_cache.py"
+        # qsa_cache.py is NOT mounted here: the qsa_cache_views block below
+        # re-patches this output with the vllm#58961 view-lifetime fix and
+        # mounts the result (the two patches touch non-overlapping regions).
         OVERLAY_ENV+=("-e VLLM_QSA_FUSED_DRAFT=1")
     fi
+    info "=== Step 4c: QSA key-cache view lifetime (vllm#58961, vLLM 0.30) ==="
+    # Backport of vllm#58961 (patches/qsa_cache_views/): key_cache and
+    # rope_position_cache become on-access properties instead of persistent
+    # views, so clear_layer_kv_caches actually frees the bound storage after
+    # CUDA-graph memory profiling (the pinned-block leak is real memory on a
+    # unified-memory box). Quality-neutral, so no toggle. With
+    # QSA_FUSED_DRAFT=true the input is the fused-draft overlay output above
+    # (non-overlapping regions); otherwise it is the stock file.
+    QV="$SCRIPT_DIR/patches/qsa_cache_views"
+    mkdir -p "$QV/orig"
+    extract_from_image "$VLLM_PKG/models/qwen4_exp/common/qsa_cache.py" "$QV/orig/qsa_cache_stock.py"
+    if [[ "$QSA_FUSED_DRAFT" == "true" ]]; then
+        cp "$SCRIPT_DIR/patches/v030_qsa_fused/qsa_cache_v030.py" "$QV/orig/qsa_cache.py"
+    else
+        cp "$QV/orig/qsa_cache_stock.py" "$QV/orig/qsa_cache.py"
+    fi
+    python3 "$QV/apply_patch.py" || err "qsa_cache_views apply_patch.py failed"
+    add_overlay "$QV/qsa_cache_v030.py" "$VLLM_PKG/models/qwen4_exp/common/qsa_cache.py"
     if [[ "$QSA_ROPE_CLAMP" == "true" ]]; then
         info "=== Step 4c: QSA pre-indexer RoPE clamp (vLLM 0.30) ==="
         # The clamp (myllmbox/vllm@9ff17c0) now lives inside the qsa_prepare
