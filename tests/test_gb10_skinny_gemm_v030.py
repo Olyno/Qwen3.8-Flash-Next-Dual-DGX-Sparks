@@ -65,6 +65,48 @@ class GB10SkinnyGemmV030(unittest.TestCase):
         )
         self.assertNotIn("a and b must be contiguous", kern)
 
+    def test_upstream_tp2_rows_match_vllm_59632(self):
+        r = self.run_patch()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        gemm = (self.out / "low_latency_gemm.py").read_text()
+        # The exact upstream-measured TP=2-local rows from vllm#59632 (merged
+        # 2026-10-05); the vendored myllmbox table carried the same
+        # measurements pre-merge. A drift here means the table no longer
+        # reflects the upstream backport.
+        rows_59632 = {
+            (48, 2560): [
+                "1: SkinnyGemmConfig(1, 128, 1, k_unroll=4, vector_width=4, static_k=2560)",
+                "2: SkinnyGemmConfig(2, 128, 2, k_unroll=4, vector_width=4, static_k=2560)",
+                "4: SkinnyGemmConfig(4, 128, 1, k_unroll=4, vector_width=4, static_k=2560)",
+                "8: SkinnyGemmConfig(8, 128, 1, k_unroll=4, vector_width=4, static_k=2560)",
+                "16: SkinnyGemmConfig(16, 128, 1, k_unroll=2, vector_width=4, static_k=2560)",
+            ],
+            (2560, 3072): [
+                "1: SkinnyGemmConfig(1, 128, 2, k_unroll=2, vector_width=4, static_k=3072)",
+                "2: SkinnyGemmConfig(2, 64, 2, k_unroll=2, static_k=3072)",
+                "4: SkinnyGemmConfig(4, 64, 2, k_unroll=2, static_k=3072)",
+            ],
+            (6656, 2560): [
+                "1: SkinnyGemmConfig(1, 128, 4, k_unroll=2, vector_width=4, static_k=2560)",
+                "2: SkinnyGemmConfig(2, 128, 4, k_unroll=2, vector_width=4, static_k=2560)",
+                "4: SkinnyGemmConfig(4, 64, 2, k_unroll=4, vector_width=4, static_k=2560)",
+            ],
+            (8192, 2560): [
+                "1: SkinnyGemmConfig(1, 128, 2, vector_width=4, static_k=2560)",
+                "2: SkinnyGemmConfig(2, 64, 2, k_unroll=2, static_k=2560)",
+                "4: SkinnyGemmConfig(4, 64, 2, k_unroll=4, vector_width=4, static_k=2560)",
+            ],
+            (124160, 2560): [
+                "1: SkinnyGemmConfig(1, 128, 2, k_unroll=4, vector_width=4)",
+                "2: SkinnyGemmConfig(2, 64, 2, k_unroll=2)",
+            ],
+        }
+        for shape, rows in rows_59632.items():
+            start = gemm.index(f"{shape}: {{")
+            block = gemm[start : gemm.index("},", start)]
+            for row in rows:
+                self.assertIn(row, block)
+
     def test_rerun_gives_same_output(self):
         self.assertEqual(self.run_patch().returncode, 0)
         first = {o: (self.out / o).read_text() for o in OUTS}
