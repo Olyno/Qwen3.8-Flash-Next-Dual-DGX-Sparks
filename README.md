@@ -177,6 +177,7 @@ with copied code are in [licenses/](licenses). The short version:
 | Omniscience benchmark data (`bench/data/`) | [ArtificialAnalysis/AA-Omniscience-Public](https://huggingface.co/datasets/ArtificialAnalysis/AA-Omniscience-Public) (Apache-2.0) |
 | Model | [nvidia/Qwen3.8-Flash-Next-NVFP4](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-NVFP4) |
 | Abliteration splice (`ABLIT=1`) | **Keys (drowzeys)** — gated; house QSA `o_proj` L3–47 on nvidia NVFP4 |
+| Decision proxy (`proxy/score_proxy.py`) | [autotrust/GEV-26B-Decide](https://huggingface.co/autotrust/GEV-26B-Decide) (confidence-gated escalation) and [autotrust/JEV-27B-VL](https://huggingface.co/autotrust/JEV-27B-VL) (scoring prompt rules) |
 
 ## License
 
