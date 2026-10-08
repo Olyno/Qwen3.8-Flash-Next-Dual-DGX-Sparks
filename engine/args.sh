@@ -18,6 +18,7 @@
     VLLM_ARGS+=("--max-model-len" "$MAX_MODEL_LEN")
     VLLM_ARGS+=("--kv-cache-dtype" "$KV_CACHE_DTYPE")
     [[ -n "$MAMBA_SSM_CACHE_DTYPE" ]] && VLLM_ARGS+=("--mamba-ssm-cache-dtype" "$MAMBA_SSM_CACHE_DTYPE")
+    [[ -n "$GDN_PREFILL_BACKEND" ]] && VLLM_ARGS+=("--gdn-prefill-backend" "$GDN_PREFILL_BACKEND")
     VLLM_ARGS+=("--load-format" "safetensors")
     VLLM_ARGS+=("--safetensors-load-strategy" "lazy")
     VLLM_ARGS+=("--enable-chunked-prefill")
