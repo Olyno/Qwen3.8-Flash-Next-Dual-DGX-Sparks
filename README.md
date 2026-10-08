@@ -170,7 +170,7 @@ with copied code are in [licenses/](licenses). The short version:
 | FP8 KV cache kernels, draft-vocabulary builder | [MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark) (AGPL-3.0-or-later) |
 | K3 lazy GDN commit, FP8 draft head, determinism knobs | [sfxnz/Qwen3.8-Flash-Next-NVFP4-vLLM-2x-DGX-Spark](https://github.com/sfxnz/Qwen3.8-Flash-Next-NVFP4-vLLM-2x-DGX-Spark) (MIT) |
 | QSA fused draft, RoPE clamp, loader cache drop, TP=2 skinny-GEMM rows | [myllmbox/qwen38-flash-next-recipe](https://github.com/myllmbox/qwen38-flash-next-recipe) (MIT) and its Apache-2.0 vLLM fork |
-| vLLM PR backports under `patches/` | [vllm-project/vllm](https://github.com/vllm-project/vllm) (Apache-2.0) — #47576, #53388, #53899, #55557, #57097, #57105, #57128, #58114, #58449, #58957, #58961, #59632, #59753; authors in NOTICE |
+| vLLM PR backports under `patches/` | [vllm-project/vllm](https://github.com/vllm-project/vllm) (Apache-2.0) — #47576, #53388, #53899, #55557, #57097, #57105, #57128, #58040, #58114, #58449, #58957, #58961, #59632, #59753; authors in NOTICE |
 | FP8-KV approach (via MiaAI-Lab) | [lancelind/qwen3.8-Flash-DGX](https://github.com/lancelind/qwen3.8-Flash-DGX) (Apache-2.0) |
 | Concurrency / prefill benchmarks | [MiaAI-Lab/sparkDash](https://github.com/MiaAI-Lab/sparkDash) |
 | Reduced draft vocabulary technique | [FR-Spec](https://arxiv.org/abs/2502.19797) |

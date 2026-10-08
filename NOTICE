@@ -33,6 +33,8 @@ License: Apache-2.0 (licenses/APACHE-2.0.LICENSE)
             -> patches/qsa_logits_workspace/
     #57128  MambaManager drop_eagle_block cache-hit fix (limwand, unmerged)
             -> patches/mamba_eagle_drop/
+    #58040  QSA metadata graph-padding clamp (shaopeng-666, unmerged)
+            -> patches/qsa_meta_clamp/
     #58114  PLE metadata sync removal (ZJY0516)
             -> patches/ple_metadata_syncs/
     #58449  QSA fused multi-step draft metadata (bilikaz, unmerged; ported

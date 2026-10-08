@@ -302,7 +302,9 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     # CUDA-graph memory profiling (the pinned-block leak is real memory on a
     # unified-memory box). Quality-neutral, so no toggle. With
     # QSA_FUSED_DRAFT=true the input is the fused-draft overlay output above
-    # (non-overlapping regions); otherwise it is the stock file.
+    # (non-overlapping regions); otherwise it is the stock file. The output
+    # is NOT mounted here: the qsa_meta_clamp block below re-patches it with
+    # the vllm#58040 graph-padding clamp and mounts the result.
     QV="$SCRIPT_DIR/patches/qsa_cache_views"
     mkdir -p "$QV/orig"
     extract_from_image "$VLLM_PKG/models/qwen4_exp/common/qsa_cache.py" "$QV/orig/qsa_cache_stock.py"
@@ -312,7 +314,20 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         cp "$QV/orig/qsa_cache_stock.py" "$QV/orig/qsa_cache.py"
     fi
     python3 "$QV/apply_patch.py" || err "qsa_cache_views apply_patch.py failed"
-    add_overlay "$QV/qsa_cache_v030.py" "$VLLM_PKG/models/qwen4_exp/common/qsa_cache.py"
+    info "=== Step 4c: QSA metadata graph-padding clamp (vllm#58040, vLLM 0.30) ==="
+    # Backport of vllm#58040 (patches/qsa_meta_clamp/): CUDA-graph capture
+    # pads query_start_loc_cpu[-1] past num_actual_tokens while the QSA
+    # metadata buffers hold only real tokens, so a padded decode step
+    # read/wrote past those buffers. Both metadata builders (and, with
+    # QSA_FUSED_DRAFT=true, the fused-draft inline call arg + recorded
+    # metadata field) now clamp the mapped count to num_actual_tokens.
+    # Correctness fix, so no toggle. Chains off the qsa_cache_views output
+    # above and mounts the result in its place.
+    QC="$SCRIPT_DIR/patches/qsa_meta_clamp"
+    mkdir -p "$QC/orig"
+    cp "$QV/qsa_cache_v030.py" "$QC/orig/qsa_cache.py"
+    python3 "$QC/apply_patch.py" || err "qsa_meta_clamp apply_patch.py failed"
+    add_overlay "$QC/qsa_cache_v030.py" "$VLLM_PKG/models/qwen4_exp/common/qsa_cache.py"
     if [[ "$QSA_ROPE_CLAMP" == "true" ]]; then
         info "=== Step 4c: QSA pre-indexer RoPE clamp (vLLM 0.30) ==="
         # The clamp (myllmbox/vllm@9ff17c0) now lives inside the qsa_prepare
