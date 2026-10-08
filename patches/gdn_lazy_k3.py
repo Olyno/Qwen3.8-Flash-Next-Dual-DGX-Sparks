@@ -1,8 +1,9 @@
 # K3 GDN MTP decode with lazy state commit (plan section 4 K3, L3; finding F08).
 #
 # Carried verbatim (MIT) from the sfxnz 2x-DGX-Spark recipe
-# (inferences-engines/Qwen3.8-Flash-Next-NVFP4-vLLM-2x-DGX-Spark,
-# docker/v030/gdn_lazy.py); design and evidence in its docker/v030/K3.md.
+# (https://github.com/sfxnz/Qwen3.8-Flash-Next-NVFP4-vLLM-2x-DGX-Spark,
+# docker/v030/gdn_lazy.py; license text: licenses/sfxnz-MIT.LICENSE);
+# design and evidence in its docker/v030/K3.md.
 # patch_gdn_lazy_v030.py embeds this file at the end of the patched
 # qwen_gdn_linear_attn.py, so it must stay a plain module: no __future__
 # import, every top-level name prefixed _gdl / gdl / GDL.

@@ -7,6 +7,10 @@ QSA_ROPE_CLAMP=true).
 Ports myllmbox/vllm@9ff17c016e68 ("Qwen4Exp: clamp QSA pre-indexer RoPE
 positions (CUDA-graph warmup IMA on SM121)") onto the stock v0.30.0 file:
 
+Upstream: https://github.com/myllmbox/qwen38-flash-next-recipe (MIT for kit
+scripts and image patches — see licenses/myllmbox-MIT.LICENSE); the
+myllmbox/vllm fork commit is an Apache-2.0 vLLM derivative.
+
     vllm/models/qwen4_exp/nvidia/ops/qsa_pre_indexer.py
     - _norm_rope loads cos_sin[pos] with no bounds check; CUDA-graph capture
       feeds dummy positions beyond the cos/sin table, which is an illegal

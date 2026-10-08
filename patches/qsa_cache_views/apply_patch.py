@@ -5,6 +5,9 @@
 
 Backports vllm-project/vllm#58961 onto the stock v0.30.0 file:
 
+Upstream: https://github.com/vllm-project/vllm/pull/58961 (lucifer1004),
+Apache-2.0.
+
     vllm/models/qwen4_exp/common/qsa_cache.py
     - QSAKeyStateCache.bind_kv_cache stored key_cache / rope_position_cache
       as persistent views of the bound KV storage. clear_layer_kv_caches

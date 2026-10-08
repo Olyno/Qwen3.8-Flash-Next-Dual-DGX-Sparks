@@ -8,6 +8,11 @@ Ports myllmbox/vllm@c3f56fe3b412 ("Qwen4Exp: QSA fused multi-step draft
 metadata", the code proposed upstream as vllm-project/vllm#58449) onto the
 stock v0.30.0 file:
 
+Upstream: https://github.com/vllm-project/vllm/pull/58449 (bilikaz,
+unmerged), Apache-2.0; ported from the myllmbox/vllm fork
+(https://github.com/myllmbox/qwen38-flash-next-recipe, MIT for kit scripts
+and image patches — see licenses/myllmbox-MIT.LICENSE).
+
     vllm/models/qwen4_exp/common/qsa_cache.py
     - build_qsa_metadata_triton: the kernel launch is factored into
       _launch_qsa_metadata_kernel (same grid, same arguments, in place on the

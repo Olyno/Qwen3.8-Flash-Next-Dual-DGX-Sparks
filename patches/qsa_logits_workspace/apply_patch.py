@@ -5,6 +5,9 @@
 
 Backports vllm-project/vllm#57105 onto the stock v0.30.0 file:
 
+Upstream: https://github.com/vllm-project/vllm/pull/57105 (gau-nernst),
+Apache-2.0.
+
     vllm/models/qwen4_exp/nvidia/ops/qsa_indexer.py
     - qsa_select_paged_prefill chunked its scoring loop to keep the temporary
       fp32 logits under VLLM_SPARSE_INDEXER_MAX_LOGITS_MB, but allocated a

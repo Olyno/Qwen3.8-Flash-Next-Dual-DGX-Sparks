@@ -4,6 +4,9 @@
 Ports the PLE quant dispatch from vLLM PR #53899 (qwen4_exp) onto the
 qwen3_8_flash_next NVIDIA ple_layer shipped in vllm/vllm-openai:qwen38-flash-next.
 
+Upstream: https://github.com/vllm-project/vllm/pull/53899 (peakcrosser7,
+unmerged), Apache-2.0.
+
 Checkpoints declare their PLE table format in text_config.ple_embedding_dtype:
   - "nvfp4"  -> uint8 packed rows (dim/2) + fp8 block scales + fp32 global scale
   - "float8_e4m3fn" / fp8 -> FP8 rows (full dim) + one global bf16/fp32 scale

@@ -5,6 +5,10 @@
 
 Backports vllm-project/vllm#58957 onto the stock v0.30.0 files:
 
+Upstream: https://github.com/vllm-project/vllm/pull/58957 (gau-nernst),
+Apache-2.0. The four CuTe-DSL statics are vendored verbatim from the PR and
+keep their upstream Apache-2.0/vLLM SPDX headers.
+
     vllm/models/qwen4_exp/nvidia/ops/cute_dsl/{__init__,hc_down_silu,
     _hc_down_silu_fma,_hc_down_silu_mma}.py
         Vendored verbatim from the PR (new files; mounted alongside the stock

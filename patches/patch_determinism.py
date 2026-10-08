@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 MiaAI Lab (https://x.com/MiaAI_lab)
+# The two knobs mirror the sfxnz 2x-DGX-Spark recipe's S15 determinism
+# overlay set (MIT — https://github.com/sfxnz/Qwen3.8-Flash-Next-NVFP4-vLLM-2x-DGX-Spark,
+# evidence/s15-determinism): a stable sorted QSA top-k order and the unfused
+# FlashInfer CUTLASS MoE finalize.
 import ast
 import os
 import sys
