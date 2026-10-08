@@ -86,3 +86,5 @@ patches/hc_down_silu/orig/
 patches/hc_down_silu/*_v030.py
 patches/ple_metadata_syncs/orig/
 patches/ple_metadata_syncs/*_v030.py
+patches/mamba_eagle_drop/orig/
+patches/mamba_eagle_drop/*_v030.py
