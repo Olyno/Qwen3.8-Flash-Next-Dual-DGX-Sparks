@@ -5,7 +5,9 @@ on a single DGX Spark, or across a 2-node cluster, with vLLM: expert
 parallelism, MTP speculative decoding, PLE offload, up to 262K native context.
 Topology is `NODES=1|2` in `.env`; TP follows the node count.
 
-Based on [getrefined/Qwen3.8-Flash-Next-NVFP4-vLLM-DGX-Spark](https://github.com/getrefined/Qwen3.8-Flash-Next-NVFP4-vLLM-DGX-Spark).
+Forked from [MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-Sparks](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-Sparks)
+(AGPL-3.0-or-later), itself based on
+[getrefined/Qwen3.8-Flash-Next-NVFP4-vLLM-DGX-Spark](https://github.com/getrefined/Qwen3.8-Flash-Next-NVFP4-vLLM-DGX-Spark).
 
 ## Layout
 
@@ -157,13 +159,22 @@ without it).
 
 ## Credits
 
+Full attribution — every upstream PR backport, ported overlay and vendored
+file, with licenses — lives in [NOTICE](NOTICE); license texts that must ship
+with copied code are in [licenses/](licenses). The short version:
+
 | | |
 |---|---|
-| Base deployment | [getrefined/Qwen3.8-Flash-Next-NVFP4-vLLM-DGX-Spark](https://github.com/getrefined/Qwen3.8-Flash-Next-NVFP4-vLLM-DGX-Spark) |
+| Upstream repository | [MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-Sparks](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-Sparks) (AGPL-3.0-or-later) |
+| Base deployment (via the above) | [getrefined/Qwen3.8-Flash-Next-NVFP4-vLLM-DGX-Spark](https://github.com/getrefined/Qwen3.8-Flash-Next-NVFP4-vLLM-DGX-Spark) |
 | FP8 KV cache kernels, draft-vocabulary builder | [MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark) (AGPL-3.0-or-later) |
-| FP8-KV approach (via the above) | [lancelind/qwen3.8-Flash-DGX](https://github.com/lancelind/qwen3.8-Flash-DGX) (Apache-2.0) |
+| K3 lazy GDN commit, FP8 draft head, determinism knobs | [sfxnz/Qwen3.8-Flash-Next-NVFP4-vLLM-2x-DGX-Spark](https://github.com/sfxnz/Qwen3.8-Flash-Next-NVFP4-vLLM-2x-DGX-Spark) (MIT) |
+| QSA fused draft, RoPE clamp, loader cache drop, TP=2 skinny-GEMM rows | [myllmbox/qwen38-flash-next-recipe](https://github.com/myllmbox/qwen38-flash-next-recipe) (MIT) and its Apache-2.0 vLLM fork |
+| vLLM PR backports under `patches/` | [vllm-project/vllm](https://github.com/vllm-project/vllm) (Apache-2.0) — #47576, #53388, #53899, #55557, #57097, #57105, #58114, #58449, #58957, #58961, #59632, #59753; authors in NOTICE |
+| FP8-KV approach (via MiaAI-Lab) | [lancelind/qwen3.8-Flash-DGX](https://github.com/lancelind/qwen3.8-Flash-DGX) (Apache-2.0) |
 | Concurrency / prefill benchmarks | [MiaAI-Lab/sparkDash](https://github.com/MiaAI-Lab/sparkDash) |
-| PLE quant dispatch | ported from vLLM PR #53899 (`qwen4_exp`) |
+| Reduced draft vocabulary technique | [FR-Spec](https://arxiv.org/abs/2502.19797) |
+| Omniscience benchmark data (`bench/data/`) | [ArtificialAnalysis/AA-Omniscience-Public](https://huggingface.co/datasets/ArtificialAnalysis/AA-Omniscience-Public) (Apache-2.0) |
 | Model | [nvidia/Qwen3.8-Flash-Next-NVFP4](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-NVFP4) |
 | Abliteration splice (`ABLIT=1`) | **Keys (drowzeys)** — gated; house QSA `o_proj` L3–47 on nvidia NVFP4 |
 
@@ -173,7 +184,7 @@ without it).
 [MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark),
 from which `patches/patch_qsa_fp8_kv.py` and `scripts/build_draft_vocab.py` are
 vendored. Those files are AGPL-3.0-or-later, so the repository that carries
-them has to be too.
+them has to be too. See [NOTICE](NOTICE) for the full attribution list.
 
 vLLM remains Apache-2.0; the container image and the model checkpoint are
 governed by their own upstream terms, and nothing here relicenses them. Files
