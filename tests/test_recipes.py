@@ -27,6 +27,8 @@ class TestRecipes(unittest.TestCase):
         self.assertIn("Qwen3.8-Flash-Next-NVFP4-lean", env["MODEL_PATH"])
         self.assertEqual(env["DO_DOWNLOAD_DEFAULT"], "false")
         self.assertEqual(env["MTP_NUM_SPECULATIVE_TOKENS"], "4")
+        # opt-in flags stay off by default; prod must not pin them
+        self.assertNotIn("GDN_PREFILL_BACKEND", env)
 
     def test_mia_is_vendor_reference(self):
         env = load("mia")
