@@ -7,10 +7,13 @@ decision features — see docs/score-proxy.md:
 
   POST /v1/score              score N options in one batched prefill
   POST /v1/chat/completions   confidence-gated thinking escalation
-                              ("escalate": true or PROXY_ESCALATE=1)
+                              ("escalate": true or PROXY_ESCALATE=1);
+                              streaming requests get a degenerate-repetition
+                              loop guard (PROXY_LOOP_GUARD=0 disables)
 
 Env: PROXY_UPSTREAM (default http://localhost:8888), PROXY_PORT (8889),
-PROXY_ESCALATE, PROXY_ESCALATE_THRESHOLD (-0.35). Stdlib only.
+PROXY_ESCALATE, PROXY_ESCALATE_THRESHOLD (-0.35),
+PROXY_LOOP_GUARD (1), PROXY_LOOP_GUARD_REPEAT (3). Stdlib only.
 """
 import http.client
 import json
@@ -41,6 +44,73 @@ def build_prefix(question, options):
         lines.append(line)
     lines += ["", "Answer: "]
     return "\n".join(lines)
+
+
+MIN_PHRASE = 20   # shortest repeated phrase (normalized chars) the guard sees
+WINDOW = 2048     # rolling normalized text kept for detection
+PAIR_RUN = 16     # 'ab' x PAIR_RUN (2-char unit) also counts as a loop
+
+
+def _degenerate_tail(text, repeat):
+    """True if the normalized text ends in the same >=MIN_PHRASE phrase
+    repeated `repeat` times, or in a 2-char unit repeated PAIR_RUN times.
+    Tail-anchored on purpose: legit repetition that already ended (code,
+    tables) must not trigger — only a loop still running at the frontier."""
+    n = len(text)
+    if n >= 2 * PAIR_RUN and text.endswith(text[n - 2:] * PAIR_RUN):
+        return True
+    for p in range(MIN_PHRASE, n // repeat + 1):
+        if text.endswith(text[n - p:] * repeat):
+            return True
+    return False
+
+
+class LoopGuard:
+    """Streaming repetition detector for SSE chat responses. Raw chunks are
+    relayed untouched; only delta text is kept (rolling, normalized) for
+    detection. ponytail: tail-anchored check + 20-char minimum can still
+    false-positive on pathological legit output (e.g. 3+ identical long JSON
+    rows back-to-back, or 32+ dashes of table separator at the frontier) —
+    PROXY_LOOP_GUARD=0 is the escape hatch."""
+
+    def __init__(self, repeat):
+        self.repeat = repeat
+        self._pending = b""  # bytes of an SSE event split across chunks
+        self._text = ""      # rolling normalized window
+
+    def feed(self, chunk):
+        """Inspect one raw upstream chunk; True => degenerate loop detected."""
+        *events, self._pending = (self._pending + chunk).split(b"\n\n")
+        for event in events:
+            for line in event.split(b"\n"):
+                if not line.startswith(b"data:"):
+                    continue
+                payload = line[5:].strip()
+                if not payload or payload == b"[DONE]":
+                    continue
+                try:
+                    obj = json.loads(payload)
+                except ValueError:
+                    continue  # unparseable event: relay it, just don't score it
+                delta = ((obj.get("choices") or [{}])[0].get("delta") or {})
+                piece = delta.get("content") or delta.get("reasoning_content") or ""
+                if piece:
+                    self._text = (self._text
+                                  + " ".join(piece.split()).lower())[-WINDOW:]
+                    if _degenerate_tail(self._text, self.repeat):
+                        return True
+        return False
+
+    @staticmethod
+    def final_chunk():
+        # finish_reason 'stop' (not 'content_filter'/'length': neither is what
+        # happened — the proxy cut a loop). The cut stays machine-detectable
+        # via a top-level extension field; delta text is left unpolluted and
+        # SSE framing stays valid.
+        note = json.dumps({"choices": [{"index": 0, "delta": {},
+                                        "finish_reason": "stop"}],
+                           "x_proxy": {"loop_guard": "cut"}})
+        return f"data: {note}\n\ndata: [DONE]\n\n".encode()
 
 
 def post_json(upstream, path, body):
@@ -104,19 +174,19 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
             self._send_json(400, {"error": str(e)})
 
-    def _passthrough(self, body):
+    def _passthrough(self, body, guard=None):
         conn = http.client.HTTPConnection(*self.server.upstream, timeout=600)
         try:
             headers = {k: v for k, v in self.headers.items()
                        if k.lower() not in HOP_BY_HOP | {"host", "content-length"}}
             conn.request(self.command, self.path, body=body, headers=headers)
-            self._relay(conn.getresponse())
+            self._relay(conn.getresponse(), guard)
         except (OSError, http.client.HTTPException):
             self._send_json(502, {"error": "upstream unreachable"})
         finally:
-            conn.close()
+            conn.close()  # on a guard cut this aborts upstream generation
 
-    def _relay(self, resp):
+    def _relay(self, resp, guard=None):
         self.send_response(resp.status)
         for k, v in resp.getheaders():
             if k.lower() not in HOP_BY_HOP:
@@ -128,6 +198,10 @@ class Handler(BaseHTTPRequestHandler):
         while chunk := resp.read1(65536):
             self.wfile.write(chunk)
             self.wfile.flush()
+            if guard is not None and guard.feed(chunk):
+                self.wfile.write(guard.final_chunk())
+                self.wfile.flush()
+                break
 
     def _score(self, body):
         req = json.loads(body)
@@ -157,8 +231,13 @@ class Handler(BaseHTTPRequestHandler):
     def _chat(self, body):
         req = json.loads(body)
         escalate = self.server.escalate_env or req.get("escalate") is True
-        if req.get("stream") or not escalate:
-            # streaming requests always pass through untouched
+        if req.get("stream"):
+            # escalation needs the full response; streams pass through with
+            # only the loop guard watching the deltas
+            guard = (LoopGuard(self.server.loop_repeat)
+                     if self.server.loop_guard else None)
+            return self._passthrough(body, guard)
+        if not escalate:
             return self._passthrough(body)
         # pass 1: thinking off, logprobs on
         p1 = dict(req)
@@ -191,12 +270,15 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
-def make_server(port, upstream_url, escalate_env=False, threshold=-0.35):
+def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
+                loop_guard=True, loop_repeat=3):
     u = urllib.parse.urlparse(upstream_url)
     srv = ThreadingHTTPServer(("", port), Handler)
     srv.upstream = (u.hostname, u.port or 80)
     srv.escalate_env = escalate_env
     srv.threshold = threshold
+    srv.loop_guard = loop_guard
+    srv.loop_repeat = loop_repeat
     return srv
 
 
@@ -207,7 +289,9 @@ def main():
         os.environ.get("PROXY_ESCALATE") == "1",
         # ponytail: -0.35 is a heuristic default — calibrate per workload
         # on real traffic before trusting the escalation gate.
-        float(os.environ.get("PROXY_ESCALATE_THRESHOLD", -0.35)))
+        float(os.environ.get("PROXY_ESCALATE_THRESHOLD", -0.35)),
+        os.environ.get("PROXY_LOOP_GUARD", "1") != "0",
+        int(os.environ.get("PROXY_LOOP_GUARD_REPEAT", 3)))
     print(f"score proxy on :{srv.server_port} -> "
           f"http://{srv.upstream[0]}:{srv.upstream[1]}")
     srv.serve_forever()

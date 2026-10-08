@@ -16,6 +16,11 @@ POSITION_BONUS = 0.6  # fake position bias: the label listed first scores higher
 
 SSE_CHUNKS = ('data: {"delta": "a"}\n\n', 'data: {"delta": "b"}\n\n', 'data: [DONE]\n\n')
 
+LOOP_PIECE = "the same phrase again and again. "
+LOOP_CHUNKS = tuple(
+    f'data: {{"choices": [{{"index": 0, "delta": {{"content": {json.dumps(LOOP_PIECE)}}}}}], "finish_reason": null}}\n\n'
+    for _ in range(60)) + ('data: [DONE]\n\n',)
+
 
 def softmax(xs):
     top = max(xs)
@@ -50,7 +55,7 @@ class FakeUpstream(BaseHTTPRequestHandler):
         if self.path == "/v1/completions":
             self._completions(req)
         elif self.path == "/v1/chat/completions":
-            self._sse() if req.get("stream") else self._chat(req)
+            self._sse(req) if req.get("stream") else self._chat(req)
         else:
             self._json(404, {"error": "not found"})
 
@@ -84,13 +89,34 @@ class FakeUpstream(BaseHTTPRequestHandler):
             self._json(200, {"choices": [{"index": 0,
                 "message": {"role": "assistant", "content": "thinking answer"}}]})
 
-    def _sse(self):
+    def _sse(self, req):
+        chunks = (LOOP_CHUNKS if "loop me" in json.dumps(req["messages"])
+                  else SSE_CHUNKS)
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
-        for chunk in SSE_CHUNKS:
-            self.wfile.write(chunk.encode())
-            self.wfile.flush()
+        for chunk in chunks:
+            try:
+                self.wfile.write(chunk.encode())
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                break  # proxy loop guard cut the stream mid-write
+
+
+class LoopGuardUnitTest(unittest.TestCase):
+    def test_phrase_repetition(self):
+        text = ("the same phrase again and again. " * 4).strip()
+        self.assertTrue(score_proxy._degenerate_tail(text, 3))
+        self.assertFalse(score_proxy._degenerate_tail(
+            "the same phrase again and again. " * 2, 3))
+
+    def test_two_char_run(self):
+        self.assertTrue(score_proxy._degenerate_tail("abc" + "ab" * 16, 3))
+        self.assertFalse(score_proxy._degenerate_tail("abc" + "ab" * 8, 3))
+
+    def test_normal_text_untouched(self):
+        self.assertFalse(score_proxy._degenerate_tail(
+            "def f(x):\n    return x + 1  # short, ordinary code", 3))
 
 
 class ScoreProxyTest(unittest.TestCase):
@@ -179,6 +205,23 @@ class ScoreProxyTest(unittest.TestCase):
         with urllib.request.urlopen(req) as resp:
             self.assertEqual(resp.headers["Content-Type"], "text/event-stream")
             self.assertEqual(resp.read().decode(), "".join(SSE_CHUNKS))
+
+    def test_streaming_loop_guard_cuts(self):
+        req = urllib.request.Request(self.url + "/v1/chat/completions",
+                                     data=json.dumps({"model": "m", "stream": True,
+                                                      "messages": [{"role": "user",
+                                                                    "content": "loop me"}]}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            body = resp.read().decode()
+        events = [e for e in body.split("\n\n") if e.startswith("data: ")]
+        # guard cut early: far fewer loop chunks than the upstream's 60
+        self.assertLess(len(events), 10)
+        cut = json.loads(events[-2][len("data: "):])
+        self.assertEqual(cut["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(cut["choices"][0]["delta"], {})
+        self.assertEqual(cut["x_proxy"], {"loop_guard": "cut"})
+        self.assertEqual(events[-1], "data: [DONE]")
 
 
 if __name__ == "__main__":
