@@ -109,6 +109,12 @@ EXTRA_VLLM_ARGS="${EXTRA_VLLM_ARGS:-}"
 # block-scale draft experts must be pinned separately (DRAFT_MOE_BACKEND=auto).
 MOE_BACKEND="${MOE_BACKEND:-}"
 DRAFT_MOE_BACKEND="${DRAFT_MOE_BACKEND:-}"
+# Optional --gdn-prefill-backend (v0.30, flag shipped by vllm#55715):
+# flashinfer pins the FlashInfer CuTe-DSL chunk_gated_delta_rule GDN prefill
+# kernel (its gate was widened to SM12x), triton forces the stock FLA path.
+# Empty = vLLM's own resolution (auto), i.e. stock behavior.
+GDN_PREFILL_BACKEND="${GDN_PREFILL_BACKEND:-}"
+[[ -z "$GDN_PREFILL_BACKEND" || "$GDN_PREFILL_BACKEND" =~ ^(flashinfer|triton|cutedsl)$ ]] || err "gdn_prefill_backend must be flashinfer, triton or cutedsl (got: '$GDN_PREFILL_BACKEND')"
 # Optional docker --cpuset-cpus for the vLLM container (both ranks). The GB10
 # mixes ten 3.9 GHz Cortex-X925 cores (5-9,15-19) with ten 2.8 GHz A725 cores
 # (0-4,10-14); pinning to the X925 set measured +2-3 % at every concurrency in
@@ -164,6 +170,7 @@ LOAD_DROP_CACHE="${LOAD_DROP_CACHE:-false}"
 [[ "$QSA_FUSED_DRAFT" != "true" || "$V030" == "true" ]] || err "qsa_fused_draft is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$QSA_ROPE_CLAMP" != "true" || "$V030" == "true" ]] || err "qsa_rope_clamp is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$LOAD_DROP_CACHE" != "true" || "$V030" == "true" ]] || err "load_drop_cache is only supported on the vLLM 0.30 lane (v030: true)."
+[[ -z "$GDN_PREFILL_BACKEND" || "$V030" == "true" ]] || err "gdn_prefill_backend is only supported on the vLLM 0.30 lane (v030: true)."
 # FP8-dense hybrid checkpoint (NVFP4 experts + FP8 per-channel dense projections,
 # built by scripts/fp8dense/make_fp8_dense_checkpoint.py). Needs the vLLM overlay
 # patches in overlays/fp8dense (bind-mounted, no image rebuild).

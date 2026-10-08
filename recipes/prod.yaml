@@ -73,6 +73,10 @@ fp8_draft_head: false
 # state slots (~2x smaller mamba page, one checkpoint rewrite per ring fill).
 # Mutually exclusive with lazy_gdn; needs mtp_num_speculative_tokens > 0.
 replayssm_gdn: false
+# gdn_prefill_backend: flashinfer pins the FlashInfer CuTe-DSL GDN prefill
+# kernel (vllm#55715, gate widened to SM12x). Unverified on our boot — flip
+# after bench-host verification. Unset = vLLM auto resolution (stock).
+# gdn_prefill_backend: flashinfer
 # Pass --async-scheduling explicitly. vLLM 0.30 already resolves it ON for
 # MTP + the mp executor, so false changes nothing today; true pins it.
 async_scheduling: false
