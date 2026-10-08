@@ -3,7 +3,7 @@
 `proxy/score_proxy.py` is a thin OpenAI-compatible reverse proxy that sits
 between any client/harness and the vLLM server. Everything it doesn't
 recognize is forwarded byte-for-byte (SSE chat streams relay chunk-by-chunk,
-never buffered); on top of that it adds two decision features. Stdlib Python
+never buffered); on top of that it adds three decision features. Stdlib Python
 only, no dependencies.
 
 ## Run it
@@ -63,9 +63,15 @@ a heuristic default, not a measured one. Log `x_proxy.mean_logprob` on real
 traffic and pick the cut that trades accuracy vs thinking tokens for your
 case.
 
-**Streaming caveat:** `stream: true` chat requests always pass through
-untouched — escalation only applies to non-streaming requests (confidence
-needs the full response).
+**Streaming caveat:** escalation only applies to non-streaming requests
+(confidence needs the full response). `stream: true` chat requests still relay
+chunk-by-chunk with no buffering, but a loop guard watches the delta text for
+degenerate repetition — the same normalized 20+ char phrase repeated
+`PROXY_LOOP_GUARD_REPEAT` times (default 3) at the generation frontier, or a
+2-char unit run ('abab…'). On a hit the upstream connection is closed (frees
+the vLLM seat immediately) and the client gets a well-formed final SSE chunk
+with `finish_reason: "stop"` plus `"x_proxy": {"loop_guard": "cut"}`, then
+`data: [DONE]`. Set `PROXY_LOOP_GUARD=0` to disable.
 
 ## Credits
 
