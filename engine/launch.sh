@@ -1,3 +1,8 @@
+    # Pre-launch memory gate: after a container dies the box shows phantom
+    # CUDA OOM for 30-60s while memory settles; relaunching too fast kills the
+    # boot. No-op when MemAvailable is already above the threshold.
+    "$SCRIPT_DIR/engine/mem-gate.sh"
+
     # Deadline for the /health poll at the end of this file; overridable via env.
     READY_TIMEOUT_S="${READY_TIMEOUT_S:-3600}"
 
