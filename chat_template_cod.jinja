@@ -1,3 +1,7 @@
+{# Adapted from the chat template shipped with the
+   nvidia/Qwen3.8-Flash-Next-NVFP4 checkpoint (governed by the checkpoint's
+   own model license; see NOTICE). Local change: the CoD prior replaces the
+   xhigh reasoning blurb. #}
 {%- set image_count = namespace(value=0) %}
 {%- set video_count = namespace(value=0) %}
 {%- macro render_content(content, do_vision_count, is_system_content=false) %}
