@@ -40,13 +40,16 @@ Grade the model answer with exactly one label:
 Reply with the label only."""
 
 
-def chat(url, model, messages, max_tokens):
-    body = json.dumps({
+def chat(url, model, messages, max_tokens, seed=None):
+    payload = {
         "model": model,
         "messages": messages,
         "temperature": 0,
         "max_tokens": max_tokens,
-    }).encode()
+    }
+    if seed is not None:
+        payload["seed"] = seed
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(
         f"{url}/v1/chat/completions", data=body,
         headers={"Content-Type": "application/json"})
@@ -66,6 +69,30 @@ def classify(text):
         if label in text.upper():
             return label
     return "NOT_ATTEMPTED"  # ponytail: unparseable judge output ≈ no grade; ~0 in practice, revisit if it skews
+
+
+def load_questions(path, limit=0):
+    with open(path, newline="") as f:
+        questions = list(csv.DictReader(f))
+    return questions[:limit] if limit else questions
+
+
+def run_question(url, model, q, max_tokens, seed=None):
+    """Answer + judge pass for one question; returns the result row."""
+    msgs = [{"role": "user", "content": q["question"]}]
+    response, finish = chat(url, model, msgs, max_tokens, seed=seed)
+    if not response and finish == "length":
+        # reasoning ate the budget — retry once with 2x
+        response, finish = chat(url, model, msgs, max_tokens * 2, seed=seed)
+    verdict = classify(chat(url, model, [
+        {"role": "user", "content": JUDGE_PROMPT.format(
+            question=q["question"], gold=q["answer"], response=response)}],
+        256, seed=seed)[0])
+    return {
+        "question_id": q["question_id"], "domain": q["domain"],
+        "topic": q["topic"], "question": q["question"], "gold": q["answer"],
+        "response": response, "finish_reason": finish, "verdict": verdict,
+    }
 
 
 def score(rows):
@@ -92,10 +119,7 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="first N questions only (smoke)")
     a = ap.parse_args()
 
-    with open(a.csv, newline="") as f:
-        questions = list(csv.DictReader(f))
-    if a.limit:
-        questions = questions[: a.limit]
+    questions = load_questions(a.csv, a.limit)
 
     done = set()
     try:
@@ -110,20 +134,7 @@ def main():
     out = open(a.out, "a")
 
     def run_one(q):
-        msgs = [{"role": "user", "content": q["question"]}]
-        response, finish = chat(a.url, a.model, msgs, a.max_tokens)
-        if not response and finish == "length":
-            # reasoning ate the budget — retry once with 2x
-            response, finish = chat(a.url, a.model, msgs, a.max_tokens * 2)
-        verdict = classify(chat(a.url, a.model, [
-            {"role": "user", "content": JUDGE_PROMPT.format(
-                question=q["question"], gold=q["answer"], response=response)}],
-            256)[0])
-        return {
-            "question_id": q["question_id"], "domain": q["domain"],
-            "topic": q["topic"], "question": q["question"], "gold": q["answer"],
-            "response": response, "finish_reason": finish, "verdict": verdict,
-        }
+        return run_question(a.url, a.model, q, a.max_tokens)
 
     rows = []
     with ThreadPoolExecutor(max_workers=a.concurrency) as pool:
