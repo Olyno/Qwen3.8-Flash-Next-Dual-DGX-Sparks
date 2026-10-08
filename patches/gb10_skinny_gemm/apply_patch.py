@@ -15,6 +15,14 @@ local shapes; a missing shape or M keeps the standard linear path, so other
 GPUs and TP sizes are unchanged. MBX_SKINNY_GEMM_SM12X=0 in the container
 restores the standard linear path.
 
+vllm#59632 (merged 2026-10-05) upstreamed the TP=2-local BF16 shapes
+(48, 2560), (2560, 3072), (6656, 2560), (8192, 2560) and (124160, 2560).
+The rows vendored here from the myllmbox table are config-identical to the
+merged PR (verified row-by-row against the PR diff), so the backport adds no
+table delta; tests/test_gb10_skinny_gemm_v030.py now pins the
+upstream-measured rows so a future table edit cannot silently drift from
+upstream.
+
 vllm#60027 (merged 2026-10-05) is folded in on both sides, matching upstream:
 the SM121 (10240, 320) HC-up plan never fired because the fused HC-down
 output reaches the projection as a column slice of a wider buffer and
