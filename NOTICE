@@ -49,6 +49,8 @@ License: Apache-2.0 (licenses/APACHE-2.0.LICENSE)
             -> patches/gb10_skinny_gemm/
     #59753  SM121 TP=1 skinny-GEMM plans (stecasta)
             -> patches/gb10_skinny_gemm/
+    #59945  QSA head_dim unsharded fallback fix (lesj0610)
+            -> patches/qsa_head_dim/
 
   chat_template_cod.jinja is adapted from the chat template shipped with
   the model checkpoint (see "Model checkpoint" below).
