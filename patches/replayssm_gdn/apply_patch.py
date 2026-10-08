@@ -5,7 +5,12 @@
 REPLAYSSM_GDN=true).
 
 Ports the GDN half of vllm-project/vllm#47576 (draft, Johnny-Liou) onto the
-stock v0.30.0 files. Spec-decode-only port: the baseline decode path
+stock v0.30.0 files.
+
+Upstream: https://github.com/vllm-project/vllm/pull/47576 (Johnny-Liou,
+unmerged draft), Apache-2.0. The two vendored Triton statics
+(gdn_replayssm_spec_decode.py, replayssm_config.py) come verbatim from the PR
+and keep their upstream Apache-2.0/vLLM SPDX headers. Spec-decode-only port: the baseline decode path
 (fused_recurrent_replayssm.py, write_pos machinery, V1 runner plumbing) is
 dropped because this lane always runs MTP. Under the V2 model runner the
 builder already receives num_accepted_tokens / num_decode_draft_tokens_cpu /

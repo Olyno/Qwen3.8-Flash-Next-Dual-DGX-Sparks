@@ -5,6 +5,9 @@
 
 Backports vllm-project/vllm#58114 onto the stock v0.30.0 files:
 
+Upstream: https://github.com/vllm-project/vllm/pull/58114 (ZJY0516),
+Apache-2.0.
+
     vllm/v1/attention/backends/mamba_attn.py
     - BaseMambaAttentionMetadataBuilder gains needs_causal_conv1d_metadata
       (default True); the query_start_loc_p_cpu read +

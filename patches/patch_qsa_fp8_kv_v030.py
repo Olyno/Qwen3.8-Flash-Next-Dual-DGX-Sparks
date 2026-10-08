@@ -4,6 +4,9 @@
 """Backport vllm-project/vllm#55557 (Qwen4Exp fp8_e4m3 main KV cache on the QSA
 path) onto the vLLM 0.30.0 nvidia/qsa.py and nvidia/ops/qsa.py.
 
+Upstream: https://github.com/vllm-project/vllm/pull/55557 (semerandre),
+Apache-2.0.
+
 Delete this file, its test and its overlay in start.sh once the image moves to
 vLLM 0.31 or later, which ships #55557 natively.
 """

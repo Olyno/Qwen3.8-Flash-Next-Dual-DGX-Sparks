@@ -5,6 +5,13 @@
 myllmbox's patches/gb10-skinny-gemm.patch (TP=2 shapes) and upstream
 vllm#59753 / vllm#59632 (TP=1 shapes, plus upstream-measured TP=2 entries).
 
+Upstream: https://github.com/vllm-project/vllm/pull/59753 (stecasta) and
+https://github.com/vllm-project/vllm/pull/59632 (sudhanshu112233shukla),
+Apache-2.0. The myllmbox-only rows come from
+https://github.com/myllmbox/qwen38-flash-next-recipe (MIT, see
+licenses/myllmbox-MIT.LICENSE), whose table was first tuned by
+@sethforprivacy (https://github.com/vllm-project/vllm/issues/59605).
+
 vLLM 0.30's models/qwen4_exp/nvidia/low_latency_gemm.py (already shipped and
 already wired into model.py and mtp.py by the image) carries plans only for
 SM103 and SM90 at TP=4, so on the GB10 every decode-sized BF16 projection

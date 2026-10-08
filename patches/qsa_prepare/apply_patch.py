@@ -6,6 +6,9 @@
 Backports vllm-project/vllm#57097 ("Qwen4Exp: fuse the main-attention prepare
 into the QSA pre-indexer launch") onto the stock v0.30.0 files:
 
+Upstream: https://github.com/vllm-project/vllm/pull/57097 (ShuoleiWang),
+Apache-2.0.
+
     vllm/models/qwen4_exp/nvidia/ops/qsa_pre_indexer.py
         Renamed to ops/qsa_prepare.py (mounted at the new path; the stock file
         stays in the image but nothing imports it anymore). The kernel grows a

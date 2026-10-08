@@ -5,7 +5,9 @@
 
 Without flags this applies the draft-vocab delta only (VLLM_MTP_DRAFT_VOCAB),
 exactly as before. With --fp8 it additionally applies the L1b' FP8 draft-head
-delta (ported from the sfxnz 2x-DGX-Spark recipe's apply_mtp_overlay.py, MIT):
+delta (ported from the sfxnz 2x-DGX-Spark recipe's apply_mtp_overlay.py, MIT —
+https://github.com/sfxnz/Qwen3.8-Flash-Next-NVFP4-vLLM-2x-DGX-Spark, see
+licenses/sfxnz-MIT.LICENSE):
 VLLM_MTP_DRAFT_HEAD_FP8=1 (or marlin | w8a8) makes the drafter quantize its own
 lm_head rows to E4M3 with a per-row scale at load -- the reduced draft-vocab
 slice when _attach_draft_vocab built one (the BF16 slice is then dropped), else

@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Backport vllm-project/vllm#53388 (disable_eagle_block_drop) to the image.
 
+Upstream: https://github.com/vllm-project/vllm/pull/53388 (ZeldaHuang),
+Apache-2.0.
+
 With EAGLE-style drafters (MTP included), the prefix cache drops the last
 matched block of a request and computes it again. On a multi-turn chat that is
 one full cache block (1,664 tokens at MTP 3) of extra prefill on each turn.

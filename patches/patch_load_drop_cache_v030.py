@@ -7,6 +7,10 @@ LOAD_DROP_CACHE=true).
 Ports myllmbox/vllm@354bfc281aab ("Loader: drop each safetensors shard from
 the page cache once consumed") onto the stock v0.30.0 file:
 
+Upstream: https://github.com/myllmbox/qwen38-flash-next-recipe (MIT for kit
+scripts and image patches — see licenses/myllmbox-MIT.LICENSE); the
+myllmbox/vllm fork commit is an Apache-2.0 vLLM derivative.
+
     vllm/model_executor/model_loader/weight_utils.py
     - safetensors_weights_iterator: posix_fadvise(POSIX_FADV_DONTNEED) on each
       shard file right after its tensors have been consumed (all three load

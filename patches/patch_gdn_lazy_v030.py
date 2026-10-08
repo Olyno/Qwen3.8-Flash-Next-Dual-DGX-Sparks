@@ -7,6 +7,9 @@ Ports the sfxnz 2x-DGX-Spark recipe's K3 overlay (MIT,
 docker/v030/apply_gdn_lazy_overlay.py + gdn_lazy.py; design in its
 docker/v030/K3.md) onto the two stock v0.30.0 files:
 
+Upstream: https://github.com/sfxnz/Qwen3.8-Flash-Next-NVFP4-vLLM-2x-DGX-Spark,
+MIT (see licenses/sfxnz-MIT.LICENSE).
+
 1. vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py
    - __init__: gdl_layer_init(self) self-tests the Triton kernel bitwise
      against the stock CUDA kernel at layer construction (fail closed).
