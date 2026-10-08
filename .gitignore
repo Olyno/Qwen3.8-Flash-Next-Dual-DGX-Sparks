@@ -90,3 +90,5 @@ patches/mamba_eagle_drop/orig/
 patches/mamba_eagle_drop/*_v030.py
 patches/qsa_meta_clamp/orig/
 patches/qsa_meta_clamp/*_v030.py
+patches/qsa_head_dim/orig/
+patches/qsa_head_dim/*_v030.py

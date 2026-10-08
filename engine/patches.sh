@@ -73,8 +73,9 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         cp "$SCRIPT_DIR/patches/v030_fp8kv/qsa.py" "$SCRIPT_DIR/patches/v030_fp8kv/qsa_nvidia_v030.py"
         cp "$SCRIPT_DIR/patches/v030_fp8kv/ops/qsa.py" "$SCRIPT_DIR/patches/v030_fp8kv/qsa_ops_v030.py"
         # nvidia/qsa.py is NOT mounted here: the QSA-prepare block below
-        # re-patches this output with the vllm#57097 fusion and mounts the
-        # result (the two patches touch non-overlapping regions).
+        # re-patches this output with the vllm#57097 fusion, and the
+        # qsa_head_dim block below that mounts the final result (the patches
+        # touch non-overlapping regions).
         add_overlay "$SCRIPT_DIR/patches/v030_fp8kv/qsa_ops_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa.py"
     fi
     info "=== Step 4c: QSA prepare fusion (vllm#57097 backport, vLLM 0.30) ==="
@@ -98,7 +99,19 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         cp "$QP/orig/qsa_stock.py" "$QP/orig/qsa.py"
     fi
     python3 "$QP/apply_patch.py" || err "qsa_prepare apply_patch.py failed"
-    add_overlay "$QP/qsa_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/qsa.py"
+    info "=== Step 4c: QSA head_dim unsharded fallback fix (vllm#59945, vLLM 0.30) ==="
+    # Backport of vllm#59945 (patches/qsa_head_dim/): the fallback head_dim
+    # divided hidden_size by the TP-sharded num_heads, so at TP > 1 it came
+    # out tp_size times too large and the checkpoint failed to load with a
+    # QKV shape mismatch. Now divides by total_num_heads. Correctness fix,
+    # so no toggle. nvidia/qsa.py is mounted here (not in the qsa_prepare
+    # block above): this patcher chains off the qsa_prepare output — the two
+    # touch non-overlapping regions.
+    QH="$SCRIPT_DIR/patches/qsa_head_dim"
+    mkdir -p "$QH/orig"
+    cp "$QP/qsa_v030.py" "$QH/orig/qsa.py"
+    python3 "$QH/apply_patch.py" || err "qsa_head_dim apply_patch.py failed"
+    add_overlay "$QH/qsa_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/qsa.py"
     add_overlay "$QP/indexer_qsa_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/indexer_qsa.py"
     add_overlay "$QP/qsa_prepare_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_prepare.py"
     info "=== Step 4c: QSA prefill logits workspace (vllm#57105, vLLM 0.30) ==="
