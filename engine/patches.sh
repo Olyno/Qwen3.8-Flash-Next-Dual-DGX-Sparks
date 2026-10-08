@@ -147,6 +147,26 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     add_overlay "$PM/mamba_attn_v030.py" "$VLLM_PKG/v1/attention/backends/mamba_attn.py"
     add_overlay "$PM/short_conv_attn_v030.py" "$VLLM_PKG/v1/attention/backends/short_conv_attn.py"
     add_overlay "$PM/ple_layer_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ple_layer.py"
+    info "=== Step 4c: Mamba drop_eagle_block cache-hit fix (vllm#57128, vLLM 0.30) ==="
+    # Backport of vllm#57128 (patches/mamba_eagle_drop/): MambaManager's
+    # find_longest_cache_hit accepted drop_eagle_block but never acted on it,
+    # so with GDN + MTP + prefix caching the most recent matched block (state
+    # possibly written over rejected draft positions) stayed reachable through
+    # the prefix cache — silent wrong outputs. Both search branches now skip
+    # the first (most recent) checkpoint found and keep scanning for an older,
+    # committed one; kv_cache_coordinator gets the matching comment fix.
+    # Correctness fix, so no toggle.
+    MD="$SCRIPT_DIR/patches/mamba_eagle_drop"
+    mkdir -p "$MD/orig"
+    extract_from_image "$VLLM_PKG/v1/core/single_type_kv_cache_manager.py" \
+                       "$MD/orig/single_type_kv_cache_manager.py"
+    extract_from_image "$VLLM_PKG/v1/core/kv_cache_coordinator.py" \
+                       "$MD/orig/kv_cache_coordinator.py"
+    python3 "$MD/apply_patch.py" || err "mamba_eagle_drop apply_patch.py failed"
+    add_overlay "$MD/single_type_kv_cache_manager_v030.py" \
+                "$VLLM_PKG/v1/core/single_type_kv_cache_manager.py"
+    add_overlay "$MD/kv_cache_coordinator_v030.py" \
+                "$VLLM_PKG/v1/core/kv_cache_coordinator.py"
     [[ "$VLLM_QSA_DET_TOPK" == "1" || "$VLLM_MOE_DET_FINALIZE" == "1" ]] && err "V030: the determinism knobs are not ported to vLLM 0.30."
     if [[ "$PLE_OFFLOAD" == "true" ]]; then
         info "=== Step 4c: PLE mmap offload (vLLM 0.30) ==="

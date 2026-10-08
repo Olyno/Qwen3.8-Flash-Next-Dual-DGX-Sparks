@@ -31,6 +31,8 @@ License: Apache-2.0 (licenses/APACHE-2.0.LICENSE)
             -> patches/qsa_prepare/
     #57105  QSA indexer logits workspace (gau-nernst)
             -> patches/qsa_logits_workspace/
+    #57128  MambaManager drop_eagle_block cache-hit fix (limwand, unmerged)
+            -> patches/mamba_eagle_drop/
     #58114  PLE metadata sync removal (ZJY0516)
             -> patches/ple_metadata_syncs/
     #58449  QSA fused multi-step draft metadata (bilikaz, unmerged; ported
