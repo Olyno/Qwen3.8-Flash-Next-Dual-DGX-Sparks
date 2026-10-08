@@ -173,13 +173,22 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         # vllm#59753, TP=2 shapes from vllm#59632 and the myllmbox
         # gb10-skinny-gemm patch. Plans are keyed by local (N, K) shape and
         # exact token count M; a miss keeps the standard linear path, so any
-        # TP is safe — at TP>2 only the replicated projections match.
+        # TP is safe — at TP>2 only the replicated projections match. Also
+        # folded in: vllm#60027, the strided-A dispatch fix — without it the
+        # (10240, 320) HC-up plan never fires because the fused HC-down
+        # output is a column slice of a wider buffer (row_stride_ok replaces
+        # the packed-row-major check in low_latency_gemm.py and the blanket
+        # contiguity check in cute_dsl/skinny_gemm.py).
         SG="$SCRIPT_DIR/patches/gb10_skinny_gemm"
         extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/low_latency_gemm.py" \
                            "$SG/low_latency_gemm.py.orig"
+        extract_from_image "$VLLM_PKG/model_executor/kernels/linear/cute_dsl/skinny_gemm.py" \
+                           "$SG/skinny_gemm.py.orig"
         python3 "$SG/apply_patch.py" || err "apply_patch.py (gb10_skinny_gemm) failed"
         add_overlay "$SG/low_latency_gemm.py" \
                     "$VLLM_PKG/models/qwen4_exp/nvidia/low_latency_gemm.py"
+        add_overlay "$SG/skinny_gemm.py" \
+                    "$VLLM_PKG/model_executor/kernels/linear/cute_dsl/skinny_gemm.py"
         [[ "$TENSOR_PARALLEL_SIZE" == "1" || "$TENSOR_PARALLEL_SIZE" == "2" ]] || warn "SKINNY_GEMM: plans cover TP=1/TP=2 local shapes; at TP=$TENSOR_PARALLEL_SIZE only replicated projections take the skinny path."
     fi
     if [[ "$LAZY_GDN" == "true" ]]; then
