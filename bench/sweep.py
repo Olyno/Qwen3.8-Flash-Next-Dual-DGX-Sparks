@@ -18,15 +18,19 @@ be snapshotted immediately before and after each level:
 Host memory (MemAvailable/MemFree minima) is sampled every second during the
 level, and `journalctl -k` NV_ERR_NO_MEMORY lines added while the level ran are
 counted (the driver's earliest out-of-memory signal; readable without sudo).
-One JSON line per level is appended to --out.
+One JSON line per level is appended to --out, and each measured (tag, prompt,
+S, rep) configuration is persisted to --cache, keyed by the swept parameters
+and a serving-config fingerprint (git HEAD + active recipe hash): re-runs skip
+cached configurations with a `cached` marker unless --force.
 
     python3 bench/sweep.py --tag K3 --streams 1 2 4 --prompt prose code --repeats 3
 
 Requires an idle server: stop anything else using :8888 first, or the counters
 and the sparkDash numbers both include foreign traffic.
 """
-import argparse, json, re, subprocess, sys, threading, time, urllib.error, urllib.request
+import argparse, hashlib, json, os, re, subprocess, sys, threading, time, urllib.error, urllib.request
 
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DASH = "http://localhost:5555/api/sparks/spark-1/llm/bench"
 METRICS = "http://localhost:8888/metrics"
 COUNTERS = [
@@ -45,6 +49,43 @@ def http(url, payload=None, timeout=60):
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
+
+
+def fingerprint(repo):
+    """Serving-config identity: git HEAD + the active recipe's content hash.
+
+    RECIPE unset -> prod, matching the engine default. A code change or a
+    recipe edit yields a new fingerprint, so stale measurements never hit.
+    """
+    h = hashlib.sha256()
+    git = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"],
+                         capture_output=True, text=True).stdout.strip()
+    h.update(git.encode() or b"unknown")
+    p = os.path.join(repo, "recipes", os.environ.get("RECIPE", "prod") + ".yaml")
+    if os.path.isfile(p):
+        with open(p, "rb") as f:
+            h.update(f.read())
+    return h.hexdigest()[:12]
+
+
+def cache_key(a, prompt, s, rep, fp):
+    return "|".join(map(str, (a.tag, prompt, s, rep, a.max_tokens, a.note, fp)))
+
+
+def load_cache(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_cache(path, cache):
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(cache, f, indent=1, sort_keys=True)
 
 
 def snapshot():
@@ -132,15 +173,24 @@ def main():
     ap.add_argument("--max-tokens", type=int, default=600)
     ap.add_argument("--out", default="logs/sweep.jsonl")
     ap.add_argument("--note", default="", help="free text carried into every row (config detail)")
+    ap.add_argument("--cache", default="bench/data/sweep_cache.json",
+                    help="JSON cache of measured configurations")
+    ap.add_argument("--force", action="store_true", help="re-measure even when cached")
     a = ap.parse_args()
 
     running = snapshot()
+    fp = fingerprint(REPO)
+    cache = load_cache(a.cache)
     order = list(a.streams)
     print(f"{'tag':<6}{'prompt':<8}{'S':>3}{'rep':>4}{'ms/step':>9}{'tok/step':>9}{'p1/p2/p3':>18}{'dash tok/s':>11}{'ttft ms':>9}{'avail':>7}{'free':>6}{'nvrm':>6}")
     for rep in range(a.repeats):
         seq = order if rep % 2 == 0 else order[::-1]
         for s in seq:
             for prompt in a.prompt:
+                key = cache_key(a, prompt, s, rep, fp)
+                if not a.force and key in cache:
+                    print(f"{a.tag:<6}{prompt:<8}{s:>3}{rep:>4}  cached", flush=True)
+                    continue
                 nv_since = time.strftime("%Y-%m-%d %H:%M:%S")
                 before = snapshot(); mm = MemMin(); mm.start(); t0 = time.time()
                 job = run_level(s, prompt, a.max_tokens)
@@ -166,6 +216,8 @@ def main():
                 }
                 with open(a.out, "a") as f:
                     f.write(json.dumps(row) + "\n")
+                cache[key] = row
+                save_cache(a.cache, cache)
                 pp = "/".join(f"{x:.2f}" for x in row["per_pos"][:3])
                 print(f"{a.tag:<6}{prompt:<8}{s:>3}{rep:>4}{row['ms_per_step']:>9.1f}{row['tok_per_step']:>9.2f}{pp:>18}"
                       f"{(row['dash_aggregate_tps'] or 0):>11.1f}{(row['dash_ttft_ms'] or 0):>9.0f}{mm.avail:>7.1f}{mm.free:>6.1f}"
