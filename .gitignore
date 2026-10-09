@@ -94,3 +94,4 @@ patches/qsa_meta_clamp/orig/
 patches/qsa_meta_clamp/*_v030.py
 patches/qsa_head_dim/orig/
 patches/qsa_head_dim/*_v030.py
+patches/mtp_adaptive_depth/
