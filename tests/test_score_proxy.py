@@ -22,6 +22,20 @@ LOOP_CHUNKS = tuple(
     f'data: {{"choices": [{{"index": 0, "delta": {{"content": {json.dumps(LOOP_PIECE)}}}}}], "finish_reason": null}}\n\n'
     for _ in range(60)) + ('data: [DONE]\n\n',)
 
+HARD_KEYWORDS = ("prove", "design", "debug", "analy", "parser",
+                 "trade-off", "refactor", "hard")
+
+
+def fake_embed(text):
+    """2-d fake embedding: hard-keyword texts -> [0,1], 'ambiguous' -> [.5,.5],
+    everything else -> [1,0]. Routes the proxy's built-in prototypes correctly."""
+    t = text.lower()
+    if "ambiguous" in t:
+        return [0.5, 0.5]
+    if any(k in t for k in HARD_KEYWORDS):
+        return [0.0, 1.0]
+    return [1.0, 0.0]
+
 
 def softmax(xs):
     top = max(xs)
@@ -57,6 +71,10 @@ class FakeUpstream(BaseHTTPRequestHandler):
         req = json.loads(raw)
         if self.path == "/v1/completions":
             self._completions(req)
+        elif self.path == "/v1/embeddings":
+            texts = req["input"] if isinstance(req["input"], list) else [req["input"]]
+            self._json(200, {"data": [{"index": i, "embedding": fake_embed(t)}
+                                      for i, t in enumerate(texts)]})
         elif self.path == "/v1/chat/completions":
             self._sse(req) if req.get("stream") else self._chat(req)
         else:
@@ -233,6 +251,9 @@ class ProxyTestBase(unittest.TestCase):
     def make_stack(cls, **proxy_kwargs):
         cls.upstream = ThreadingHTTPServer(("127.0.0.1", 0), FakeUpstream)
         cls.upstream.requests = []
+        if proxy_kwargs.get("router_url") == "upstream":
+            proxy_kwargs["router_url"] = \
+                f"http://127.0.0.1:{cls.upstream.server_port}"
         cls.proxy = score_proxy.make_server(
             0, f"http://127.0.0.1:{cls.upstream.server_port}", **proxy_kwargs)
         for srv in (cls.upstream, cls.proxy):
@@ -351,6 +372,82 @@ class KeepaliveTest(ProxyTestBase):
                             "messages": [{"role": "user", "content": "still here"}]})
             time.sleep(self.INTERVAL / 3)
         self.assertEqual(self.pings(), [])
+
+
+class RouterTest(ProxyTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.make_stack(router_url="upstream", router_model="fake-embed",
+                       router_threshold=0.15, router_max_tokens=77)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.stop_stack()
+
+    def upstream_body(self):
+        path, raw = self.upstream.requests[-1]
+        self.assertEqual(path, "/v1/chat/completions")
+        return raw
+
+    def test_trivial_routed_no_thinking_and_capped(self):
+        _, resp = self.post_chat({"model": "m", "max_tokens": 5000,
+                                  "messages": [{"role": "user",
+                                                "content": "a simple thing"}]})
+        req = json.loads(self.upstream_body())
+        self.assertIs(req["chat_template_kwargs"]["enable_thinking"], False)
+        self.assertEqual(req["max_tokens"], 77)
+        self.assertEqual(resp["x_proxy"]["route"], "trivial")
+        self.assertEqual(resp["choices"][0]["message"]["content"],
+                         "no-think answer")
+
+    def test_trivial_without_max_tokens_gets_cap(self):
+        self.post_chat({"model": "m",
+                        "messages": [{"role": "user", "content": "hi there"}]})
+        self.assertEqual(json.loads(self.upstream_body())["max_tokens"], 77)
+
+    def test_hard_passthrough_byte_identical(self):
+        body, _ = self.post_chat({"model": "m", "messages": [
+            {"role": "user", "content": "prove this lemma"}]})
+        self.assertEqual(self.upstream_body(), body)
+
+    def test_below_margin_passthrough_byte_identical(self):
+        body, _ = self.post_chat({"model": "m", "messages": [
+            {"role": "user", "content": "an ambiguous request"}]})
+        self.assertEqual(self.upstream_body(), body)
+
+    def test_route_false_escape_hatch(self):
+        body, _ = self.post_chat({"model": "m", "route": False, "messages": [
+            {"role": "user", "content": "a simple thing"}]})
+        self.assertEqual(self.upstream_body(), body)
+
+    def test_router_precedes_escalation(self):
+        _, resp = self.post_chat({"model": "m", "escalate": True,
+                                  "messages": [{"role": "user",
+                                                "content": "a simple thing"}]})
+        self.assertEqual(resp["x_proxy"]["route"], "trivial")
+        self.assertNotIn("escalated", resp["x_proxy"])
+        _, resp = self.post_chat({"model": "m", "escalate": True,
+                                  "messages": [{"role": "user",
+                                                "content": "prove this"}]})
+        self.assertIn("escalated", resp["x_proxy"])
+
+
+class RouterDownTest(ProxyTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.make_stack(router_url="http://127.0.0.1:1",  # nothing listening
+                       router_timeout=0.5)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.stop_stack()
+
+    def test_embeddings_down_fails_open(self):
+        body, resp = self.post_chat({"model": "m", "messages": [
+            {"role": "user", "content": "a simple thing"}]})
+        self.assertEqual(self.upstream.requests[-1][1], body)
+        self.assertEqual(resp["choices"][0]["message"]["content"],
+                         "thinking answer")
 
 
 if __name__ == "__main__":

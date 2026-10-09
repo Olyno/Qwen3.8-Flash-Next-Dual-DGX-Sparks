@@ -16,11 +16,20 @@ decision features — see docs/score-proxy.md:
                               also strips trailing 'Current time:'/'Date:'
                               lines from system messages);
                               PROXY_CACHE_KEEPALIVE_S=N re-touches APC
-                              recency for clients idle past N seconds.
+                              recency for clients idle past N seconds;
+                              PROXY_ROUTER_URL=http://host:port enables the
+                              embedding router: the last user message is
+                              classified trivial/hard against prototype
+                              centroids and 'trivial' requests are rewritten
+                              pre-hoc (thinking off, max_tokens capped).
 
 Env: PROXY_UPSTREAM (default http://localhost:8888), PROXY_PORT (8889),
 PROXY_ESCALATE, PROXY_ESCALATE_THRESHOLD (-0.35),
-PROXY_LOOP_GUARD (1), PROXY_LOOP_GUARD_REPEAT (3). Stdlib only.
+PROXY_LOOP_GUARD (1), PROXY_LOOP_GUARD_REPEAT (3),
+PROXY_ROUTER_URL (unset = off), PROXY_ROUTER_MODEL
+(google/embeddinggemma-2), PROXY_ROUTER_THRESHOLD (0.15),
+PROXY_ROUTER_TRIVIAL_MAX_TOKENS (1024), PROXY_ROUTER_TIMEOUT_S (2).
+Stdlib only.
 """
 import http.client
 import json
@@ -124,8 +133,8 @@ class LoopGuard:
         return f"data: {note}\n\ndata: [DONE]\n\n".encode()
 
 
-def post_json(upstream, path, body):
-    conn = http.client.HTTPConnection(upstream[0], upstream[1], timeout=300)
+def post_json(upstream, path, body, timeout=300):
+    conn = http.client.HTTPConnection(upstream[0], upstream[1], timeout=timeout)
     try:
         conn.request("POST", path, body=body,
                      headers={"Content-Type": "application/json"})
@@ -156,6 +165,100 @@ def score_order(upstream, model, prefix, labels):
 
 JITTER_RE = re.compile(
     r"(?:\s*\n\s*(?:Current (?:date|time|datetime)|Date|Time)\s*:[^\n]*)+\s*$")
+
+
+def cosine(a, b):
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(x * x for x in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+# Router prototype phrases, embedded once and averaged into class centroids.
+ROUTE_PROTOTYPES = {
+    "trivial": [
+        "What time is it?",
+        "What is the capital of France?",
+        "Translate 'good morning' to Spanish.",
+        "What is 17 plus 25?",
+        "Define the word 'verbose'.",
+        "Convert 10 miles to kilometers.",
+        "List three primary colors.",
+    ],
+    "hard": [
+        "Prove that the square root of two is irrational.",
+        "Design a rate limiter for a distributed API gateway.",
+        "Debug this race condition in my async code.",
+        "Analyze the time and space complexity of this algorithm.",
+        "Write a parser for a small expression language.",
+        "Explain the trade-offs between consensus protocols.",
+        "Refactor this module to remove the circular dependency.",
+    ],
+}
+
+
+def last_user_text(messages):
+    """Text of the last user message ('' if none); multipart content is
+    flattened to its text parts."""
+    for m in reversed(messages):
+        if isinstance(m, dict) and m.get("role") == "user":
+            content = m.get("content")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                return " ".join(p.get("text", "") for p in content
+                                if isinstance(p, dict) and p.get("type") == "text")
+    return ""
+
+
+class Router:
+    """Pre-hoc request router (embeddinggemma-style): embed the last user
+    message, cosine-compare against trivial/hard prototype centroids; a
+    'trivial' verdict by enough margin gets thinking disabled and max_tokens
+    capped before generation — unlike escalation there is no double
+    generation. ponytail: centroids are embedded lazily on the first routable
+    request and cached forever — restart the proxy after switching embedding
+    models."""
+
+    def __init__(self, url, model, threshold, max_tokens, timeout):
+        u = urllib.parse.urlparse(url)
+        self.endpoint = (u.hostname, u.port or 80)
+        self.model = model
+        self.threshold = threshold
+        self.max_tokens = max_tokens
+        self.timeout = timeout
+        self._centroids = None
+
+    def _embed(self, texts):
+        body = json.dumps({"model": self.model, "input": texts}).encode()
+        status, resp = post_json(self.endpoint, "/v1/embeddings", body,
+                                 timeout=self.timeout)
+        if status != 200:
+            raise ValueError(f"embeddings endpoint returned {status}")
+        data = sorted(resp["data"], key=lambda d: d["index"])
+        return [d["embedding"] for d in data]
+
+    def _centroid(self):
+        if self._centroids is None:
+            self._centroids = {}
+            for cls, phrases in ROUTE_PROTOTYPES.items():
+                vecs = self._embed(phrases)
+                self._centroids[cls] = [
+                    sum(v[i] for v in vecs) / len(vecs)
+                    for i in range(len(vecs[0]))]
+        return self._centroids
+
+    def classify(self, text):
+        """-> (route, margin); route None means passthrough. Fail-open: any
+        endpoint problem returns passthrough, never an error."""
+        try:
+            vec = self._embed([text])[0]
+            sims = {c: cosine(vec, v) for c, v in self._centroid().items()}
+            margin = sims["trivial"] - sims["hard"]
+            return ("trivial", margin) if margin >= self.threshold \
+                else (None, margin)
+        except Exception:  # fail-open: endpoint down/slow/garbage = passthrough
+            return None, 0.0
 
 
 def canonicalize_messages(messages, strip_jitter=False):
@@ -331,6 +434,31 @@ class Handler(BaseHTTPRequestHandler):
             self.server.keepalive.note_prefix(
                 self.client_address[0], req.get("model"),
                 req.get("messages") or [])
+        router = self.server.router
+        if router is not None and req.get("route") is not False:
+            text = last_user_text(req.get("messages") or [])
+            route, margin = router.classify(text) if text else (None, 0.0)
+            if route == "trivial":
+                # pre-hoc no-thinking: also skips the escalation pass below
+                kwargs = dict(req.get("chat_template_kwargs") or {})
+                kwargs["enable_thinking"] = False
+                req["chat_template_kwargs"] = kwargs
+                req["max_tokens"] = min(req.get("max_tokens")
+                                        or router.max_tokens,
+                                        router.max_tokens)
+                body = json.dumps(req).encode()
+                if req.get("stream"):
+                    print(f"score proxy: routed trivial "
+                          f"(margin {margin:.3f})", file=sys.stderr)
+                    guard = (LoopGuard(self.server.loop_repeat)
+                             if self.server.loop_guard else None)
+                    return self._passthrough(body, guard)
+                status, resp = post_json(self.server.upstream,
+                                         "/v1/chat/completions", body)
+                if isinstance(resp, dict):
+                    resp["x_proxy"] = {"route": "trivial",
+                                       "margin": round(margin, 3)}
+                return self._send_json(status, resp)
         escalate = self.server.escalate_env or req.get("escalate") is True
         if req.get("stream"):
             # escalation needs the full response; streams pass through with
@@ -373,7 +501,10 @@ class Handler(BaseHTTPRequestHandler):
 
 def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
                 loop_guard=True, loop_repeat=3, canonicalize=False,
-                strip_jitter=False, keepalive_s=0):
+                strip_jitter=False, keepalive_s=0, router_url=None,
+                router_model="google/embeddinggemma-2",
+                router_threshold=0.15, router_max_tokens=1024,
+                router_timeout=2.0):
     u = urllib.parse.urlparse(upstream_url)
     srv = ThreadingHTTPServer(("", port), Handler)
     srv.upstream = (u.hostname, u.port or 80)
@@ -383,6 +514,9 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
     srv.loop_repeat = loop_repeat
     srv.canonicalize = canonicalize
     srv.strip_jitter = strip_jitter
+    srv.router = (Router(router_url, router_model, router_threshold,
+                         router_max_tokens, router_timeout)
+                  if router_url else None)
     srv.keepalive = None
     if keepalive_s > 0:
         srv.keepalive = CacheKeepalive(srv, keepalive_s)
@@ -402,7 +536,12 @@ def main():
         int(os.environ.get("PROXY_LOOP_GUARD_REPEAT", 3)),
         os.environ.get("PROXY_CANONICALIZE") == "1",
         os.environ.get("PROXY_CANONICALIZE_STRIP_JITTER") == "1",
-        float(os.environ.get("PROXY_CACHE_KEEPALIVE_S", 0) or 0))
+        float(os.environ.get("PROXY_CACHE_KEEPALIVE_S", 0) or 0),
+        os.environ.get("PROXY_ROUTER_URL") or None,
+        os.environ.get("PROXY_ROUTER_MODEL", "google/embeddinggemma-2"),
+        float(os.environ.get("PROXY_ROUTER_THRESHOLD", 0.15)),
+        int(os.environ.get("PROXY_ROUTER_TRIVIAL_MAX_TOKENS", 1024)),
+        float(os.environ.get("PROXY_ROUTER_TIMEOUT_S", 2)))
     print(f"score proxy on :{srv.server_port} -> "
           f"http://{srv.upstream[0]}:{srv.upstream[1]}")
     srv.serve_forever()
