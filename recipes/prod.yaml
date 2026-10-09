@@ -75,8 +75,10 @@ fp8_draft_head: false
 replayssm_gdn: false
 # gdn_prefill_backend: flashinfer pins the FlashInfer CuTe-DSL GDN prefill
 # kernel (vllm#55715, gate widened to SM12x). Measured on GB10 (2026-10-10,
-# salted cold-prompt TTFT A/B): ~2x SLOWER at 8k (7.2-17.1s vs 3.0-3.7s) and
-# ~1.6x slower at 48k (26-27s vs 16.7s) — keep unset (stock auto resolution).
+# salted cold-prompt TTFT A/B, verified kernel engaged): NEUTRAL — 8k TTFT
+# ~3.4s and 48k ~16.7s both arms, decode unchanged. (An earlier "2x slower"
+# reading was host contention from leftover bench processes.) No benefit —
+# keep unset (stock auto resolution).
 # gdn_prefill_backend: flashinfer
 # Pass --async-scheduling explicitly. vLLM 0.30 already resolves it ON for
 # MTP + the mp executor, so false changes nothing today; true pins it.
