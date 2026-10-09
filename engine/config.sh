@@ -160,6 +160,13 @@ QSA_FUSED_DRAFT="${QSA_FUSED_DRAFT:-false}"
 # unchecked, and CUDA-graph warmup dummy positions can index past the table
 # (IMA on SM121/GB10).
 QSA_ROPE_CLAMP="${QSA_ROPE_CLAMP:-false}"
+# Adaptive MTP draft depth (v0.30 lane only,
+# patches/patch_mtp_adaptive_depth.py): truncates the per-step draft chain
+# once the draft head's own survival product (running product of per-step
+# top-token probs, batch mean) drops below MTP_ADAPTIVE_DEPTH_THRESHOLD.
+# k is per-step uniform, target verification is unchanged. Needs k > 1.
+MTP_ADAPTIVE_DEPTH="${MTP_ADAPTIVE_DEPTH:-false}"
+MTP_ADAPTIVE_DEPTH_THRESHOLD="${MTP_ADAPTIVE_DEPTH_THRESHOLD:-0.5}"
 # posix_fadvise(DONTNEED) on each checkpoint shard right after the loader
 # consumes it (v0.30 lane only, patches/patch_load_drop_cache_v030.py): keeps
 # the page cache one shard deep during the load on unified memory.
@@ -170,6 +177,9 @@ LOAD_DROP_CACHE="${LOAD_DROP_CACHE:-false}"
 [[ "$QSA_FUSED_DRAFT" != "true" || "$V030" == "true" ]] || err "qsa_fused_draft is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$QSA_ROPE_CLAMP" != "true" || "$V030" == "true" ]] || err "qsa_rope_clamp is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$LOAD_DROP_CACHE" != "true" || "$V030" == "true" ]] || err "load_drop_cache is only supported on the vLLM 0.30 lane (v030: true)."
+[[ "$MTP_ADAPTIVE_DEPTH" != "true" || "$V030" == "true" ]] || err "mtp_adaptive_depth is only supported on the vLLM 0.30 lane (v030: true)."
+[[ "$MTP_ADAPTIVE_DEPTH" != "true" || "$MTP_NUM_SPECULATIVE_TOKENS" -gt 1 ]] || err "mtp_adaptive_depth needs mtp_num_speculative_tokens > 1 (k <= 1 has no chain to truncate)."
+[[ "$MTP_ADAPTIVE_DEPTH_THRESHOLD" =~ ^0(\.[0-9]+)?$|^1(\.0+)?$ ]] || err "mtp_adaptive_depth_threshold must be in [0, 1] (got: '$MTP_ADAPTIVE_DEPTH_THRESHOLD')"
 [[ -z "$GDN_PREFILL_BACKEND" || "$V030" == "true" ]] || err "gdn_prefill_backend is only supported on the vLLM 0.30 lane (v030: true)."
 # FP8-dense hybrid checkpoint (NVFP4 experts + FP8 per-channel dense projections,
 # built by scripts/fp8dense/make_fp8_dense_checkpoint.py). Needs the vLLM overlay
