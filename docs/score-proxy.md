@@ -73,6 +73,26 @@ the vLLM seat immediately) and the client gets a well-formed final SSE chunk
 with `finish_reason: "stop"` plus `"x_proxy": {"loop_guard": "cut"}`, then
 `data: [DONE]`. Set `PROXY_LOOP_GUARD=0` to disable.
 
+## Stage 2 triage (2026-10-10)
+
+Research verdicts on the originally planned stage-2 items:
+
+- **PASTE / Speculative Actions — skipped.** arXiv 2603.18897 ("Act While
+  Thinking") and arXiv 2510.04371 ("Speculative Actions") both accelerate
+  *agent tool execution* by speculatively running predicted tool calls in the
+  client harness while the model generates. Tool execution does not exist in
+  the serving path — this proxy sees only chat messages, and giving it
+  filesystem/shell side effects is a security hazard the papers wall off
+  behind isolation machinery. The proxy-feasible kernel (pre-warming the APC
+  prefix for the likely follow-up turn) is already what `CacheKeepalive`
+  does. Nothing left to build here.
+- **Embedding router — adopted** (see below). A cheap embedding model
+  classifies the last user message; `trivial` requests get thinking disabled
+  and a capped `max_tokens` *before* generation (pre-hoc), complementing the
+  post-hoc escalation gate. Target model: `google/embeddinggemma-2` (CPU,
+  ~191 MB quantized), with `google/embeddinggemma-300m` as fallback — the
+  proxy only needs an OpenAI-compatible `/v1/embeddings` endpoint.
+
 ## Credits
 
 - [autotrust/GEV-26B-Decide](https://huggingface.co/autotrust/GEV-26B-Decide)
