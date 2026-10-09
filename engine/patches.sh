@@ -432,6 +432,27 @@ elif $DO_LAUNCH && [[ "$MTP_NUM_SPECULATIVE_TOKENS" != "0" ]]; then
     warn "     to vocab/draft_vocab_en_code_47k.txt cuts that ~5x; see the recipes."
 fi
 
+if $DO_LAUNCH && [[ "$V030" == "true" && "$MTP_ADAPTIVE_DEPTH" == "true" ]]; then
+    info "=== Step 4e: adaptive MTP draft depth (vLLM 0.30) ==="
+    # patches/patch_mtp_adaptive_depth.py: the MTP proposer stops the draft
+    # chain early once the draft head's own survival product (running product
+    # of per-step top-token probs, batch mean) drops below
+    # VLLM_MTP_ADAPTIVE_DEPTH_THRESHOLD. Per-step uniform k: each draft
+    # iteration replays its own cudagraph keyed by the unchanged decode batch
+    # size, so an early break replays a prefix of the same graphs; the runner
+    # carries the narrower [batch, k'] output to the scheduler. Target
+    # verification is unchanged. Composes with MTP_DRAFT_VOCAB / FP8_DRAFT_HEAD
+    # (the confidence is read off the reduced/FP8 head).
+    AD="$SCRIPT_DIR/patches/mtp_adaptive_depth"
+    mkdir -p "$AD/orig"
+    extract_from_image "$VLLM_PKG/v1/spec_decode/llm_base_proposer.py" \
+                       "$AD/orig/llm_base_proposer.py"
+    python3 "$SCRIPT_DIR/patches/patch_mtp_adaptive_depth.py" || err "patch_mtp_adaptive_depth.py failed"
+    add_overlay "$AD/llm_base_proposer_v030.py" \
+                "$VLLM_PKG/v1/spec_decode/llm_base_proposer.py"
+    OVERLAY_ENV+=("-e VLLM_MTP_ADAPTIVE_DEPTH=1" "-e VLLM_MTP_ADAPTIVE_DEPTH_THRESHOLD=$MTP_ADAPTIVE_DEPTH_THRESHOLD")
+fi
+
 # ---------------------------------------------------------------------------
 # 4e. FP8 KV cache. The stock QSA kernels hard-refuse anything but BF16 KV
 #     (supported_kv_cache_dtypes = ["auto","bfloat16"]); this teaches them to
