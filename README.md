@@ -70,6 +70,12 @@ curl http://localhost:8888/v1/chat/completions \
 
 ## Opt-in: ReplaySSM-GDN spec decode (`replayssm_gdn`)
 
+**Measured broken on GB10 (2026-10-09), do not enable.** Buffer-16 boot passed
+its self-test but greedy decode collapses: quality gate 5.6/100, decodebench
+0% acceptance and 1.00 tok/step at temp 0 (16.3 tok/s vs 45.4 stock), and
+degenerate 5.00 tok/step loops at temp 0.8. Buffer-32 wedged the server
+mid-request. Kept for reference only.
+
 v0.30 lane only. Ports the GDN variant of upstream
 [vllm#47576](https://github.com/vllm-project/vllm/pull/47576): MTP verify
 reconstructs each window from an fp32 checkpoint plus a small circular ring of
