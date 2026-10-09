@@ -9,7 +9,14 @@ decision features — see docs/score-proxy.md:
   POST /v1/chat/completions   confidence-gated thinking escalation
                               ("escalate": true or PROXY_ESCALATE=1);
                               streaming requests get a degenerate-repetition
-                              loop guard (PROXY_LOOP_GUARD=0 disables)
+                              loop guard (PROXY_LOOP_GUARD=0 disables).
+                              Opt-in cache care: PROXY_CANONICALIZE=1
+                              hoists system blocks ahead of the first user
+                              message (reorder only; PROXY_CANONICALIZE_STRIP_JITTER=1
+                              also strips trailing 'Current time:'/'Date:'
+                              lines from system messages);
+                              PROXY_CACHE_KEEPALIVE_S=N re-touches APC
+                              recency for clients idle past N seconds.
 
 Env: PROXY_UPSTREAM (default http://localhost:8888), PROXY_PORT (8889),
 PROXY_ESCALATE, PROXY_ESCALATE_THRESHOLD (-0.35),
@@ -19,6 +26,10 @@ import http.client
 import json
 import math
 import os
+import re
+import sys
+import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -143,6 +154,81 @@ def score_order(upstream, model, prefix, labels):
     return softmax(scores)
 
 
+JITTER_RE = re.compile(
+    r"(?:\s*\n\s*(?:Current (?:date|time|datetime)|Date|Time)\s*:[^\n]*)+\s*$")
+
+
+def canonicalize_messages(messages, strip_jitter=False):
+    """Normalize the messages array to protect the prefix cache ('Don't
+    Break the Cache', arXiv 2601.06007): system messages sitting before the
+    first user message are hoisted to the front in stable order, so static
+    blocks stay ahead of the cache boundary. Content is never edited unless
+    strip_jitter=True, and then only trailing 'Current time:'/'Date:'-style
+    lines inside system messages are dropped. Returns (messages, changed)."""
+    head_end = next((i for i, m in enumerate(messages)
+                     if isinstance(m, dict) and m.get("role") == "user"),
+                    len(messages))
+    head, tail = messages[:head_end], messages[head_end:]
+    is_system = lambda m: isinstance(m, dict) and m.get("role") == "system"
+    out = [m for m in head if is_system(m)] + \
+          [m for m in head if not is_system(m)] + tail
+    if strip_jitter:
+        stripped = []
+        for m in out:
+            if is_system(m) and isinstance(m.get("content"), str):
+                content = JITTER_RE.sub("", m["content"])
+                if content != m["content"]:
+                    m = {**m, "content": content}
+            stripped.append(m)
+        out = stripped
+    return out, out != messages
+
+
+class CacheKeepalive(threading.Thread):
+    """Re-touch APC recency during idle gaps (arXiv 2607.19214): when a
+    client has been silent past the interval AND the proxy saw zero traffic
+    in that window, replay its first system+user prefix with max_tokens=1.
+    ponytail: one dict guarded only by the GIL; a lost update just means a
+    ping fires one tick late."""
+
+    def __init__(self, server, interval):
+        super().__init__(daemon=True)
+        self.server = server
+        self.interval = interval
+        self.clients = {}        # client ip -> last prefix + touch time
+        self.last_traffic = 0.0
+
+    def note_traffic(self):
+        self.last_traffic = time.monotonic()
+
+    def note_prefix(self, client, model, messages):
+        prefix = [m for m in messages
+                  if isinstance(m, dict) and m.get("role") == "system"][:1]
+        prefix += [m for m in messages
+                   if isinstance(m, dict) and m.get("role") == "user"][:1]
+        if prefix:
+            self.clients[client] = {"t": time.monotonic(), "model": model,
+                                    "messages": prefix}
+
+    def run(self):
+        while True:
+            time.sleep(max(0.05, min(self.interval / 4, 60)))
+            now = time.monotonic()
+            if now - self.last_traffic < self.interval:
+                continue  # mid-request flood: don't add to it
+            for c in list(self.clients.values()):
+                if now - c["t"] < self.interval or not c["model"]:
+                    continue
+                body = json.dumps({"model": c["model"],
+                                   "messages": c["messages"],
+                                   "max_tokens": 1}).encode()
+                try:
+                    post_json(self.server.upstream, "/v1/chat/completions", body)
+                except Exception:
+                    pass  # upstream down: retry next interval
+                c["t"] = now
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -162,6 +248,8 @@ class Handler(BaseHTTPRequestHandler):
         self._handle()
 
     def _handle(self):
+        if self.server.keepalive is not None:
+            self.server.keepalive.note_traffic()
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else None
         try:
@@ -230,6 +318,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def _chat(self, body):
         req = json.loads(body)
+        if (self.server.canonicalize
+                and isinstance(req.get("messages"), list)):
+            messages, changed = canonicalize_messages(
+                req["messages"], self.server.strip_jitter)
+            if changed:
+                print(f"score proxy: canonicalized chat messages "
+                      f"({len(messages)} messages)", file=sys.stderr)
+                req["messages"] = messages
+                body = json.dumps(req).encode()
+        if self.server.keepalive is not None:
+            self.server.keepalive.note_prefix(
+                self.client_address[0], req.get("model"),
+                req.get("messages") or [])
         escalate = self.server.escalate_env or req.get("escalate") is True
         if req.get("stream"):
             # escalation needs the full response; streams pass through with
@@ -271,7 +372,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
-                loop_guard=True, loop_repeat=3):
+                loop_guard=True, loop_repeat=3, canonicalize=False,
+                strip_jitter=False, keepalive_s=0):
     u = urllib.parse.urlparse(upstream_url)
     srv = ThreadingHTTPServer(("", port), Handler)
     srv.upstream = (u.hostname, u.port or 80)
@@ -279,6 +381,12 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
     srv.threshold = threshold
     srv.loop_guard = loop_guard
     srv.loop_repeat = loop_repeat
+    srv.canonicalize = canonicalize
+    srv.strip_jitter = strip_jitter
+    srv.keepalive = None
+    if keepalive_s > 0:
+        srv.keepalive = CacheKeepalive(srv, keepalive_s)
+        srv.keepalive.start()
     return srv
 
 
@@ -291,7 +399,10 @@ def main():
         # on real traffic before trusting the escalation gate.
         float(os.environ.get("PROXY_ESCALATE_THRESHOLD", -0.35)),
         os.environ.get("PROXY_LOOP_GUARD", "1") != "0",
-        int(os.environ.get("PROXY_LOOP_GUARD_REPEAT", 3)))
+        int(os.environ.get("PROXY_LOOP_GUARD_REPEAT", 3)),
+        os.environ.get("PROXY_CANONICALIZE") == "1",
+        os.environ.get("PROXY_CANONICALIZE_STRIP_JITTER") == "1",
+        float(os.environ.get("PROXY_CACHE_KEEPALIVE_S", 0) or 0))
     print(f"score proxy on :{srv.server_port} -> "
           f"http://{srv.upstream[0]}:{srv.upstream[1]}")
     srv.serve_forever()
