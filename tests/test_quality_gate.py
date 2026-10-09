@@ -56,7 +56,7 @@ class CompareTest(unittest.TestCase):
         report = quality_gate.compare(BASELINE, candidate, 1.0)
         self.assertFalse(report["ok"])
         failed = [r["section"] for r in report["rows"] if not r["ok"]]
-        # overall drop is 2.5/3 ≈ 0.83, within threshold — only the section fails
+        # overall is informational only — only the omni section fails
         self.assertEqual(failed, ["omniscience"])
 
     def test_drop_exactly_at_threshold_passes(self):
@@ -68,6 +68,31 @@ class CompareTest(unittest.TestCase):
         candidate = _result({"omniscience": {"score": 61.5 - 1e-9},
                              "code": {"score": 100.0}, "prose": {"score": 100.0}})
         self.assertFalse(quality_gate.compare(BASELINE, candidate, 1.0)["ok"])
+
+    def test_parity_drift_above_floor_passes(self):
+        # stock greedy drift: prose/code similarity lands ~55-100 — passes
+        candidate = _result({"omniscience": {"score": 62.5},
+                             "code": {"score": 60.0}, "prose": {"score": 55.0}})
+        self.assertTrue(quality_gate.compare(BASELINE, candidate, 1.0)["ok"])
+
+    def test_parity_below_floor_fails(self):
+        # broken config (ReplaySSM-style): similarity collapses to ~0
+        candidate = _result({"omniscience": {"score": 62.5},
+                             "code": {"score": 5.0}, "prose": {"score": 0.0}})
+        report = quality_gate.compare(BASELINE, candidate, 1.0)
+        self.assertFalse(report["ok"])
+        failed = [r["section"] for r in report["rows"] if not r["ok"]]
+        self.assertEqual(failed, ["code", "prose"])
+
+    def test_overall_is_informational(self):
+        # parity drift pulls overall down 26 pts — not gated
+        candidate = _result({"omniscience": {"score": 62.5},
+                             "code": {"score": 41.0}, "prose": {"score": 41.0}})
+        report = quality_gate.compare(BASELINE, candidate, 1.0)
+        self.assertTrue(report["ok"])
+        overall = next(r for r in report["rows"] if r["section"] == "overall")
+        self.assertTrue(overall["ok"])
+        self.assertTrue(overall["info"])
 
     def test_missing_section_fails(self):
         candidate = _result({"code": {"score": 100.0}, "prose": {"score": 100.0}})

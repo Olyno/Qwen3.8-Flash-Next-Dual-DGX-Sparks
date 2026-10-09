@@ -6,17 +6,30 @@
 Any opt-in/quality-gated change must pass this before landing. One suite,
 three sections: a slice of the AA-Omniscience questions (same loader/judge as
 bench/omniscience.py), a small code-gen parity set, and a short prose parity
-set. Deterministic: temperature 0, fixed seed, fixed max_tokens per prompt.
+set. Requests are temperature 0 with a fixed seed and fixed max_tokens.
 
     python3 bench/quality_gate.py record              # write bench/data/gate_baseline.json
     python3 bench/quality_gate.py check               # exit 1 on regression
 
 `record` runs the suite against a known-good server and saves per-section
 scores (plus raw outputs, the parity reference). `check` runs it against a
-possibly modified server and fails if any section or the overall score drops
-more than the threshold (GATE_MAX_DROP env or --max-drop, default 1.0 point).
-Parity sections are scored against the baseline outputs, not a reference
-answer — this is a parity gate, not an accuracy benchmark.
+possibly modified server.
+
+This is a BREAKAGE gate, not an exact-parity gate. Greedy text is not
+reproducible run-to-run on this stack (MTP verify batch shapes + prefix cache
++ NVFP4 numerics flip near-tie argmaxes): on a fresh stock boot the prose
+section drifts to 55-75 vs its recorded 100, while a genuinely broken config
+(ReplaySSM, 2026-10-09) scores 0. So the pass criteria are:
+
+- omniscience: aggregate accuracy may drop at most `max_drop` points
+  (GATE_MAX_DROP / --max-drop, default 5.0; one question of 24 ≈ 4.2 pts).
+- code/prose: section similarity must stay above `min_parity`
+  (GATE_MIN_PARITY / --min-parity, default 40) — stock drift bottoms ~55,
+  broken configs sit at ~0.
+- overall: printed for information, not gated.
+
+Subtle quality calls (±1-2 pts) are NOT decidable here; use the benchmark
+arms. Exit 1 if any gated criterion fails.
 """
 import argparse
 import difflib
@@ -29,7 +42,9 @@ from pathlib import Path
 import omniscience
 
 DATA = Path(__file__).resolve().parent / "data"
-MAX_DROP = float(os.environ.get("GATE_MAX_DROP", "1.0"))
+MAX_DROP = float(os.environ.get("GATE_MAX_DROP", "5.0"))
+MIN_PARITY = float(os.environ.get("GATE_MIN_PARITY", "40.0"))
+PARITY_SECTIONS = ("code", "prose")
 SEED = 0
 
 # Short, low-drift prompts: (id, prompt, max_tokens).
@@ -102,9 +117,11 @@ def run_suite(url, model, csv_path, omni_limit, concurrency, max_tokens,
     return {"version": 1, "model": model, "sections": sections, "overall": overall}
 
 
-def compare(baseline, candidate, max_drop):
-    """Per-section and overall regression vs baseline. A drop of more than
-    max_drop points fails; a drop of exactly max_drop passes."""
+def compare(baseline, candidate, max_drop, min_parity=MIN_PARITY):
+    """Gate criteria per section: parity sections (code/prose) must stay above
+    the min_parity similarity floor (breakage detector — greedy text parity is
+    not reproducible on this stack, so no drop threshold applies); other
+    sections may drop at most max_drop points. Overall is informational."""
     rows = []
     for name, base in baseline["sections"].items():
         cand = candidate["sections"].get(name)
@@ -113,14 +130,19 @@ def compare(baseline, candidate, max_drop):
                          "candidate": None, "drop": None, "ok": False})
             continue
         drop = base["score"] - cand["score"]
+        if name in PARITY_SECTIONS:
+            ok = cand["score"] >= min_parity
+        else:
+            ok = drop <= max_drop
         rows.append({"section": name, "baseline": base["score"],
-                     "candidate": cand["score"], "drop": drop,
-                     "ok": drop <= max_drop})
+                     "candidate": cand["score"], "drop": drop, "ok": ok})
     drop = baseline["overall"] - candidate["overall"]
     rows.append({"section": "overall", "baseline": baseline["overall"],
                  "candidate": candidate["overall"], "drop": drop,
-                 "ok": drop <= max_drop})
-    return {"ok": all(r["ok"] for r in rows), "max_drop": max_drop, "rows": rows}
+                 "ok": True, "info": True})
+    gated = [r for r in rows if not r.get("info")]
+    return {"ok": all(r["ok"] for r in gated), "max_drop": max_drop,
+            "min_parity": min_parity, "rows": rows}
 
 
 def main(argv=None):
@@ -136,7 +158,9 @@ def main(argv=None):
     ap.add_argument("--concurrency", type=int, default=4)
     ap.add_argument("--max-tokens", type=int, default=4096)
     ap.add_argument("--max-drop", type=float, default=MAX_DROP,
-                    help="max allowed score regression in points (env GATE_MAX_DROP)")
+                    help="max allowed omniscience regression in points (env GATE_MAX_DROP)")
+    ap.add_argument("--min-parity", type=float, default=MIN_PARITY,
+                    help="min similarity floor for code/prose sections (env GATE_MIN_PARITY)")
     a = ap.parse_args(argv)
 
     baseline = None
@@ -155,16 +179,18 @@ def main(argv=None):
         print(f"baseline written to {a.baseline}: overall {result['overall']:.2f}")
         return 0
 
-    report = compare(baseline, result, a.max_drop)
+    report = compare(baseline, result, a.max_drop, a.min_parity)
     for r in report["rows"]:
         cand = "missing" if r["candidate"] is None else f"{r['candidate']:.2f}"
         drop = "n/a" if r["drop"] is None else f"{r['drop']:+.2f}"
-        print(f"  {r['section']}: {r['baseline']:.2f} -> {cand} (drop {drop}) "
-              f"{'ok' if r['ok'] else 'FAIL'}")
+        status = "info" if r.get("info") else ("ok" if r["ok"] else "FAIL")
+        print(f"  {r['section']}: {r['baseline']:.2f} -> {cand} (drop {drop}) {status}")
     if not report["ok"]:
-        print(f"FAIL: regression beyond {a.max_drop} point(s) vs {a.baseline}")
+        print(f"FAIL: beyond gate criteria (max_drop={a.max_drop}, "
+              f"min_parity={a.min_parity}) vs {a.baseline}")
         return 1
-    print(f"PASS: all sections within {a.max_drop} point(s) of baseline")
+    print(f"PASS: within gate criteria (max_drop={a.max_drop}, "
+          f"min_parity={a.min_parity})")
     return 0
 
 
