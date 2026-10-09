@@ -2,6 +2,7 @@ import json
 import math
 import sys
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -51,7 +52,9 @@ class FakeUpstream(BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
-        req = json.loads(self.rfile.read(length))
+        raw = self.rfile.read(length)
+        self.server.requests.append((self.path, raw))
+        req = json.loads(raw)
         if self.path == "/v1/completions":
             self._completions(req)
         elif self.path == "/v1/chat/completions":
@@ -123,6 +126,7 @@ class ScoreProxyTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.upstream = ThreadingHTTPServer(("127.0.0.1", 0), FakeUpstream)
+        cls.upstream.requests = []
         cls.proxy = score_proxy.make_server(
             0, f"http://127.0.0.1:{cls.upstream.server_port}")
         for srv in (cls.upstream, cls.proxy):
@@ -222,6 +226,131 @@ class ScoreProxyTest(unittest.TestCase):
         self.assertEqual(cut["choices"][0]["delta"], {})
         self.assertEqual(cut["x_proxy"], {"loop_guard": "cut"})
         self.assertEqual(events[-1], "data: [DONE]")
+
+
+class ProxyTestBase(unittest.TestCase):
+    @classmethod
+    def make_stack(cls, **proxy_kwargs):
+        cls.upstream = ThreadingHTTPServer(("127.0.0.1", 0), FakeUpstream)
+        cls.upstream.requests = []
+        cls.proxy = score_proxy.make_server(
+            0, f"http://127.0.0.1:{cls.upstream.server_port}", **proxy_kwargs)
+        for srv in (cls.upstream, cls.proxy):
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+        cls.url = f"http://127.0.0.1:{cls.proxy.server_port}"
+
+    @classmethod
+    def stop_stack(cls):
+        cls.proxy.shutdown()
+        cls.upstream.shutdown()
+        cls.proxy.server_close()
+        cls.upstream.server_close()
+
+    def setUp(self):
+        self.upstream.requests.clear()
+
+    def post_chat(self, obj, url=None):
+        body = json.dumps(obj).encode()
+        req = urllib.request.Request((url or self.url) + "/v1/chat/completions",
+                                     data=body,
+                                     headers={"Content-Type": "application/json"})
+        return body, json.load(urllib.request.urlopen(req))
+
+
+class CanonicalizeTest(ProxyTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.make_stack(canonicalize=True)
+        cls.proxy_strip = score_proxy.make_server(
+            0, f"http://127.0.0.1:{cls.upstream.server_port}",
+            canonicalize=True, strip_jitter=True)
+        threading.Thread(target=cls.proxy_strip.serve_forever, daemon=True).start()
+        cls.url_strip = f"http://127.0.0.1:{cls.proxy_strip.server_port}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.proxy_strip.shutdown()
+        cls.proxy_strip.server_close()
+        cls.stop_stack()
+
+    def upstream_messages(self):
+        path, raw = self.upstream.requests[-1]
+        self.assertEqual(path, "/v1/chat/completions")
+        return json.loads(raw)["messages"]
+
+    def test_reorders_system_before_first_user(self):
+        self.post_chat({"model": "m", "messages": [
+            {"role": "system", "content": "A"},
+            {"role": "assistant", "content": "primer"},
+            {"role": "system", "content": "B"},
+            {"role": "user", "content": "U"}]})
+        got = self.upstream_messages()
+        self.assertEqual([m["role"] for m in got],
+                         ["system", "system", "assistant", "user"])
+        self.assertEqual([m["content"] for m in got], ["A", "B", "primer", "U"])
+
+    def test_wellformed_request_byte_identical(self):
+        body, _ = self.post_chat({"model": "m", "messages": [
+            {"role": "system", "content": "S"},
+            {"role": "user", "content": "U"}]})
+        self.assertEqual(self.upstream.requests[-1][1], body)
+
+    def test_jitter_strip_off_by_default(self):
+        jittered = "You are helpful.\nCurrent time: 2026-10-09 12:00:00"
+        self.post_chat({"model": "m", "messages": [
+            {"role": "system", "content": jittered},
+            {"role": "user", "content": "U"}]})
+        self.assertEqual(self.upstream_messages()[0]["content"], jittered)
+
+    def test_jitter_strip_opt_in(self):
+        self.post_chat({"model": "m", "messages": [
+            {"role": "system",
+             "content": "You are helpful.\nDate: 2026-10-09\nCurrent time: 12:00"},
+            {"role": "user", "content": "U"}]}, url=self.url_strip)
+        self.assertEqual(self.upstream_messages()[0]["content"],
+                         "You are helpful.")
+
+
+class KeepaliveTest(ProxyTestBase):
+    INTERVAL = 0.3
+
+    @classmethod
+    def setUpClass(cls):
+        cls.make_stack(keepalive_s=cls.INTERVAL)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.stop_stack()
+
+    def pings(self):
+        return [json.loads(raw) for path, raw in self.upstream.requests
+                if path == "/v1/chat/completions"
+                and json.loads(raw).get("max_tokens") == 1]
+
+    def wait_for_ping(self, timeout=3.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.pings():
+                return True
+            time.sleep(0.02)
+        return False
+
+    def test_keepalive_fires_when_idle(self):
+        msgs = [{"role": "system", "content": "S"},
+                {"role": "user", "content": "U"}]
+        self.post_chat({"model": "m", "messages": msgs})
+        self.assertTrue(self.wait_for_ping())
+        ping = self.pings()[0]
+        self.assertEqual(ping["model"], "m")
+        self.assertEqual(ping["messages"], msgs)
+
+    def test_keepalive_quiet_during_traffic(self):
+        end = time.time() + self.INTERVAL * 3
+        while time.time() < end:
+            self.post_chat({"model": "m",
+                            "messages": [{"role": "user", "content": "still here"}]})
+            time.sleep(self.INTERVAL / 3)
+        self.assertEqual(self.pings(), [])
 
 
 if __name__ == "__main__":
