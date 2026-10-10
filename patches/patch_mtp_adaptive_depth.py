@@ -66,7 +66,10 @@ _multi_step_decode loop additionally stops replaying draft graphs at the cut.
 
 Runtime gate: VLLM_MTP_ADAPTIVE_DEPTH=1 plus VLLM_MTP_ADAPTIVE_DEPTH_THRESHOLD,
 both passed via OVERLAY_ENV (engine/patches.sh). Requirements enforced there:
-v030 lane, MTP_NUM_SPECULATIVE_TOKENS > 1.
+v030 lane, MTP_NUM_SPECULATIVE_TOKENS > 1. VLLM_MTP_ADAPTIVE_DEBUG=1 (recipe
+mtp_adaptive_debug) adds rate-limited logging of the recorded per-step probs,
+survival products, published widths, and a one-shot full-head vs reduced-head
+winner-mass comparison.
 
 Inputs:  patches/mtp_adaptive_depth/orig/speculator.py (from the image)
          patches/mtp_adaptive_depth/orig/model_runner.py (from the image)
@@ -175,6 +178,12 @@ _MTP_ADAPTIVE_DEPTH = os.environ.get("VLLM_MTP_ADAPTIVE_DEPTH", "0") == "1"
 _MTP_ADAPTIVE_DEPTH_THRESHOLD = float(
     os.environ.get("VLLM_MTP_ADAPTIVE_DEPTH_THRESHOLD", "0.5")
 )
+# Debug: VLLM_MTP_ADAPTIVE_DEBUG=1 logs the recorded per-step probs, the
+# survival products, and the published width — first 20 finalize calls per
+# boot, then every 200th. The first call also dumps the head config and a
+# one-shot full-head vs reduced-head winner-mass comparison (the decisive
+# check for reduced-denominator inflation).
+_MTP_ADAPTIVE_DEBUG = os.environ.get("VLLM_MTP_ADAPTIVE_DEBUG", "0") == "1"
 
 
 """
@@ -206,6 +215,8 @@ SP_INIT_NEW = """\
         )
         self._adaptive_produced = self.num_speculative_steps
         self.adaptive_num_draft_tokens = self.num_speculative_steps
+        self._adaptive_debug_calls = 0
+        self._adaptive_debug_hidden = None
 """
 
 SP_METHODS_OLD = (
@@ -319,6 +330,12 @@ SP_METHODS_NEW = (
             self._adaptive_record_top_probs(
                 self._adaptive_reduced_head_top_probs(hidden_states), draft_step
             )
+            if _MTP_ADAPTIVE_DEBUG:
+                # Keep the step's hidden states for the host-side full-head
+                # probe in _adaptive_finalize (a device copy, capture-safe;
+                # replay overwrites it each step, so finalize sees the last
+                # step's states).
+                self._adaptive_debug_hidden = hidden_states.detach().clone()
             return ids
         return super().sample_draft(
             hidden_states,
@@ -372,21 +389,109 @@ SP_METHODS_NEW = (
             return True
         return False
 
+    def _adaptive_debug_probe_full_head(
+        self, hidden_states: torch.Tensor
+    ) -> torch.Tensor:
+        \"\"\"Winner's softmax mass over the FULL draft lm_head (debug only).
+
+        Same collective pattern as _adaptive_reduced_head_top_probs but over
+        this rank's full lm_head shard; compared against the reduced-head
+        score it measures the dropped rows' missing denominator mass.
+        \"\"\"
+        model = self.model
+        unwrap = getattr(model, "unwrap", None)
+        if callable(unwrap):
+            model = unwrap()
+        weight = model.lm_head.weight
+        scale = float(getattr(model.logits_processor, "scale", 1.0))
+        logits = (
+            torch.nn.functional.linear(hidden_states.to(weight.dtype), weight)
+            .float()
+            * scale
+        )
+        num_tokens = hidden_states.shape[0]
+        local_max = logits.max(dim=-1, keepdim=True).values
+        global_max = (
+            tensor_model_parallel_all_gather(local_max, dim=-1)
+            .max(dim=-1, keepdim=True)
+            .values
+            if get_tensor_model_parallel_world_size() > 1
+            else local_max
+        )
+        sumexp = (logits - global_max).exp().sum(dim=-1)
+        if get_tensor_model_parallel_world_size() > 1:
+            sumexp = tensor_model_parallel_all_reduce(sumexp)
+        return 1.0 / sumexp
+
+    def _adaptive_debug_log(self, num_reqs: int, keep: int, rows) -> None:
+        self._adaptive_debug_calls += 1
+        n = self._adaptive_debug_calls
+        if n == 1:
+            model = self.model
+            unwrap = getattr(model, "unwrap", None)
+            if callable(unwrap):
+                model = unwrap()
+            fp8 = getattr(model, "_draft_head_fp8", None)
+            head_rows = getattr(model, "_draft_lm_head_weight", None)
+            logger.warning(
+                "MTP_ADAPTIVE_DEBUG head: fp8=%s rows=%s scale=%s "
+                "full_rows=%s",
+                getattr(fp8, "kernel", fp8) if fp8 is not None else None,
+                tuple(head_rows.shape) if head_rows is not None else None,
+                getattr(model.logits_processor, "scale", None),
+                tuple(model.lm_head.weight.shape),
+            )
+        if not (n <= 20 or n % 200 == 0):
+            return
+        means = [sum(col) / len(col) for col in zip(*rows)]
+        mins = [min(col) for col in zip(*rows)]
+        surv = adaptive_running_survival_means(rows)
+        logger.warning(
+            "MTP_ADAPTIVE_DEBUG call=%d reqs=%d produced=%d keep=%d thr=%.3f "
+            "p_mean=%s p_min=%s surv=%s",
+            n,
+            num_reqs,
+            self._adaptive_produced,
+            keep,
+            _MTP_ADAPTIVE_DEPTH_THRESHOLD,
+            ["%.4f" % v for v in means],
+            ["%.4f" % v for v in mins],
+            ["%.4f" % v for v in surv],
+        )
+        if n <= 3 and self.use_local_argmax_reduction:
+            hidden = self._adaptive_debug_hidden
+            if hidden is not None and hidden.shape[0] >= num_reqs:
+                p_full = self._adaptive_debug_probe_full_head(
+                    hidden[:num_reqs]
+                ).tolist()
+                p_red = [row[-1] for row in rows]
+                logger.warning(
+                    "MTP_ADAPTIVE_DEBUG fullhead call=%d p_reduced_mean=%.4f "
+                    "p_full_mean=%.4f missing_mass=%.4f",
+                    n,
+                    sum(p_red) / len(p_red),
+                    sum(p_full) / len(p_full),
+                    1.0 - sum(p_full) / max(sum(p_red), 1e-9),
+                )
+
     def _adaptive_finalize(self, num_reqs: int) -> None:
         \"\"\"Publish this step's proposal width for the model runner.\"\"\"
         keep = self.num_speculative_steps
+        rows = None
         if (
             self._adaptive_top_probs is not None
             and self.dp_size == 1
             and num_reqs > 0
         ):
-            keep = adaptive_batch_keep(
+            rows = (
                 self._adaptive_top_probs[:num_reqs, : self._adaptive_produced]
                 .to("cpu", torch.float64)
-                .tolist(),
-                _MTP_ADAPTIVE_DEPTH_THRESHOLD,
+                .tolist()
             )
+            keep = adaptive_batch_keep(rows, _MTP_ADAPTIVE_DEPTH_THRESHOLD)
         self.adaptive_num_draft_tokens = keep
+        if _MTP_ADAPTIVE_DEBUG and rows:
+            self._adaptive_debug_log(num_reqs, keep, rows)
 """
 )
 

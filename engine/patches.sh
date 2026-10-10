@@ -459,6 +459,7 @@ if $DO_LAUNCH && [[ "$V030" == "true" && "$MTP_ADAPTIVE_DEPTH" == "true" ]]; the
     add_overlay "$AD/model_runner_v030.py" \
                 "$VLLM_PKG/v1/worker/gpu/model_runner.py"
     OVERLAY_ENV+=("-e VLLM_MTP_ADAPTIVE_DEPTH=1" "-e VLLM_MTP_ADAPTIVE_DEPTH_THRESHOLD=$MTP_ADAPTIVE_DEPTH_THRESHOLD")
+    [[ "$MTP_ADAPTIVE_DEBUG" == "true" ]] && OVERLAY_ENV+=("-e VLLM_MTP_ADAPTIVE_DEBUG=1")
 fi
 
 # ---------------------------------------------------------------------------
