@@ -175,12 +175,17 @@ MTP_ADAPTIVE_DEBUG="${MTP_ADAPTIVE_DEBUG:-false}"
 # consumes it (v0.30 lane only, patches/patch_load_drop_cache_v030.py): keeps
 # the page cache one shard deep during the load on unified memory.
 LOAD_DROP_CACHE="${LOAD_DROP_CACHE:-false}"
+# Free-list block-id sort (v0.30 lane only, patches/free_block_sort/):
+# FreeKVCacheBlockQueue.append_n sorts freed blocks by block_id so KV
+# offload/prefetch DMA sees address-sequential blocks (vllm#31371).
+FREE_BLOCK_SORT="${FREE_BLOCK_SORT:-false}"
 [[ "$LAZY_GDN" != "true" || "$V030" == "true" ]] || err "lazy_gdn is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$REPLAYSSM_GDN" != "true" || "$V030" == "true" ]] || err "replayssm_gdn is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$FP8_DRAFT_HEAD" != "true" || "$V030" == "true" ]] || err "fp8_draft_head is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$QSA_FUSED_DRAFT" != "true" || "$V030" == "true" ]] || err "qsa_fused_draft is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$QSA_ROPE_CLAMP" != "true" || "$V030" == "true" ]] || err "qsa_rope_clamp is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$LOAD_DROP_CACHE" != "true" || "$V030" == "true" ]] || err "load_drop_cache is only supported on the vLLM 0.30 lane (v030: true)."
+[[ "$FREE_BLOCK_SORT" != "true" || "$V030" == "true" ]] || err "free_block_sort is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$MTP_ADAPTIVE_DEPTH" != "true" || "$V030" == "true" ]] || err "mtp_adaptive_depth is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$MTP_ADAPTIVE_DEPTH" != "true" || "$MTP_NUM_SPECULATIVE_TOKENS" -gt 1 ]] || err "mtp_adaptive_depth needs mtp_num_speculative_tokens > 1 (k <= 1 has no chain to truncate)."
 [[ "$MTP_ADAPTIVE_DEPTH_THRESHOLD" =~ ^0(\.[0-9]+)?$|^1(\.0+)?$ ]] || err "mtp_adaptive_depth_threshold must be in [0, 1] (got: '$MTP_ADAPTIVE_DEPTH_THRESHOLD')"

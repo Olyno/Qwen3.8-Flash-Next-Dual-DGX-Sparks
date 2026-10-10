@@ -377,6 +377,21 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
                     "$VLLM_PKG/model_executor/model_loader/weight_utils.py"
         OVERLAY_ENV+=("-e VLLM_LOAD_DROP_CACHE=1")
     fi
+    if [[ "$FREE_BLOCK_SORT" == "true" ]]; then
+        info "=== Step 4c: free-list block-id sort (vllm#31371, vLLM 0.30) ==="
+        # RFC overlay (patches/free_block_sort/): FreeKVCacheBlockQueue.append_n
+        # sorts freed blocks by block_id before linking, so pops hand out
+        # address-sequential blocks — contiguous ids coalesce into larger DMA
+        # bursts on KV offload/prefetch. Trades strict LRU order within a
+        # freed batch; no numeric effect on emitted tokens.
+        FS="$SCRIPT_DIR/patches/free_block_sort"
+        mkdir -p "$FS/orig"
+        extract_from_image "$VLLM_PKG/v1/core/kv_cache_utils.py" \
+                           "$FS/orig/kv_cache_utils.py"
+        python3 "$FS/apply_patch.py" || err "free_block_sort apply_patch.py failed"
+        add_overlay "$FS/kv_cache_utils_v030.py" \
+                    "$VLLM_PKG/v1/core/kv_cache_utils.py"
+    fi
     OVERLAY_ENV+=("-e VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/tmp/fi_autotune")
     OVERLAY_ENV+=("-e VLLM_USE_BREAKABLE_CUDAGRAPH=${V030_BREAKABLE_CUDAGRAPH:-0}")
     [[ "${V030_BREAKABLE_CUDAGRAPH:-0}" == "1" && "$PLE_OFFLOAD" == "true" ]] && \
