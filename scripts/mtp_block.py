@@ -17,7 +17,11 @@ weight loading. k=1 is rejected separately: strictly dominated (same fixed
 cache-block cost as k=2, half the decode gain). The widest decode step also
 needs max_num_seqs * (1 + k) <= max_num_batched_tokens.
 
-    python3 mtp_block.py <config.json> <k> <max_num_seqs> <max_num_batched_tokens> [ssm_dtype] [kv_dtype]
+    python3 mtp_block.py <config.json> <k> <max_num_seqs> <max_num_batched_tokens> [ssm_dtype] [kv_dtype] [forced_block]
+
+A 7th argument validates a user-forced --block-size instead of the derived
+one: it must stay kernel-aligned, at least the derived size (the engine only
+ever raises the block, never lowers it), and divisible by the ring capacity.
 
 Prints "<block> <compress_ratio>" and exits 0 when the combo is legal; prints
 the reason to stderr and exits 1 when it is not (including a config.json that
@@ -66,12 +70,25 @@ def main(argv):
     max_num_batched = int(argv[4])
     ssm = argv[5] if len(argv) > 5 else ""
     kv = argv[6] if len(argv) > 6 else "auto"
+    forced = int(argv[7]) if len(argv) > 7 else None
     try:
         block = derived_block(cfg, k, ssm, kv)
     except KeyError as e:
         print(f"config.json has no {e}: not a Qwen3.8-Flash-Next checkpoint, "
               "cannot validate MTP", file=sys.stderr)
         return 1
+    if forced is not None:
+        if forced % KERNEL_BLOCK_ALIGN != 0:
+            print(f"forced block {forced} is not a multiple of the kernel "
+                  f"block alignment {KERNEL_BLOCK_ALIGN}.", file=sys.stderr)
+            return 1
+        if forced < block:
+            print(f"forced block {forced} is below the derived block {block}: "
+                  "the engine raises a smaller --block-size back to the "
+                  "derived value, so the forced one would not hold.",
+                  file=sys.stderr)
+            return 1
+        block = forced
     ratio = int(cfg.get("text_config", cfg).get("indexer_compress_ratio", 4))
     if k == 1:
         print("k=1 is strictly dominated: same fixed cache-block cost as k=2, "

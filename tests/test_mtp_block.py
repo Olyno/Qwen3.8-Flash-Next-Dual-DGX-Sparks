@@ -86,6 +86,29 @@ class GuardCli(unittest.TestCase):
         self.assertEqual(rc.returncode, 1)
         self.assertIn("illegal", rc.stderr)
 
+    def test_forced_block_makes_k5_legal(self):
+        # k=5 with --block-size 1728: 1728 >= derived 1696 and 12 | 1728.
+        rc = run_cli(self.cfg, 5, 4, 8192, "bfloat16", "fp8", 1728)
+        self.assertEqual(rc.returncode, 0, rc.stderr)
+        self.assertEqual(rc.stdout.strip(), "1728 4")
+
+    def test_forced_block_below_derived_fails(self):
+        # 1632 < derived 1696: the engine would raise it back, voiding it.
+        rc = run_cli(self.cfg, 5, 4, 8192, "bfloat16", "fp8", 1632)
+        self.assertEqual(rc.returncode, 1)
+        self.assertIn("below the derived block", rc.stderr)
+
+    def test_forced_block_ring_illegal_fails(self):
+        # 1696 >= derived but 12 ∤ 1696.
+        rc = run_cli(self.cfg, 5, 4, 8192, "bfloat16", "fp8", 1696)
+        self.assertEqual(rc.returncode, 1)
+        self.assertIn("illegal", rc.stderr)
+
+    def test_forced_block_misaligned_fails(self):
+        rc = run_cli(self.cfg, 5, 4, 8192, "bfloat16", "fp8", 1729)
+        self.assertEqual(rc.returncode, 1)
+        self.assertIn("alignment", rc.stderr)
+
     def test_k1_is_dominated(self):
         rc = run_cli(self.cfg, 1, 4, 8192, "bfloat16", "fp8")
         self.assertEqual(rc.returncode, 1)
