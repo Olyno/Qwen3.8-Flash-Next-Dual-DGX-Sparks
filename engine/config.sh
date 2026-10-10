@@ -85,6 +85,11 @@ TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-$NNODES}"
 ENABLE_EXPERT_PARALLEL="${ENABLE_EXPERT_PARALLEL:-true}"
 MTP_NUM_SPECULATIVE_TOKENS="${MTP_NUM_SPECULATIVE_TOKENS:-3}"
 KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8}"   # fp8 needs patches/patch_qsa_fp8_kv.py, applied automatically in step 4f; auto = bf16
+# Optional forced attention block size (--block-size). Empty = engine-derived
+# (see scripts/mtp_block.py). The engine only raises a too-small value, and
+# the MTP guard validates ring-capacity legality before weight loading.
+ATTENTION_BLOCK_SIZE="${ATTENTION_BLOCK_SIZE:-}"
+[[ -z "$ATTENTION_BLOCK_SIZE" || "$ATTENTION_BLOCK_SIZE" =~ ^[1-9][0-9]*$ ]] || err "attention_block_size must be a positive integer (got: '$ATTENTION_BLOCK_SIZE')"
 # dtype of the GDN recurrent (SSM) state. The checkpoint asks for float32; the
 # fused GDN kernel also accepts bfloat16 (FUSED_GDN_STATE_DTYPES in
 # qwen_gdn_linear_attn.py). BF16 halves the ~0.23 GB per sequence the state

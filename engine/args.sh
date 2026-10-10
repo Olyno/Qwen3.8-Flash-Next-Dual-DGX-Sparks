@@ -17,6 +17,10 @@
     [[ -n "$LONG_PREFILL_TOKEN_THRESHOLD" ]] && VLLM_ARGS+=("--long-prefill-token-threshold" "$LONG_PREFILL_TOKEN_THRESHOLD")
     VLLM_ARGS+=("--max-model-len" "$MAX_MODEL_LEN")
     VLLM_ARGS+=("--kv-cache-dtype" "$KV_CACHE_DTYPE")
+    # Forced attention block size (recipe key attention_block_size): the engine
+    # only ever raises a smaller value back to the derived one; mtp_block.py
+    # above validates the ring-capacity legality of the forced size.
+    [[ -n "$ATTENTION_BLOCK_SIZE" ]] && VLLM_ARGS+=("--block-size" "$ATTENTION_BLOCK_SIZE")
     [[ -n "$MAMBA_SSM_CACHE_DTYPE" ]] && VLLM_ARGS+=("--mamba-ssm-cache-dtype" "$MAMBA_SSM_CACHE_DTYPE")
     [[ -n "$GDN_PREFILL_BACKEND" ]] && VLLM_ARGS+=("--gdn-prefill-backend" "$GDN_PREFILL_BACKEND")
     VLLM_ARGS+=("--load-format" "safetensors")
@@ -42,7 +46,7 @@
     if [[ "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]]; then
         python3 "$SCRIPT_DIR/scripts/mtp_block.py" "$PLE_CONFIG_DIR/config.json" \
             "$MTP_NUM_SPECULATIVE_TOKENS" "$MAX_NUM_SEQS" "$MAX_NUM_BATCHED_TOKENS" \
-            "$MAMBA_SSM_CACHE_DTYPE" "$KV_CACHE_DTYPE" || err "illegal MTP config (see above)"
+            "$MAMBA_SSM_CACHE_DTYPE" "$KV_CACHE_DTYPE" $ATTENTION_BLOCK_SIZE || err "illegal MTP config (see above)"
     fi
 
     # JSON args: use printf to build properly quoted strings for the heredoc
