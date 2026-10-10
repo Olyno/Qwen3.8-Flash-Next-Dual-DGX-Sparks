@@ -75,6 +75,7 @@ patches/gb10_skinny_gemm/skinny_gemm.py
 patches/v030_gdn/
 patches/v030_qsa_fused/
 patches/v030_qsa_rope/
+patches/v030_nvfp4hooks/
 patches/v030_dropcache/
 patches/replayssm_gdn/orig/
 patches/replayssm_gdn/*_v030.py

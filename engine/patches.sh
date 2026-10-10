@@ -392,6 +392,23 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         add_overlay "$FS/kv_cache_utils_v030.py" \
                     "$VLLM_PKG/v1/core/kv_cache_utils.py"
     fi
+    if [[ "$NVFP4_ACT_HOOKS" == "true" ]]; then
+        info "=== Step 4c: NVFP4 activation channel-stat hooks (debug) ==="
+        # Debug overlay (patches/patch_nvfp4_act_hooks.py): per-channel absmax
+        # capture on the emulated NVFP4 MoE path for
+        # check_nvfp4_activations.py --channel-stats. Only meaningful with
+        # moe_backend: emulation (the fused backends never materialize the
+        # down_proj input). Arms on /tmp/nvfp4_act_hooks.arm inside the
+        # container, dumps to /tmp/nvfp4_act_hooks.json, then disarms.
+        HK="$SCRIPT_DIR/patches/v030_nvfp4hooks"
+        mkdir -p "$HK/orig"
+        extract_from_image "$VLLM_PKG/model_executor/layers/fused_moe/experts/nvfp4_emulation_moe.py" \
+                           "$HK/orig/nvfp4_emulation_moe.py"
+        python3 "$SCRIPT_DIR/patches/patch_nvfp4_act_hooks.py" || err "patch_nvfp4_act_hooks.py failed"
+        add_overlay "$HK/nvfp4_emulation_moe_v030.py" \
+                    "$VLLM_PKG/model_executor/layers/fused_moe/experts/nvfp4_emulation_moe.py"
+        OVERLAY_ENV+=("-e VLLM_NVFP4_ACT_HOOKS=1")
+    fi
     OVERLAY_ENV+=("-e VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/tmp/fi_autotune")
     OVERLAY_ENV+=("-e VLLM_USE_BREAKABLE_CUDAGRAPH=${V030_BREAKABLE_CUDAGRAPH:-0}")
     [[ "${V030_BREAKABLE_CUDAGRAPH:-0}" == "1" && "$PLE_OFFLOAD" == "true" ]] && \
