@@ -180,6 +180,12 @@ MTP_ADAPTIVE_DEBUG="${MTP_ADAPTIVE_DEBUG:-false}"
 # consumes it (v0.30 lane only, patches/patch_load_drop_cache_v030.py): keeps
 # the page cache one shard deep during the load on unified memory.
 LOAD_DROP_CACHE="${LOAD_DROP_CACHE:-false}"
+# NVFP4 per-channel activation hooks (v0.30 lane only, debug tooling,
+# patches/patch_nvfp4_act_hooks.py): captures per-channel absmax of every
+# MoE layer's gate_up/down_proj inputs. Only fires with moe_backend:
+# emulation — the fused NVFP4 kernels never materialize the intermediate, so
+# the overlay is inert on any other backend.
+NVFP4_ACT_HOOKS="${NVFP4_ACT_HOOKS:-false}"
 # Free-list block-id sort (v0.30 lane only, patches/free_block_sort/):
 # FreeKVCacheBlockQueue.append_n sorts freed blocks by block_id so KV
 # offload/prefetch DMA sees address-sequential blocks (vllm#31371).
@@ -190,6 +196,7 @@ FREE_BLOCK_SORT="${FREE_BLOCK_SORT:-false}"
 [[ "$QSA_FUSED_DRAFT" != "true" || "$V030" == "true" ]] || err "qsa_fused_draft is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$QSA_ROPE_CLAMP" != "true" || "$V030" == "true" ]] || err "qsa_rope_clamp is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$LOAD_DROP_CACHE" != "true" || "$V030" == "true" ]] || err "load_drop_cache is only supported on the vLLM 0.30 lane (v030: true)."
+[[ "$NVFP4_ACT_HOOKS" != "true" || "$V030" == "true" ]] || err "nvfp4_act_hooks is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$FREE_BLOCK_SORT" != "true" || "$V030" == "true" ]] || err "free_block_sort is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$MTP_ADAPTIVE_DEPTH" != "true" || "$V030" == "true" ]] || err "mtp_adaptive_depth is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$MTP_ADAPTIVE_DEPTH" != "true" || "$MTP_NUM_SPECULATIVE_TOKENS" -gt 1 ]] || err "mtp_adaptive_depth needs mtp_num_speculative_tokens > 1 (k <= 1 has no chain to truncate)."
