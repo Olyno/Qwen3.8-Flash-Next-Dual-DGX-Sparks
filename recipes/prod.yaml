@@ -7,9 +7,11 @@
 # block-drop fix are native, FP8 KV comes from the v030 backport overlay.
 #
 # Serving shape follows the topology (NODES in .env): at NODES=1 the PLE mmap
-# offload parks ~48 GiB of expert weights in a file-backed host table so the
-# model fits at TP=1; at NODES=2 config.sh derives ple_offload: false,
-# max_model_len: 262144 (native, no YaRN) and max_num_seqs: 8 from the halved
+# offload parks the ~27 GiB packed n-gram embedding table (16 heads, hashed
+# bigram/trigram rows; gathered once per forward at layer 2) in a file-backed
+# host table so the model fits at TP=1; at NODES=2 config.sh derives
+# ple_offload: false, max_model_len: 262144 (native, no YaRN) and
+# max_num_seqs: 8 from the halved
 # per-rank footprint. Pin any of them here to override.
 name: prod
 image: vllm/vllm-openai:v0.30.0@sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90
@@ -53,8 +55,9 @@ mtp_disable_block_drop: 1
 # Block verification (Sun et al.) jointly verifies the draft block; lossless
 # w.r.t. the target distribution, gated by bench/output_gate.py.
 mtp_rejection_sample_method: block
-# ple_offload: derived from NODES (true at 1 node — experts don't fit on-GPU;
-# false at 2 — halved per-rank weights leave the host table out of the loop).
+# ple_offload: derived from NODES (true at 1 node — the n-gram table is
+# offloaded so the model fits; false at 2 — halved per-rank weights leave the
+# host table out of the loop).
 qsa_profile: stock
 fp8_dense: false
 # skinny_gemm: GB10 SM12x skinny-GEMM plan overlay. Plans are TP=2 local
