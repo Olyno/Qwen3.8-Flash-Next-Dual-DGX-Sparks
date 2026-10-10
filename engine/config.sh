@@ -168,6 +168,9 @@ QSA_ROPE_CLAMP="${QSA_ROPE_CLAMP:-false}"
 # unchanged. Needs k > 1.
 MTP_ADAPTIVE_DEPTH="${MTP_ADAPTIVE_DEPTH:-false}"
 MTP_ADAPTIVE_DEPTH_THRESHOLD="${MTP_ADAPTIVE_DEPTH_THRESHOLD:-0.5}"
+# VLLM_MTP_ADAPTIVE_DEBUG=1 in the container: rate-limited logging of the
+# recorded per-step probs / survival products / widths (see the patcher).
+MTP_ADAPTIVE_DEBUG="${MTP_ADAPTIVE_DEBUG:-false}"
 # posix_fadvise(DONTNEED) on each checkpoint shard right after the loader
 # consumes it (v0.30 lane only, patches/patch_load_drop_cache_v030.py): keeps
 # the page cache one shard deep during the load on unified memory.
