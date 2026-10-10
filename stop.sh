@@ -71,12 +71,6 @@ else
     echo "  Head: not running."
 fi
 
-# Fast Start weight-cache daemon (ipc_cache recipe key), if present.
-if docker stop -t 30 vllm-fn-wc >/dev/null 2>&1; then
-    docker rm vllm-fn-wc >/dev/null 2>&1
-    echo "  Weight-cache daemon: stopped."
-fi
-
 if $STOP_NFS; then
     echo "Stopping NFS share ($NFS_CONTAINER) on head..."
     echo "  (kernel NFS in Docker can ignore SIGKILL if rpcbind is in D-state; Ctrl-C and reboot if this hangs)"

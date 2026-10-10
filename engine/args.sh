@@ -23,18 +23,8 @@
     [[ -n "$ATTENTION_BLOCK_SIZE" ]] && VLLM_ARGS+=("--block-size" "$ATTENTION_BLOCK_SIZE")
     [[ -n "$MAMBA_SSM_CACHE_DTYPE" ]] && VLLM_ARGS+=("--mamba-ssm-cache-dtype" "$MAMBA_SSM_CACHE_DTYPE")
     [[ -n "$GDN_PREFILL_BACKEND" ]] && VLLM_ARGS+=("--gdn-prefill-backend" "$GDN_PREFILL_BACKEND")
-    if [[ "$IPC_CACHE" == "true" ]]; then
-        # Fast Start: map post-quantized weights from the weight-cache daemon
-        # over CUDA IPC instead of reading the checkpoint from disk. The
-        # daemon is launched in engine/launch.sh before the head. fallback
-        # false: a silent disk fallback would hide a broken daemon behind a
-        # slow boot.
-        VLLM_ARGS+=("--load-format" "ipc_cache")
-        VLLM_ARGS+=("--model-loader-extra-config" "$(printf "'{\"socket_dir\":\"/run/vllm-weight-cache\",\"fallback\":false}'")")
-    else
-        VLLM_ARGS+=("--load-format" "safetensors")
-        VLLM_ARGS+=("--safetensors-load-strategy" "lazy")
-    fi
+    VLLM_ARGS+=("--load-format" "safetensors")
+    VLLM_ARGS+=("--safetensors-load-strategy" "lazy")
     VLLM_ARGS+=("--enable-chunked-prefill")
     VLLM_ARGS+=("--reasoning-parser" "qwen3")
     VLLM_ARGS+=("--enable-auto-tool-choice")
