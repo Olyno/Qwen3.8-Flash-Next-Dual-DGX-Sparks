@@ -568,6 +568,33 @@ SPECULATOR_HUNKS = (
 )
 
 # ------------------------------------------------------------ model_runner.py
+MR_IMPORT_OLD = "import gc\n"
+MR_IMPORT_NEW = "import gc\nimport os\n"
+
+MR_MODULE_OLD = "logger = init_logger(__name__)\n"
+MR_MODULE_NEW = """\
+logger = init_logger(__name__)
+
+# Adaptive MTP draft depth debug (patch_mtp_adaptive_depth.py): with
+# VLLM_MTP_ADAPTIVE_DEBUG=1, log the proposal width at the two handoff points
+# (set_draft_tokens / take_draft_token_ids) — first 20 calls, then every 200th.
+_MTP_ADAPTIVE_HANDOFF_DEBUG = os.environ.get("VLLM_MTP_ADAPTIVE_DEBUG", "0") == "1"
+_MTP_ADAPTIVE_HANDOFF_CALLS = [0]
+
+
+def _mtp_adaptive_handoff_log(where: str, num_proposed, width: int) -> None:
+    _MTP_ADAPTIVE_HANDOFF_CALLS[0] += 1
+    n = _MTP_ADAPTIVE_HANDOFF_CALLS[0]
+    if n <= 20 or n % 200 == 0:
+        logger.warning(
+            "MTP_ADAPTIVE_DEBUG %s call=%d num_proposed=%s width=%d",
+            where,
+            n,
+            num_proposed,
+            width,
+        )
+"""
+
 MR_HANDOFF_OLD = """\
             self.draft_tokens_handler.set_draft_tokens(
                 input_batch,
@@ -589,13 +616,37 @@ MR_HANDOFF_NEW = """\
                 draft_tokens_for_handler = draft_tokens_for_handler[
                     :, :num_proposed_drafts
                 ]
+            if _MTP_ADAPTIVE_HANDOFF_DEBUG:
+                _mtp_adaptive_handoff_log(
+                    "handoff",
+                    num_proposed_drafts,
+                    draft_tokens_for_handler.shape[1],
+                )
             self.draft_tokens_handler.set_draft_tokens(
                 input_batch,
                 draft_tokens_for_handler,
             )
 """
 
-RUNNER_HUNKS = ((MR_HANDOFF_OLD, MR_HANDOFF_NEW),)
+MR_TAKE_OLD = """\
+    def take_draft_token_ids(self) -> DraftTokenIds | None:
+        return self.draft_tokens_handler.get_draft_tokens()
+"""
+MR_TAKE_NEW = """\
+    def take_draft_token_ids(self) -> DraftTokenIds | None:
+        if _MTP_ADAPTIVE_HANDOFF_DEBUG:
+            _mtp_adaptive_handoff_log(
+                "take", None, self.draft_tokens_handler.num_draft_tokens
+            )
+        return self.draft_tokens_handler.get_draft_tokens()
+"""
+
+RUNNER_HUNKS = (
+    (MR_IMPORT_OLD, MR_IMPORT_NEW),
+    (MR_MODULE_OLD, MR_MODULE_NEW),
+    (MR_HANDOFF_OLD, MR_HANDOFF_NEW),
+    (MR_TAKE_OLD, MR_TAKE_NEW),
+)
 
 
 def _apply(src: str, hunks, name: str, guard: str) -> str:
