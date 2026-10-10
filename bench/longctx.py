@@ -12,7 +12,8 @@ NOTE: this build streams reasoning in delta["reasoning"], NOT
 """
 import json, time, argparse, urllib.request, uuid
 
-BASE, MODEL = "http://localhost:8888", "qwen3.8-flash-next"
+BASE = "http://localhost:8888"
+MODEL = "Qwen3.8-Flash-Next-NVFP4"  # served_model_name of the default recipe; --model overrides
 FILLER = ("Entry {i:06d}: the quarterly logistics audit recorded a routine "
           "variance in the northbound depot inventory.\n")   # 25 tokens/line
 NEEDLES = [(0.05, "alpha", "7391-CORAL"),
@@ -36,10 +37,13 @@ def build(n):
     return "".join(lines)
 
 def main():
+    global MODEL
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", type=int, default=600_000)
     ap.add_argument("--max-tokens", type=int, default=1024)
+    ap.add_argument("--model", default=MODEL)
     args = ap.parse_args()
+    MODEL = args.model
 
     q = ("\n\nQuestion: three SECRET RECORD lines are hidden in the log above. "
          "List the alpha, bravo and charlie access codes, one per line. "
