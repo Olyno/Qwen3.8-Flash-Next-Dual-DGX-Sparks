@@ -76,6 +76,23 @@ Inputs:  patches/mtp_adaptive_depth/orig/speculator.py (from the image)
 Outputs: patches/mtp_adaptive_depth/speculator_v030.py
          patches/mtp_adaptive_depth/model_runner_v030.py
 argv[0]/argv[1] override the orig/output directories (used by the test).
+
+STATUS (2026-10-10, boot-verified): INERT in this lane. The scoring
+and the cutoff work end to end (VLLM_MTP_ADAPTIVE_DEBUG=1 shows correct
+per-step probs and keep=1..4 decisions; the model_runner handoff slices to
+the published width), but vLLM 0.30 resolves ASYNC SCHEDULING ON for MTP +
+the mp executor (engine/config.sh), and AsyncScheduler never consults the
+worker for the proposal width: _update_after_schedule sets
+request.spec_token_ids = [-1] * num_spec_tokens_to_schedule with
+num_spec_tokens_to_schedule = self.num_spec_tokens (scheduler.py), while the
+non-async feedback channel (post_step -> take_draft_token_ids ->
+DraftTokensHandler.num_draft_tokens) is skipped (core.py gates it on
+`not self.async_scheduling`; the debug log shows take_draft_token_ids is
+never called). So the scheduler always schedules k drafts and
+spec_decode_num_draft_tokens/num_drafts is exactly k — the truncation is a
+no-op. A real fix needs a worker->scheduler per-step width feedback channel
+in the async lane (or the stock dynamic_sd_lookup knob driven by confidence),
+not a speculator change. Kept as documented dead weight, opt-in only.
 """
 import ast
 import inspect
