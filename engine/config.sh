@@ -204,8 +204,6 @@ if [[ "$FP8_DENSE" == "true" ]]; then
     MODEL_ID="$FP8_DENSE_MODEL_ID"
     DO_DOWNLOAD_DEFAULT=false   # local-only checkpoint, never on the Hub
 fi
-[[ "$IPC_CACHE" != "true" || "$NNODES" -eq 1 ]] || err "ipc_cache wiring is single-node only (the daemon socket and rank mapping are wired for one node)."
-[[ "$IPC_CACHE" != "true" || "$FP8_DENSE" != "true" ]] || err "ipc_cache and fp8_dense are mutually exclusive (untested combination)."
 
 # Local checkpoint (recipe model_path): served via bind-mount at /model,
 # never downloaded. MODEL_ID becomes a display name only.
@@ -274,11 +272,6 @@ VLLM_ALLOW_LONG_MAX_MODEL_LEN="${VLLM_ALLOW_LONG_MAX_MODEL_LEN:-}"
 # Marlin MoE atomic-add (envs.py; marlin_utils.py:610). Only meaningful with
 # moe_backend: marlin; empty = container default (0).
 VLLM_MARLIN_USE_ATOMIC_ADD="${VLLM_MARLIN_USE_ATOMIC_ADD:-}"
-# Fast Start weight cache (v0.30, vllm/model_executor/model_loader/weight_cache):
-# a per-GPU daemon holds the post-quantized weights and serves them over CUDA
-# IPC; the engine boots with --load-format ipc_cache and maps them zero-copy.
-# Single-node only; mutually exclusive with fp8_dense (own overlay set).
-IPC_CACHE="${IPC_CACHE:-false}"
 # Refuse to launch when another process already holds the GPU (both nodes).
 REQUIRE_IDLE_GPU="${REQUIRE_IDLE_GPU:-true}"
 

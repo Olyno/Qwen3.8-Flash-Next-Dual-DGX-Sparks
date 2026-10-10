@@ -212,54 +212,6 @@ LAUNCH_EOF
     docker rm -f vllm-fn >/dev/null 2>&1 || true
     mkdir -p "$HOME/.cache/vllm"
 
-    # Optional Fast Start weight-cache daemon (recipe key ipc_cache): loads and
-    # post-processes the weights once, then holds them in GPU memory and serves
-    # CUDA IPC handles over a shared socket dir. The head maps them zero-copy
-    # (--load-format ipc_cache, wired in engine/args.sh). The daemon builds the
-    # same model code as the engine, so it gets the same overlay mounts/envs.
-    HEAD_WC_MOUNT=""
-    if [[ "$IPC_CACHE" == "true" ]]; then
-        WC_SOCK_HOST="$HOME/.cache/vllm/weight-cache-sockets"
-        mkdir -p "$WC_SOCK_HOST"
-        HEAD_WC_MOUNT="-v $WC_SOCK_HOST:/run/vllm-weight-cache"
-        docker rm -f vllm-fn-wc >/dev/null 2>&1 || true
-        WC_EP=""
-        [[ "$ENABLE_EXPERT_PARALLEL" == "true" ]] && WC_EP="--enable-expert-parallel"
-        docker run -d --name vllm-fn-wc \
-            --gpus all --network host --ipc host \
-            --log-opt max-size=50m --log-opt max-file=3 \
-            --cap-add SYS_NICE --ulimit memlock=-1 --ulimit stack=67108864 \
-            $CPUSET_ARG \
-            $ALLOC_ENV \
-            -e HF_HUB_OFFLINE=1 \
-            -e TRANSFORMERS_OFFLINE=1 \
-            -e HF_HOME=/root/.cache/huggingface \
-            $HEAD_OVERLAY_MOUNTS \
-            $OVERLAY_ENV_STR \
-            -v $HF_CACHE_DIR:/root/.cache/huggingface \
-            $HEAD_MODEL_MOUNT \
-            -v $HOME/.cache/vllm:/root/.cache/vllm \
-            $HEAD_WC_MOUNT \
-            --entrypoint python3 \
-            $IMAGE \
-            -m vllm.model_executor.model_loader.weight_cache.daemon \
-            --model $MODEL_ARG \
-            --tensor-parallel-size $TENSOR_PARALLEL_SIZE \
-            $WC_EP \
-            --weight-cache-socket-dir /run/vllm-weight-cache
-        info "  Waiting for the weight-cache daemon to load and serve (same cost as a stock load)..."
-        WC_DEADLINE=$(( $(date +%s) + READY_TIMEOUT_S ))
-        until docker logs vllm-fn-wc 2>&1 | grep -q "Weight cache daemon READY"; do
-            if ! docker ps --format '{{.Names}}' | grep -q '^vllm-fn-wc$'; then
-                docker logs --tail 60 vllm-fn-wc 2>&1 || true
-                err "Weight-cache daemon exited during startup (log above)."
-            fi
-            (( $(date +%s) < WC_DEADLINE )) || err "Weight-cache daemon not ready after ${READY_TIMEOUT_S}s."
-            sleep 10
-        done
-        ok "Weight-cache daemon ready."
-    fi
-
     # Write head launch script (same approach as worker — avoids eval JSON issues)
     HEAD_SCRIPT=$(mktemp /tmp/vllm_head_XXXXXX.sh)
     cat > "$HEAD_SCRIPT" <<LAUNCH_EOF
@@ -289,7 +241,6 @@ docker run \
     $OVERLAY_ENV_STR \
     -v $HF_CACHE_DIR:/root/.cache/huggingface \
     $HEAD_MODEL_MOUNT \
-    $HEAD_WC_MOUNT \
     -v $HOME/.cache/vllm:/root/.cache/vllm \
     $IMAGE \
     $MODEL_ARG \
