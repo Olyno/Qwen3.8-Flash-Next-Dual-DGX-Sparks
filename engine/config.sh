@@ -259,6 +259,9 @@ LONG_PREFILL_TOKEN_THRESHOLD="${LONG_PREFILL_TOKEN_THRESHOLD:-}"
 VLLM_QSA_DET_TOPK="${VLLM_QSA_DET_TOPK:-}"
 VLLM_MOE_DET_FINALIZE="${VLLM_MOE_DET_FINALIZE:-}"
 VLLM_ALLOW_LONG_MAX_MODEL_LEN="${VLLM_ALLOW_LONG_MAX_MODEL_LEN:-}"
+# Marlin MoE atomic-add (envs.py; marlin_utils.py:610). Only meaningful with
+# moe_backend: marlin; empty = container default (0).
+VLLM_MARLIN_USE_ATOMIC_ADD="${VLLM_MARLIN_USE_ATOMIC_ADD:-}"
 # Refuse to launch when another process already holds the GPU (both nodes).
 REQUIRE_IDLE_GPU="${REQUIRE_IDLE_GPU:-true}"
 
