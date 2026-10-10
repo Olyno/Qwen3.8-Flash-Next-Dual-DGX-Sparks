@@ -46,8 +46,15 @@ def _fake_speculator_src() -> str:
 
 
 def _fake_runner_src() -> str:
-    """Syntactically valid stand-in carrying the model_runner anchor once."""
-    return "class Runner:\n    def step(self, input_batch):\n" + pad.MR_HANDOFF_OLD
+    """Syntactically valid stand-in carrying every model_runner anchor once."""
+    return (
+        pad.MR_IMPORT_OLD
+        + pad.MR_MODULE_OLD
+        + "class Runner:\n    def step(self, input_batch):\n"
+        + pad.MR_HANDOFF_OLD
+        + "\n"
+        + pad.MR_TAKE_OLD
+    )
 
 
 def _stage_origs(speculator_src=None, runner_src=None):
