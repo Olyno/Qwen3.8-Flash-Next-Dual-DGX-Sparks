@@ -434,22 +434,30 @@ fi
 
 if $DO_LAUNCH && [[ "$V030" == "true" && "$MTP_ADAPTIVE_DEPTH" == "true" ]]; then
     info "=== Step 4e: adaptive MTP draft depth (vLLM 0.30) ==="
-    # patches/patch_mtp_adaptive_depth.py: the MTP proposer stops the draft
-    # chain early once the draft head's own survival product (running product
-    # of per-step top-token probs, batch mean) drops below
-    # VLLM_MTP_ADAPTIVE_DEPTH_THRESHOLD. Per-step uniform k: each draft
-    # iteration replays its own cudagraph keyed by the unchanged decode batch
-    # size, so an early break replays a prefix of the same graphs; the runner
-    # carries the narrower [batch, k'] output to the scheduler. Target
-    # verification is unchanged. Composes with MTP_DRAFT_VOCAB / FP8_DRAFT_HEAD
-    # (the confidence is read off the reduced/FP8 head).
+    # patches/patch_mtp_adaptive_depth.py: the V2 speculator (the code the
+    # gpu_worker V2 runner actually executes) stops the draft chain early
+    # once the draft head's own survival product (running product of per-step
+    # top-token probs, batch mean) drops below
+    # VLLM_MTP_ADAPTIVE_DEPTH_THRESHOLD. Per-step uniform k: propose()
+    # publishes the truncated width and the model runner hands the narrowed
+    # slice to the DraftTokensHandler (variable chain widths are a stock
+    # scheduler path). The host-driven draft loops also break at the cut;
+    # under the fused-FULL single-graph loop (qsa_fused_draft) the chain runs
+    # full length and the width is trimmed post-hoc. Target verification is
+    # unchanged. Composes with MTP_DRAFT_VOCAB / FP8_DRAFT_HEAD (the
+    # confidence is read off the reduced/FP8 head) and QSA_FUSED_DRAFT
+    # (different file: qsa_cache.py, not the speculator).
     AD="$SCRIPT_DIR/patches/mtp_adaptive_depth"
     mkdir -p "$AD/orig"
-    extract_from_image "$VLLM_PKG/v1/spec_decode/llm_base_proposer.py" \
-                       "$AD/orig/llm_base_proposer.py"
+    extract_from_image "$VLLM_PKG/v1/worker/gpu/spec_decode/autoregressive/speculator.py" \
+                       "$AD/orig/speculator.py"
+    extract_from_image "$VLLM_PKG/v1/worker/gpu/model_runner.py" \
+                       "$AD/orig/model_runner.py"
     python3 "$SCRIPT_DIR/patches/patch_mtp_adaptive_depth.py" || err "patch_mtp_adaptive_depth.py failed"
-    add_overlay "$AD/llm_base_proposer_v030.py" \
-                "$VLLM_PKG/v1/spec_decode/llm_base_proposer.py"
+    add_overlay "$AD/speculator_v030.py" \
+                "$VLLM_PKG/v1/worker/gpu/spec_decode/autoregressive/speculator.py"
+    add_overlay "$AD/model_runner_v030.py" \
+                "$VLLM_PKG/v1/worker/gpu/model_runner.py"
     OVERLAY_ENV+=("-e VLLM_MTP_ADAPTIVE_DEPTH=1" "-e VLLM_MTP_ADAPTIVE_DEPTH_THRESHOLD=$MTP_ADAPTIVE_DEPTH_THRESHOLD")
 fi
 

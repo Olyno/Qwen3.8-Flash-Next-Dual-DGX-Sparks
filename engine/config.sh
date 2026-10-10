@@ -161,10 +161,11 @@ QSA_FUSED_DRAFT="${QSA_FUSED_DRAFT:-false}"
 # (IMA on SM121/GB10).
 QSA_ROPE_CLAMP="${QSA_ROPE_CLAMP:-false}"
 # Adaptive MTP draft depth (v0.30 lane only,
-# patches/patch_mtp_adaptive_depth.py): truncates the per-step draft chain
-# once the draft head's own survival product (running product of per-step
-# top-token probs, batch mean) drops below MTP_ADAPTIVE_DEPTH_THRESHOLD.
-# k is per-step uniform, target verification is unchanged. Needs k > 1.
+# patches/patch_mtp_adaptive_depth.py): the V2 speculator truncates the
+# per-step draft chain once the draft head's own survival product (running
+# product of per-step top-token probs, batch mean) drops below
+# MTP_ADAPTIVE_DEPTH_THRESHOLD. k is per-step uniform, target verification is
+# unchanged. Needs k > 1.
 MTP_ADAPTIVE_DEPTH="${MTP_ADAPTIVE_DEPTH:-false}"
 MTP_ADAPTIVE_DEPTH_THRESHOLD="${MTP_ADAPTIVE_DEPTH_THRESHOLD:-0.5}"
 # posix_fadvise(DONTNEED) on each checkpoint shard right after the loader
