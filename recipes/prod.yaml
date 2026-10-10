@@ -7,12 +7,21 @@
 # block-drop fix are native, FP8 KV comes from the v030 backport overlay.
 #
 # Serving shape follows the topology (NODES in .env): at NODES=1 the PLE mmap
-# offload parks the ~27 GiB packed n-gram embedding table (16 heads, hashed
+# offload parks the ~48 GiB packed n-gram embedding table (16 heads, hashed
 # bigram/trigram rows; gathered once per forward at layer 2) in a file-backed
 # host table so the model fits at TP=1; at NODES=2 config.sh derives
 # ple_offload: false, max_model_len: 262144 (native, no YaRN) and
 # max_num_seqs: 8 from the halved
 # per-rank footprint. Pin any of them here to override.
+#
+# (2026-10, measured on GB10): decode is NOT page-fault-bound — the
+# upstream side-stream prefetch engages for this mmap path under
+# FULL_DECODE_ONLY capture and warm vs verified-cold decode are identical, so
+# no hot-row cache. vllm#58441 (prefetch reads graph-pool ids that later
+# segments reuse) is a PIECEWISE-only hazard; we run FULL_DECODE_ONLY +
+# CompilationMode.NONE — no segment reuse, no port needed, and #58489's
+# persistent-buffer fix lands with the next image anyway. Remaining PLE pain:
+# prefill TTFT under concurrent decode (prefill-time gather is not hidden).
 name: prod
 image: vllm/vllm-openai:v0.30.0@sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90
 v030: true
