@@ -105,6 +105,13 @@ qsa_rope_clamp: true
 # fadvise(DONTNEED) each checkpoint shard as the loader finishes it, keeping
 # the page cache one shard deep during the load.
 load_drop_cache: true
+# Free-list block-id sort (vllm#31371 RFC port, patches/free_block_sort/):
+# freed KV blocks go back onto the free list sorted by block_id, so pops hand
+# out address-sequential blocks — contiguous ids coalesce into larger DMA
+# bursts on KV offload/prefetch. Boot-verified on msi (2026-10-10): decodebench
+# and MTP acceptance identical to stock (accepted/draft 1.990 vs 1.99),
+# quality gate PASS.
+free_block_sort: true
 require_idle_gpu: true
 evict_page_cache: true
 nfs_share: false
