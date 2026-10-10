@@ -4,40 +4,74 @@
 """Adaptive MTP draft depth for the vLLM 0.30.0 lane (opt-in,
 MTP_ADAPTIVE_DEPTH=true).
 
-Patches vllm/v1/spec_decode/llm_base_proposer.py: after each draft step the
-running product of the batch-mean top-token softmax probability (the draft
-head's own survival score, DSpark/SVIP-style) is compared against
+Targets the V2 model runner's draft loop — the code gpu_worker.py actually
+runs ("Using V2 Model Runner"):
+
+  vllm/v1/worker/gpu/spec_decode/autoregressive/speculator.py
+      AutoRegressiveSpeculator (MTPSpeculator inherits it unchanged):
+      - sample_draft / _maybe_predict_acceptance overrides record each draft
+        token's top-probability into a persistent [max_num_reqs, k] buffer,
+        column-indexed by current_draft_step (capture-safe, so the writes
+        also happen inside FULL draft cudagraphs).
+      - _multi_step_decode / _generate_fused_drafts (the host-driven draft
+        loops) break early once the survival product crosses the threshold.
+        Under graph capture the check stays out (a D2H sync cannot be
+        captured); the fused-FULL path records the full chain and the cutoff
+        is applied post-hoc, see below.
+      - propose() ends in _adaptive_finalize: one D2H read of the recorded
+        columns, the running-product rule below, and the result is published
+        as adaptive_num_draft_tokens.
+  vllm/v1/worker/gpu/model_runner.py
+      The draft handoff slices req_states.draft_tokens to
+      speculator.adaptive_num_draft_tokens before DraftTokensHandler sees it
+      (the handler takes the width from the tensor's shape, and the scheduler
+      schedules len(spec_token_ids) per request — variable chain widths are a
+      stock code path). propose() itself keeps returning the full-width
+      buffer: req_states.draft_tokens is fixed [max_num_reqs, k], and the
+      dropped columns simply never leave the worker.
+
+The survival product is the running product of per-step top-token
+probabilities (the draft head's own survival score, DSpark/SVIP-style); the
+batch rule is the mean of per-request products vs
 VLLM_MTP_ADAPTIVE_DEPTH_THRESHOLD (default 0.5, Strata's spec-min-p operating
-point); once it drops below, the chain stops early. Training-free and exact:
-target verification is untouched, truncated drafts are simply never proposed.
+point). Training-free and exact: target verification is untouched, truncated
+drafts are simply never proposed (the engine treats them like a full
+rejection suffix, which stock MTP verify already handles).
 
-k is decided per STEP, uniform across the batch. The draft loop replays one
-cudagraph per iteration, dispatched on the (loop-invariant) decode batch
-size, so stopping early replays a prefix of the same captured graphs —
-FULL_DECODE_ONLY capture and the padded drafter batch are untouched, and no
-per-sequence padding is needed (a per-sequence k would break exactly that).
-The runner already carries a narrower [batch, k'] draft output to the
-scheduler (prev_num_spec_tokens / DraftTokenIds), which verifies k' tokens
-next step. Disabled under data parallelism (DP ranks would desync the break);
-TP ranks share the batch and the survival product is built from all-reduced
-values, so every rank breaks identically.
+k is decided per STEP, uniform across the batch (a per-sequence k would break
+the uniform-batch cudagraph dispatch). Disabled under data parallelism (DP
+ranks would desync the width); TP ranks share the batch and the survival
+product is built from gathered/all-reduced values, so every rank cuts
+identically.
 
-Confidence source: greedy ids stay bit-identical to _greedy_sample's (same
-local argmax, same (value, index) all-gather), so threshold 0 reproduces the
-stock stream. The prob is the winner's softmax mass over the head that
-produced it — the reduced draft-vocab slice or its FP8 copy when
-MTP_DRAFT_VOCAB/FP8_DRAFT_HEAD is on (one extra [batch] all-reduce per draft
-step; the dropped rows' mass is missing from the denominator, an overestimate
-that truncates less than a full-vocab score, never more), the gathered full
-head otherwise. k=1 and parallel drafting are no-ops (floor of 1 token). The
-cutoff check is one [1] D2H sync per draft step.
+Confidence source per draft sampling path:
+- local argmax reduction (mtp_draft_vocab, the prod path): ids stay the
+  model's own get_top_tokens output (bit-identical to stock); the winner's
+  softmax mass is recomputed off the reduced/FP8 head — the dropped rows'
+  mass is missing from the denominator, an overestimate that truncates less
+  than a full-vocab score, never more. One extra skinny [batch, vocab_slice]
+  GEMM + one [batch] all-gather/all-reduce pair per draft step.
+- greedy full-vocab: exact winner mass off the compute_logits logits that
+  sample_draft already materializes (one softmax per draft step).
+- probabilistic drafting: scored off the pre-temperature logits — an upper
+  bound at temperature > 0, so it truncates less (the safe direction).
+The cutoff check is one small D2H sync per propose (plus one per draft step
+in the host-driven loops).
+
+Composes with qsa_fused_draft: that overlay patches qsa_cache.py (the
+attention-metadata builder the speculator calls), a different file. With both
+on, the fused single-graph draft loop runs full length and the truncation is
+applied post-hoc to its output; with it off, the host-driven
+_multi_step_decode loop additionally stops replaying draft graphs at the cut.
 
 Runtime gate: VLLM_MTP_ADAPTIVE_DEPTH=1 plus VLLM_MTP_ADAPTIVE_DEPTH_THRESHOLD,
 both passed via OVERLAY_ENV (engine/patches.sh). Requirements enforced there:
 v030 lane, MTP_NUM_SPECULATIVE_TOKENS > 1.
 
-Inputs:  patches/mtp_adaptive_depth/orig/llm_base_proposer.py (from the image)
-Outputs: patches/mtp_adaptive_depth/llm_base_proposer_v030.py
+Inputs:  patches/mtp_adaptive_depth/orig/speculator.py (from the image)
+         patches/mtp_adaptive_depth/orig/model_runner.py (from the image)
+Outputs: patches/mtp_adaptive_depth/speculator_v030.py
+         patches/mtp_adaptive_depth/model_runner_v030.py
 argv[0]/argv[1] override the orig/output directories (used by the test).
 """
 import ast
@@ -58,9 +92,8 @@ def adaptive_draft_length(step_probs, threshold: float = 0.5) -> int:
 
     Keeps draft token i, then stops the chain once the running product
     prod(p_1..p_i) falls below threshold; always keeps at least one token.
-    The proposer loop applies the same rule incrementally (_adaptive_cut on
-    the batch-mean survival product), so this is the offline-testable
-    statement of the cutoff.
+    Single-chain statement of the cutoff (the batch rule is
+    adaptive_batch_keep); the proposer applies the same rule incrementally.
     """
     prod = 1.0
     keep = 0
@@ -72,25 +105,65 @@ def adaptive_draft_length(step_probs, threshold: float = 0.5) -> int:
     return max(1, keep)
 
 
-# Injected verbatim into the proposer overlay, so the offline test exercises
-# the exact code that runs in the container.
-PURE_BLOCK = inspect.getsource(_adaptive_cut) + "\n" + inspect.getsource(adaptive_draft_length)
+def adaptive_running_survival_means(batch_step_probs):
+    """Per-column batch mean of the per-request survival product.
 
-IMPORTS_OLD = "import dataclasses\nfrom importlib.util import find_spec\n"
-IMPORTS_NEW = "import dataclasses\nimport os\nfrom importlib.util import find_spec\n"
+    batch_step_probs: rectangular rows of per-request per-step top-probs.
+    Column j of the result is mean_req prod(p_1..p_j) — the quantity the
+    cutoff compares against the threshold after draft step j.
+    """
+    if not batch_step_probs:
+        return []
+    n = len(batch_step_probs)
+    survival = [1.0] * n
+    means = []
+    for j in range(len(batch_step_probs[0])):
+        survival = [s * row[j] for s, row in zip(survival, batch_step_probs)]
+        means.append(sum(survival) / n)
+    return means
 
-DIST_OLD = "from vllm.distributed.parallel_state import get_pp_group\n"
-DIST_NEW = """\
+
+def adaptive_batch_keep(batch_step_probs, threshold: float = 0.5) -> int:
+    """Uniform chain length for a batch: keep the crossing token, floor 1."""
+    means = adaptive_running_survival_means(batch_step_probs)
+    keep = len(means)
+    for j, m in enumerate(means):
+        if _adaptive_cut(m, threshold):
+            keep = j + 1
+            break
+    return max(1, keep)
+
+
+# Injected verbatim into the speculator overlay, so the offline test
+# exercises the exact code that runs in the container.
+PURE_BLOCK = "\n".join(
+    inspect.getsource(f)
+    for f in (
+        _adaptive_cut,
+        adaptive_draft_length,
+        adaptive_running_survival_means,
+        adaptive_batch_keep,
+    )
+)
+
+# ------------------------------------------------------------- speculator.py
+SP_IMPORTS_OLD = "from typing import Any\n\nimport torch\nimport torch.nn as nn\n"
+SP_IMPORTS_NEW = (
+    "from typing import Any\n\nimport os\n\nimport torch\nimport torch.nn as nn\n"
+)
+
+SP_DIST_OLD = "from vllm.config.compilation import CUDAGraphMode\n"
+SP_DIST_NEW = """\
+from vllm.config.compilation import CUDAGraphMode
 from vllm.distributed import get_tensor_model_parallel_world_size
 from vllm.distributed.communication_op import (
     tensor_model_parallel_all_gather,
     tensor_model_parallel_all_reduce,
 )
-from vllm.distributed.parallel_state import get_pp_group
 """
 
-MODULE_OLD = "logger = init_logger(__name__)\n\n\nclass SpecDecodeBaseProposer:"
-MODULE_NEW = (
+SP_MODULE_OLD = "logger = init_logger(__name__)\n"
+SP_MODULE_NEW = (
     "logger = init_logger(__name__)\n\n\n"
     + """# ---------------------------------------------------------------------------
 # Adaptive MTP draft depth (patches/patch_mtp_adaptive_depth.py). Opt-in:
@@ -106,211 +179,354 @@ _MTP_ADAPTIVE_DEPTH_THRESHOLD = float(
 
 """
     + PURE_BLOCK
-    + "\nclass SpecDecodeBaseProposer:"
+    + "\n"
 )
 
-METHOD_OLD = """\
-    def _greedy_sample(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        \"\"\"Greedy-sample draft tokens from hidden states.\"\"\"
+SP_INIT_OLD = """\
+        self.decode_cudagraph_manager: SpeculatorCudaGraphManager | None = None
+        self.use_fused_multi_step_decode = False
 """
-METHOD_NEW = """\
-    def _adaptive_draft_sample(
-        self,
-        hidden_states: torch.Tensor,
-        sampling_metadata: SamplingMetadata,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
-        \"\"\"(draft_token_ids, draft_probs, top_probs) for the adaptive cutoff.
-
-        Greedy ids are bit-identical to _greedy_sample's (same local argmax,
-        same (value, index) all-gather), so threshold 0 reproduces the stock
-        stream exactly. top_probs is the winner's softmax mass over the head
-        that produced it; with a reduced draft vocab the dropped rows' mass
-        is missing from the denominator, an overestimate, so the cutoff
-        truncates less than a full-vocab score would, never more.
-        \"\"\"
-        if (
-            self._enable_probabilistic_draft_probs
-            and not sampling_metadata.all_greedy
-        ):
-            ids, draft_probs = self._sample_draft_tokens(
-                hidden_states, sampling_metadata
+SP_INIT_NEW = """\
+        self.decode_cudagraph_manager: SpeculatorCudaGraphManager | None = None
+        self.use_fused_multi_step_decode = False
+        # Adaptive draft depth: per-step draft top-prob record, written from
+        # inside (possibly graph-captured) draft sampling and read host-side
+        # at the end of propose(). adaptive_num_draft_tokens is the proposal
+        # width the model runner hands to the DraftTokensHandler; both stay
+        # at num_speculative_steps unless the cutoff trims them.
+        self._adaptive_top_probs = (
+            torch.zeros(
+                self.max_num_reqs,
+                self.num_speculative_steps,
+                dtype=torch.float32,
+                device=device,
             )
-            assert draft_probs is not None
-            top_probs = draft_probs.gather(-1, ids[:, None].long()).squeeze(-1)
-            return ids, draft_probs, top_probs
+            if _MTP_ADAPTIVE_DEPTH
+            else None
+        )
+        self._adaptive_produced = self.num_speculative_steps
+        self.adaptive_num_draft_tokens = self.num_speculative_steps
+"""
 
+SP_METHODS_OLD = (
+    "    def on_multi_step_decode_end(self, num_reqs: int) -> None: ...\n"
+)
+SP_METHODS_NEW = (
+    SP_METHODS_OLD
+    + """
+    # ------------------------------------------------------------------
+    # Adaptive draft depth. The cutoff is the module-level pure rule: per-
+    # request survival product over the produced draft columns, batch mean,
+    # strict < threshold; keep the crossing token, floor of one.
+    # ------------------------------------------------------------------
+    def _adaptive_record_top_probs(
+        self, top_probs: torch.Tensor, draft_step: torch.Tensor
+    ) -> None:
+        # Column-indexed write into the persistent record; capture-safe, so
+        # it also runs inside FULL draft graphs. draft_step is
+        # self.current_draft_step at every call site.
+        num_tokens = top_probs.shape[0]
+        self._adaptive_top_probs[:num_tokens].scatter_(
+            1,
+            draft_step.view(1, 1).expand(num_tokens, 1),
+            top_probs.unsqueeze(1),
+        )
+
+    def _adaptive_reduced_head_top_probs(
+        self, hidden_states: torch.Tensor
+    ) -> torch.Tensor:
+        \"\"\"Winner's softmax mass over the reduced/FP8 draft head.
+
+        Ids stay the model's own get_top_tokens output (bit-identical to
+        stock); this recomputes only the probability. The dropped rows' mass
+        is missing from the denominator — an overestimate that truncates less
+        than a full-vocab score, never more. Every TP rank builds the same
+        value (gathered max, all-reduced denominator), so the group cuts
+        together.
+        \"\"\"
         model = self.model
-        if isinstance(model, BreakableCUDAGraphWrapper):
-            model = model.unwrap()
+        unwrap = getattr(model, "unwrap", None)
+        if callable(unwrap):
+            model = unwrap()
         fp8_head = getattr(model, "_draft_head_fp8", None)
         rows = getattr(model, "_draft_lm_head_weight", None)
-        id_map = getattr(model, "_draft_id_to_target_id", None)
-        num_tokens = hidden_states.shape[0]
-
-        if (fp8_head is None and rows is None) or id_map is None:
-            # Stock full-vocab head; compute_logits applies the logit scale /
-            # soft cap and gathers across TP.
-            logits = self.model.compute_logits(hidden_states)
-            if self.use_heterogeneous_vocab:
-                assert self.vocab_mapping is not None
-                logits = self.vocab_mapping.constrain_draft_logits(logits)
-            top_probs, ids = logits.float().softmax(dim=-1).max(dim=-1)
-            if self.use_heterogeneous_vocab:
-                ids = self.vocab_mapping.map_draft_to_target_ids(ids)
-            return ids, None, top_probs
-
-        # Reduced draft-vocab slice or its FP8 copy: per-rank local logits
-        # (unscaled, so apply the logit scale the stock head would).
+        if fp8_head is None and rows is None:
+            raise RuntimeError(
+                "VLLM_MTP_ADAPTIVE_DEPTH: use_local_argmax_reduction is on but "
+                "the draft model has neither _draft_lm_head_weight nor "
+                "_draft_head_fp8 (provided by the mtp_draft_vocab / "
+                "fp8_draft_head overlays); cannot score draft confidence"
+            )
         scale = float(getattr(model.logits_processor, "scale", 1.0))
         if fp8_head is not None:
             logits = fp8_head.logits(hidden_states).float() * scale
         else:
             logits = (
-                torch.nn.functional.linear(hidden_states.to(rows.dtype), rows).float()
+                torch.nn.functional.linear(
+                    hidden_states.to(rows.dtype), rows
+                ).float()
                 * scale
             )
-        if logits.shape[1] == 0:
-            # This rank owns none of the draft vocabulary: losing bid.
-            local_max_vals = torch.full(
-                (num_tokens,),
+        num_tokens = hidden_states.shape[0]
+        tp_size = get_tensor_model_parallel_world_size()
+        empty = logits.shape[1] == 0
+        if empty:
+            # This rank owns none of the draft vocabulary: losing bid, zero
+            # denominator contribution. The collectives still run.
+            local_max = torch.full(
+                (num_tokens, 1),
                 float("-inf"),
                 dtype=torch.float32,
                 device=hidden_states.device,
             )
-            global_indices = torch.zeros(
-                (num_tokens,), dtype=torch.long, device=hidden_states.device
-            )
         else:
-            local_max_vals, local_max_indices = logits.max(dim=-1)
-            global_indices = id_map[local_max_indices]
-
-        tp_size = get_tensor_model_parallel_world_size()
-        if tp_size == 1:
-            denom = (logits - local_max_vals[:, None]).exp().sum(dim=-1)
-            return global_indices.to(torch.int64), None, 1.0 / denom
-
-        # Same winner reduction as LogitsProcessor.get_top_tokens, then the
-        # softmax denominator over the whole slice: one [batch] all-reduce.
-        local_pair = torch.stack([local_max_vals, global_indices.float()], dim=-1)
-        gathered = tensor_model_parallel_all_gather(local_pair, dim=-1)
-        gathered = gathered.view(num_tokens, tp_size, 2)
-        winner = gathered[:, :, 0].argmax(dim=-1, keepdim=True)
-        ids = gathered[:, :, 1].gather(dim=-1, index=winner)
-        global_max = gathered[:, :, 0].gather(dim=-1, index=winner)
-        if logits.shape[1] == 0:
+            local_max = logits.max(dim=-1, keepdim=True).values
+        global_max = (
+            tensor_model_parallel_all_gather(local_max, dim=-1)
+            .max(dim=-1, keepdim=True)
+            .values
+            if tp_size > 1
+            else local_max
+        )
+        if empty:
             sumexp = torch.zeros(
-                (num_tokens,), dtype=torch.float32, device=hidden_states.device
+                num_tokens, dtype=torch.float32, device=hidden_states.device
             )
         else:
             sumexp = (logits - global_max).exp().sum(dim=-1)
-        denom = tensor_model_parallel_all_reduce(sumexp)
-        return ids.squeeze(-1).to(torch.int64), None, 1.0 / denom
+        if tp_size > 1:
+            sumexp = tensor_model_parallel_all_reduce(sumexp)
+        return 1.0 / sumexp
 
-    def _greedy_sample(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        \"\"\"Greedy-sample draft tokens from hidden states.\"\"\"
-"""
-
-FIRST_SAMPLE_OLD = """\
-        draft_token_ids, draft_probs = self._sample_draft_tokens(
-            sample_hidden_states, sampling_metadata
+    def sample_draft(
+        self,
+        hidden_states: torch.Tensor,
+        sample_src_positions: torch.Tensor,
+        idx_mapping: torch.Tensor,
+        temperature: torch.Tensor,
+        seeds: torch.Tensor,
+        draft_step: torch.Tensor,
+        draft_logits: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if (
+            self._adaptive_top_probs is not None
+            and self.use_local_argmax_reduction
+        ):
+            # Local-argmax drafting materializes no logits; score the winner
+            # off the reduced/FP8 head. (vLLM rejects local argmax +
+            # probabilistic drafting, so draft_logits is None here.)
+            ids = self.model.get_top_tokens(hidden_states)
+            self._adaptive_record_top_probs(
+                self._adaptive_reduced_head_top_probs(hidden_states), draft_step
+            )
+            return ids
+        return super().sample_draft(
+            hidden_states,
+            sample_src_positions,
+            idx_mapping,
+            temperature,
+            seeds,
+            draft_step,
+            draft_logits,
         )
-        draft_probs_list = None if draft_probs is None else [draft_probs]
-"""
-FIRST_SAMPLE_NEW = """\
-        adaptive_depth = _MTP_ADAPTIVE_DEPTH and (
-            self.vllm_config.parallel_config.data_parallel_size == 1
+
+    def _maybe_predict_acceptance(
+        self,
+        logits: torch.Tensor,
+        idx_mapping: torch.Tensor,
+        draft_step: torch.Tensor,
+    ) -> None:
+        super()._maybe_predict_acceptance(logits, idx_mapping, draft_step)
+        if self._adaptive_top_probs is None:
+            return
+        if self.acceptance_estimator is not None:
+            raise RuntimeError(
+                "VLLM_MTP_ADAPTIVE_DEPTH is incompatible with "
+                "enable_adaptive_verification (two confidence consumers)"
+            )
+        # Greedy full-vocab path: exact winner mass. Probabilistic drafting
+        # is scored off the pre-temperature logits — an upper bound at
+        # temperature > 0, so it truncates less (the safe direction).
+        top_probs = logits.float().softmax(dim=-1).max(dim=-1).values
+        self._adaptive_record_top_probs(top_probs, draft_step)
+
+    def _adaptive_should_cut(self, num_reqs: int, step: int) -> bool:
+        \"\"\"Stop the chain before drafting column `step`.
+
+        Columns 0..step-1 hold this call's drafts; cut when the survival
+        product after column step-1 has crossed the threshold.
+        \"\"\"
+        if self._adaptive_top_probs is None or self.dp_size > 1 or num_reqs < 1:
+            return False
+        if torch.cuda.is_current_stream_capturing():
+            # Capture records the full fixed-length chain; the cutoff is
+            # applied post-hoc to the replayed record in propose() instead.
+            return False
+        means = adaptive_running_survival_means(
+            self._adaptive_top_probs[:num_reqs, :step]
+            .to("cpu", torch.float64)
+            .tolist()
         )
-        if adaptive_depth:
-            draft_token_ids, draft_probs, top_probs = self._adaptive_draft_sample(
-                sample_hidden_states, sampling_metadata
-            )
-            survival = top_probs
-        else:
-            draft_token_ids, draft_probs = self._sample_draft_tokens(
-                sample_hidden_states, sampling_metadata
-            )
-        draft_probs_list = None if draft_probs is None else [draft_probs]
-"""
+        if _adaptive_cut(means[-1], _MTP_ADAPTIVE_DEPTH_THRESHOLD):
+            self._adaptive_produced = step
+            return True
+        return False
 
-LOOP_HEAD_OLD = """\
-        for token_index in range(self.num_speculative_tokens - 1):
-            # Update the inputs.
-"""
-LOOP_HEAD_NEW = """\
-        for token_index in range(self.num_speculative_tokens - 1):
-            # Adaptive depth: one [1] D2H sync per draft step on the batch-mean
-            # survival product. The product is built from all-reduced values,
-            # identical on every TP rank, so the whole group breaks together.
-            if adaptive_depth and _adaptive_cut(
-                float(survival.mean()), _MTP_ADAPTIVE_DEPTH_THRESHOLD
-            ):
-                break
-            # Update the inputs.
-"""
-
-LOOP_SAMPLE_OLD = """\
-            hidden_states = hidden_states[:batch_size]
-            draft_token_ids, draft_probs = self._sample_draft_tokens(
-                last_hidden_states[:batch_size], sampling_metadata
+    def _adaptive_finalize(self, num_reqs: int) -> None:
+        \"\"\"Publish this step's proposal width for the model runner.\"\"\"
+        keep = self.num_speculative_steps
+        if (
+            self._adaptive_top_probs is not None
+            and self.dp_size == 1
+            and num_reqs > 0
+        ):
+            keep = adaptive_batch_keep(
+                self._adaptive_top_probs[:num_reqs, : self._adaptive_produced]
+                .to("cpu", torch.float64)
+                .tolist(),
+                _MTP_ADAPTIVE_DEPTH_THRESHOLD,
             )
-            if draft_probs is not None:
+        self.adaptive_num_draft_tokens = keep
 """
-LOOP_SAMPLE_NEW = """\
-            hidden_states = hidden_states[:batch_size]
-            if adaptive_depth:
-                draft_token_ids, draft_probs, top_probs = (
-                    self._adaptive_draft_sample(
-                        last_hidden_states[:batch_size], sampling_metadata
-                    )
-                )
-                survival = survival * top_probs
-            else:
-                draft_token_ids, draft_probs = self._sample_draft_tokens(
-                    last_hidden_states[:batch_size], sampling_metadata
-                )
-            if draft_probs is not None:
-"""
-
-HUNKS = (
-    (IMPORTS_OLD, IMPORTS_NEW),
-    (DIST_OLD, DIST_NEW),
-    (MODULE_OLD, MODULE_NEW),
-    (METHOD_OLD, METHOD_NEW),
-    (FIRST_SAMPLE_OLD, FIRST_SAMPLE_NEW),
-    (LOOP_HEAD_OLD, LOOP_HEAD_NEW),
-    (LOOP_SAMPLE_OLD, LOOP_SAMPLE_NEW),
 )
 
+SP_MSD_LOOP_OLD = """\
+        for step in range(1, self.num_speculative_steps):
+            # Rebuild every step when positions advance, or just once
+"""
+SP_MSD_LOOP_NEW = """\
+        for step in range(1, self.num_speculative_steps):
+            # Adaptive draft depth: stop the chain once the survival product
+            # crosses the threshold. Host-driven path only — under FULL graph
+            # replay each iteration is the same captured step graph, so an
+            # early break replays a prefix of the same graphs.
+            if self._adaptive_should_cut(num_reqs, step):
+                break
+            # Rebuild every step when positions advance, or just once
+"""
 
-def _apply(src: str) -> str:
-    if "_adaptive_draft_sample" in src:
-        sys.exit("ERROR: mtp_adaptive_depth orig is already patched")
-    for i, (old, new) in enumerate(HUNKS):
+SP_FUSED_LOOP_OLD = """\
+        for step in range(1, self.num_speculative_steps):
+            self.current_draft_step.fill_(step)
+            self._generate_draft(
+"""
+SP_FUSED_LOOP_NEW = """\
+        for step in range(1, self.num_speculative_steps):
+            # Adaptive draft depth: see _multi_step_decode. When this whole
+            # loop is captured as one graph (fused FULL mode) the check
+            # stays out of the capture and propose() trims post-hoc.
+            if self._adaptive_should_cut(num_reqs, step):
+                break
+            self.current_draft_step.fill_(step)
+            self._generate_draft(
+"""
+
+SP_PROPOSE_MID_OLD = """\
+        self.on_multi_step_decode_begin(num_reqs)
+        # Generate the remaining num_speculative_steps - 1 draft tokens.
+"""
+SP_PROPOSE_MID_NEW = """\
+        # Adaptive draft depth: full chain unless a host-driven loop below
+        # cuts it short (a fused FULL graph records all steps; the width is
+        # then trimmed post-hoc in _adaptive_finalize).
+        self._adaptive_produced = self.num_speculative_steps
+        self.on_multi_step_decode_begin(num_reqs)
+        # Generate the remaining num_speculative_steps - 1 draft tokens.
+"""
+
+SP_PROPOSE_TAIL_OLD = """\
+        self.on_multi_step_decode_end(num_reqs)
+
+        return self.draft_tokens[:num_reqs]
+"""
+SP_PROPOSE_TAIL_NEW = """\
+        self.on_multi_step_decode_end(num_reqs)
+
+        # Adaptive draft depth: publish the (possibly truncated) proposal
+        # width. The returned buffer keeps full width — req_states.draft_
+        # tokens is fixed [max_num_reqs, k]; the runner slices the columns.
+        self._adaptive_finalize(num_reqs)
+
+        return self.draft_tokens[:num_reqs]
+"""
+
+SPECULATOR_HUNKS = (
+    (SP_IMPORTS_OLD, SP_IMPORTS_NEW),
+    (SP_DIST_OLD, SP_DIST_NEW),
+    (SP_MODULE_OLD, SP_MODULE_NEW),
+    (SP_INIT_OLD, SP_INIT_NEW),
+    (SP_METHODS_OLD, SP_METHODS_NEW),
+    (SP_MSD_LOOP_OLD, SP_MSD_LOOP_NEW),
+    (SP_FUSED_LOOP_OLD, SP_FUSED_LOOP_NEW),
+    (SP_PROPOSE_MID_OLD, SP_PROPOSE_MID_NEW),
+    (SP_PROPOSE_TAIL_OLD, SP_PROPOSE_TAIL_NEW),
+)
+
+# ------------------------------------------------------------ model_runner.py
+MR_HANDOFF_OLD = """\
+            self.draft_tokens_handler.set_draft_tokens(
+                input_batch,
+                self.req_states.draft_tokens[input_batch.idx_mapping],
+            )
+"""
+MR_HANDOFF_NEW = """\
+            # Adaptive MTP draft depth (patch_mtp_adaptive_depth.py): the
+            # speculator may have truncated this step's draft chain; only the
+            # first adaptive_num_draft_tokens columns are proposals. Other
+            # speculator types lack the attribute and pass through full width.
+            num_proposed_drafts = getattr(
+                self.speculator, "adaptive_num_draft_tokens", None
+            )
+            draft_tokens_for_handler = self.req_states.draft_tokens[
+                input_batch.idx_mapping
+            ]
+            if num_proposed_drafts is not None:
+                draft_tokens_for_handler = draft_tokens_for_handler[
+                    :, :num_proposed_drafts
+                ]
+            self.draft_tokens_handler.set_draft_tokens(
+                input_batch,
+                draft_tokens_for_handler,
+            )
+"""
+
+RUNNER_HUNKS = ((MR_HANDOFF_OLD, MR_HANDOFF_NEW),)
+
+
+def _apply(src: str, hunks, name: str, guard: str) -> str:
+    if guard in src:
+        sys.exit(f"ERROR: mtp_adaptive_depth {name} orig is already patched")
+    for i, (old, new) in enumerate(hunks):
         count = src.count(old)
         if count != 1:
-            sys.exit(f"mtp_adaptive_depth: anchor {i} not unique/missing "
+            sys.exit(f"mtp_adaptive_depth: anchor {i} in {name} not unique/missing "
                      f"(count={count}):\n{old[:200]}")
         src = src.replace(old, new)
-    return src
-
-
-def main(argv) -> int:
-    orig_dir = argv[0] if argv else os.path.join(HERE, "mtp_adaptive_depth", "orig")
-    out_dir = argv[1] if len(argv) > 1 else os.path.join(HERE, "mtp_adaptive_depth")
-    orig = os.path.join(orig_dir, "llm_base_proposer.py")
-    if not os.path.isfile(orig):
-        sys.exit(f"ERROR: missing {orig} (start.sh extracts it from the image)")
-    src = _apply(open(orig).read())
     try:
         ast.parse(src)
     except SyntaxError as exc:
-        sys.exit(f"mtp_adaptive_depth: patched llm_base_proposer_v030.py does not parse: {exc}")
-    out = os.path.join(out_dir, "llm_base_proposer_v030.py")
+        sys.exit(f"mtp_adaptive_depth: patched {name} does not parse: {exc}")
+    return src
+
+
+def _patch(orig_dir: str, out_dir: str, stem: str, hunks, guard: str) -> None:
+    orig = os.path.join(orig_dir, f"{stem}.py")
+    if not os.path.isfile(orig):
+        sys.exit(f"ERROR: missing {orig} (start.sh extracts it from the image)")
+    src = _apply(open(orig).read(), hunks, f"{stem}.py", guard)
+    out = os.path.join(out_dir, f"{stem}_v030.py")
     os.makedirs(out_dir, exist_ok=True)
     with open(out + ".tmp", "w") as f:
         f.write(src)
     os.replace(out + ".tmp", out)
     print(f"patched {out}")
+
+
+def main(argv) -> int:
+    orig_dir = argv[0] if argv else os.path.join(HERE, "mtp_adaptive_depth", "orig")
+    out_dir = argv[1] if len(argv) > 1 else os.path.join(HERE, "mtp_adaptive_depth")
+    _patch(orig_dir, out_dir, "speculator", SPECULATOR_HUNKS, "_adaptive_top_probs")
+    _patch(orig_dir, out_dir, "model_runner", RUNNER_HUNKS, "adaptive_num_draft_tokens")
     return 0
 
 
