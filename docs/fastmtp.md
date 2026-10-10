@@ -27,6 +27,10 @@ tokens/step).
   multi-day serving outage).
 
 Until then the acceptance-rate levers we *can* pull without training are:
-draft-vocab restriction (shipped), draft-k tuning (shipped), adaptive
-verification / MRV2 (in the v0.30 image, needs a boot test), and
-prefix-cache-under-MTP (vllm#52244, staged).
+draft-vocab restriction (shipped), draft-k tuning (shipped), and adaptive MTP
+draft depth (`mtp_adaptive_depth`, shipped opt-in). Dead ends, measured:
+adaptive verification / MRV2 (in the v0.30 image; boot-probed 2026-10-10 —
+conflicts with `use_local_argmax_reduction` which `mtp_draft_vocab` requires,
+and `GDNAttentionBackend` is an SSM backend that rejects on-device query
+trimming; needs real engine surgery, not worth it) and prefix-cache-under-MTP
+(vllm#52244 — inert without `--prefix-match-unit`, which we don't set).
