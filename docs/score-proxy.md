@@ -93,6 +93,21 @@ Research verdicts on the originally planned stage-2 items:
   ~191 MB quantized), with `google/embeddinggemma-300m` as fallback — the
   proxy only needs an OpenAI-compatible `/v1/embeddings` endpoint.
 
+## Embedding router service
+
+`proxy/embedding_server.py` serves the OpenAI-compatible `/v1/embeddings`
+endpoint the router POSTs to, on CPU, wrapping a sentence-transformers
+model (stdlib HTTP otherwise). On the deployment host:
+
+```
+pip install --user sentence-transformers
+python3 proxy/embedding_server.py            # --model/--host/--port to override
+```
+
+Then point the proxy at it with `PROXY_ROUTER_URL=http://127.0.0.1:8890`.
+If the service is down the router's fail-open path already returns
+passthrough, so chat traffic is unaffected.
+
 ## Credits
 
 - [autotrust/GEV-26B-Decide](https://huggingface.co/autotrust/GEV-26B-Decide)
