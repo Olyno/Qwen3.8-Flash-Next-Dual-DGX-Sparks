@@ -27,7 +27,7 @@ Env: PROXY_UPSTREAM (default http://localhost:8888), PROXY_PORT (8889),
 PROXY_ESCALATE, PROXY_ESCALATE_THRESHOLD (-0.35),
 PROXY_LOOP_GUARD (1), PROXY_LOOP_GUARD_REPEAT (3),
 PROXY_ROUTER_URL (unset = off), PROXY_ROUTER_MODEL
-(google/embeddinggemma-2), PROXY_ROUTER_THRESHOLD (0.15),
+(google/embeddinggemma-2), PROXY_ROUTER_THRESHOLD (0.10),
 PROXY_ROUTER_TRIVIAL_MAX_TOKENS (1024), PROXY_ROUTER_TIMEOUT_S (2).
 Stdlib only.
 """
@@ -218,7 +218,9 @@ class Router:
     capped before generation — unlike escalation there is no double
     generation. ponytail: centroids are embedded lazily on the first routable
     request and cached forever — restart the proxy after switching embedding
-    models."""
+    models. Threshold note: embeddinggemma-2 clusters short questions tightly,
+    an exact trivial-prototype match scores margin ~0.12, so the default is
+    0.10 — 0.15 would never fire."""
 
     def __init__(self, url, model, threshold, max_tokens, timeout):
         u = urllib.parse.urlparse(url)
@@ -447,9 +449,9 @@ class Handler(BaseHTTPRequestHandler):
                                         or router.max_tokens,
                                         router.max_tokens)
                 body = json.dumps(req).encode()
+                print(f"score proxy: routed trivial "
+                      f"(margin {margin:.3f})", file=sys.stderr)
                 if req.get("stream"):
-                    print(f"score proxy: routed trivial "
-                          f"(margin {margin:.3f})", file=sys.stderr)
                     guard = (LoopGuard(self.server.loop_repeat)
                              if self.server.loop_guard else None)
                     return self._passthrough(body, guard)
@@ -503,7 +505,7 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
                 loop_guard=True, loop_repeat=3, canonicalize=False,
                 strip_jitter=False, keepalive_s=0, router_url=None,
                 router_model="google/embeddinggemma-2",
-                router_threshold=0.15, router_max_tokens=1024,
+                router_threshold=0.10, router_max_tokens=1024,
                 router_timeout=2.0):
     u = urllib.parse.urlparse(upstream_url)
     srv = ThreadingHTTPServer(("", port), Handler)
@@ -539,7 +541,7 @@ def main():
         float(os.environ.get("PROXY_CACHE_KEEPALIVE_S", 0) or 0),
         os.environ.get("PROXY_ROUTER_URL") or None,
         os.environ.get("PROXY_ROUTER_MODEL", "google/embeddinggemma-2"),
-        float(os.environ.get("PROXY_ROUTER_THRESHOLD", 0.15)),
+        float(os.environ.get("PROXY_ROUTER_THRESHOLD", 0.10)),
         int(os.environ.get("PROXY_ROUTER_TRIVIAL_MAX_TOKENS", 1024)),
         float(os.environ.get("PROXY_ROUTER_TIMEOUT_S", 2)))
     print(f"score proxy on :{srv.server_port} -> "
