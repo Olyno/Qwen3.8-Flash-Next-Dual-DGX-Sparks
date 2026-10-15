@@ -94,6 +94,14 @@ fp8_draft_head: false
 # state slots (~2x smaller mamba page, one checkpoint rewrite per ring fill).
 # Mutually exclusive with lazy_gdn; needs mtp_num_speculative_tokens > 0.
 replayssm_gdn: false
+# SketchSSM (arXiv 2609.33051) and SuffixReplay (arXiv 2609.33477) assessed,
+# both SKIPPED: approximate methods that fail the quality bar by design
+# (SketchSSM's own table shows −2.4 pts on LiveCodeBench at G=8; SuffixReplay
+# −8.6 on RULER), both need the buffered-write substrate that already
+# collapsed here, and at batch ≤4 the GDN state read is ≲1% of step time.
+# SuffixReplay's gap is also already closed by stock align-mode mamba
+# prefix caching (block-granular checkpoints vs SGLang's 8192-token ones).
+# Revisit only at batch ≥64 or if ReplaySSM-GDN is ever fixed.
 # gdn_prefill_backend: flashinfer pins the FlashInfer CuTe-DSL GDN prefill
 # kernel (vllm#55715, gate widened to SM12x). Measured on GB10 (2026-10-10,
 # salted cold-prompt TTFT A/B, verified kernel engaged): NEUTRAL — 8k TTFT
