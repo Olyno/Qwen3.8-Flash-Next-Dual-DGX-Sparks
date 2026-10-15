@@ -56,6 +56,13 @@ kv_cache_dtype: fp8
 # fused CUDA MTP kernel (fp32/bf16 states only), and take 8-15 days of
 # Triton + calibration work. Revisit only at sustained high concurrency.
 mamba_ssm_cache_dtype: bfloat16
+# Prefix caching is stock-ON and already hybrid-aware: align-mode GDN state
+# checkpoint/restore plus Marconi-style retention (prefix_cache_retention_
+# interval=0 keeps only replay-boundary and shared-prefix-junction
+# checkpoints). Marconi (arXiv 2411.19379) assessed and SKIPPED — its delta
+# over stock (radix admission + FLOP-per-byte eviction) only pays under
+# cache-capacity pressure, which this shape (working set fits the pool)
+# never has. Expected gain for our traffic: ~0%.
 enable_expert_parallel: true
 mm_encoder_tp_mode: data
 # Pin the container to the ten 3.9 GHz X925 cores (0-4,10-14 are 2.8 GHz
