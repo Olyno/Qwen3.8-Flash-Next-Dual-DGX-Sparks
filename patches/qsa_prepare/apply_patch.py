@@ -42,6 +42,14 @@ IMA during CUDA-graph warmup). constexpr-off compiles to the bit-exact
 upstream kernel; engine/patches.sh passes VLLM_QSA_ROPE_CLAMP=1 when
 qsa_rope_clamp: true.
 
+This overlay also carries the prepare-side deltas of vllm#59533 ("Qwen4Exp:
+merge the QSA QKV/gate and indexer projections"), folded in unconditionally:
+the kernel takes main_qkv_stride_token instead of assuming a packed row
+(the merged projection hands the prepare a row-strided column slice of the
+wider QKVG buffer), the host-side assert relaxes to stride(-1) == 1, and
+four token-index computations cast to tl.int64. Behavior-identical for a
+contiguous main_qkv, which is what every unfused caller passes.
+
 Inputs:  patches/qsa_prepare/orig/{qsa.py,indexer_qsa.py,qsa_pre_indexer.py}
          (extracted from the image; qsa.py may be the FP8-KV overlay output)
 Outputs: patches/qsa_prepare/{qsa_v030.py,indexer_qsa_v030.py,qsa_prepare_v030.py}
@@ -472,6 +480,7 @@ PREP_KSIG_NEW = """\
     MROPE_H: tl.constexpr,
     MROPE_W: tl.constexpr,
     main_qkv_ptr,
+    main_qkv_stride_token,
     main_q_norm_weight_ptr,
     main_k_norm_weight_ptr,
     main_eps,
@@ -498,12 +507,12 @@ PREP_KSIG_NEW = """\
         # indexer work. RoPE covers the first D // 2 dims, the width of the
         # shared cos/sin table.
         main_pid = pid - num_index_work
-        token = main_pid // (MAIN_HQ + MAIN_HK)
+        token = (main_pid // (MAIN_HQ + MAIN_HK)).to(tl.int64)
         head = main_pid % (MAIN_HQ + MAIN_HK)
         HALF: tl.constexpr = D // 4
         dims = tl.arange(0, MAIN_D)
         rot = tl.arange(0, HALF)
-        row = main_qkv_ptr + token * (2 * (MAIN_HQ + MAIN_HK) * MAIN_D)
+        row = main_qkv_ptr + token * main_qkv_stride_token
         is_k = head >= MAIN_HQ
         kv_head = head - MAIN_HQ
         if is_k:
@@ -692,7 +701,8 @@ PREP_ASSERTS_NEW = """\
     section = mrope_section if mrope_section is not None else (0, 0, 0)
     assert len(section) == 3
     qkv_width = 2 * (num_main_q_heads + num_main_kv_heads) * main_head_dim
-    assert main_qkv.shape == (num_tokens, qkv_width) and main_qkv.is_contiguous()
+    assert main_qkv.shape == (num_tokens, qkv_width)
+    assert main_qkv.stride(-1) == 1
     assert main_slot_mapping.shape == (num_tokens,)
 """
 PREP_LAUNCH_OLD = """\
@@ -721,6 +731,7 @@ PREP_KWARGS_NEW = """\
         MROPE_H=section[1],
         MROPE_W=section[2],
         main_qkv_ptr=main_qkv,
+        main_qkv_stride_token=main_qkv.stride(0),
         main_q_norm_weight_ptr=main_q_norm_weight,
         main_k_norm_weight_ptr=main_k_norm_weight,
         main_eps=main_eps,
@@ -746,6 +757,31 @@ PREP_KWARGS_NEW = """\
 
 __all__ = ["qsa_prepare"]
 """
+# vllm#59533 int64 casts, applied to the regions this overlay inherits
+# untouched from the stock qsa_pre_indexer.py.
+PREP_I64_QTILE_OLD = """\
+        tokens = token_tile * TILE_T_Q + tl.arange(0, TILE_T_Q)
+"""
+PREP_I64_QTILE_NEW = """\
+        tokens = (token_tile * TILE_T_Q + tl.arange(0, TILE_T_Q)).to(tl.int64)
+"""
+PREP_I64_KBASE_OLD = """\
+            current_base = (
+                k_ptr + tl.maximum(source_tokens, 0)[:, None] * k_stride_token
+            )
+"""
+PREP_I64_KBASE_NEW = """\
+            current_base = (
+                k_ptr
+                + tl.maximum(source_tokens, 0).to(tl.int64)[:, None] * k_stride_token
+            )
+"""
+PREP_I64_STATE_OLD = """\
+                token = query_end - num_state_rows + state_offset
+"""
+PREP_I64_STATE_NEW = """\
+                token = (query_end - num_state_rows + state_offset).to(tl.int64)
+"""
 PREP_HUNKS = (
     (PREP_DOC_OLD, PREP_DOC_NEW),
     (PREP_NORMROPE_OLD, PREP_NORMROPE_NEW),
@@ -758,6 +794,9 @@ PREP_HUNKS = (
     (PREP_ASSERTS_OLD, PREP_ASSERTS_NEW),
     (PREP_LAUNCH_OLD, PREP_LAUNCH_NEW),
     (PREP_KWARGS_OLD, PREP_KWARGS_NEW),
+    (PREP_I64_QTILE_OLD, PREP_I64_QTILE_NEW),
+    (PREP_I64_KBASE_OLD, PREP_I64_KBASE_NEW),
+    (PREP_I64_STATE_OLD, PREP_I64_STATE_NEW),
 )
 
 # (orig name, hunks, output name, already-patched marker)
