@@ -4,7 +4,9 @@
 """GB10 (SM12x) plan table for the Qwen4Exp skinny decode GEMM, vendored from
 myllmbox's patches/gb10-skinny-gemm.patch (TP=2 shapes) and upstream
 vllm#59753 / vllm#59632 (TP=1 shapes, plus upstream-measured TP=2 entries),
-plus the vllm#60027 strided-A dispatch fix.
+plus the vllm#60027 strided-A dispatch fix and the vllm#59533 merged
+QKV/gate + indexer (13952, 2560) TP=1 rows (reachable only with
+patches/qsa_qkvg_merge; the fusion-off (13312, 2560) rows stay).
 
 Upstream: https://github.com/vllm-project/vllm/pull/59753 (stecasta) and
 https://github.com/vllm-project/vllm/pull/59632 (sudhanshu112233shukla),
@@ -90,7 +92,7 @@ GB10 (SM12x) plans for the Qwen4Exp skinny decode GEMM.
      shape_dynamic_skinny_gemm,
  )
  from vllm.model_executor.layers.linear import LinearBase, UnquantizedLinearMethod
-@@ -140,7 +140,186 @@
+@@ -140,7 +140,195 @@
          2: SkinnyGemmConfig(2, 128, 1, k_unroll=10),
          4: SkinnyGemmConfig(4, 128, 1, k_unroll=10),
          8: SkinnyGemmConfig(8, 128, 1, k_unroll=10),
@@ -249,6 +251,15 @@ GB10 (SM12x) plans for the Qwen4Exp skinny decode GEMM.
 +        4: SkinnyGemmConfig(4, 32, 1, vector_width=4, static_k=2560),
 +        8: SkinnyGemmConfig(8, 64, 1, vector_width=2, static_k=2560),
 +        16: SkinnyGemmConfig(16, 32, 1, vector_width=4, static_k=2560),
++    },
++    # QSA fused QKV/gate + replicated indexer Q/K, TP=1. vllm#59533; reachable
++    # only with the qsa_qkvg_merge overlay (fusion off keeps (13312, 2560)).
++    (13952, 2560): {
++        1: SkinnyGemmConfig(1, 32, 1, vector_width=4, static_k=2560),
++        2: SkinnyGemmConfig(2, 32, 1, k_unroll=2, vector_width=4, static_k=2560),
++        4: SkinnyGemmConfig(4, 32, 1, vector_width=4, static_k=2560),
++        8: SkinnyGemmConfig(8, 64, 1, vector_width=2, static_k=2560),
++        16: SkinnyGemmConfig(16, 32, 1, k_unroll=2, vector_width=4, static_k=2560),
 +    },
 +    # GDN fused QKVZ, TP=1. vllm#59753.
 +    (16384, 2560): {

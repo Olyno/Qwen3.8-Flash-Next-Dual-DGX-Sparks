@@ -107,6 +107,33 @@ class GB10SkinnyGemmV030(unittest.TestCase):
             for row in rows:
                 self.assertIn(row, block)
 
+    def test_qkvg_merged_rows_match_vllm_59533(self):
+        r = self.run_patch()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        gemm = (self.out / "low_latency_gemm.py").read_text()
+        # The exact vllm#59533 SM121 rows for the merged QKV/gate + indexer
+        # projection (TP=1); a drift here means the table no longer reflects
+        # the upstream measurements.
+        start = gemm.index("(13952, 2560): {")
+        block = gemm[start : gemm.index("},", start)]
+        for row in (
+            "1: SkinnyGemmConfig(1, 32, 1, vector_width=4, static_k=2560)",
+            "2: SkinnyGemmConfig(2, 32, 1, k_unroll=2, vector_width=4, static_k=2560)",
+            "4: SkinnyGemmConfig(4, 32, 1, vector_width=4, static_k=2560)",
+            "8: SkinnyGemmConfig(8, 64, 1, vector_width=2, static_k=2560)",
+            "16: SkinnyGemmConfig(16, 32, 1, k_unroll=2, vector_width=4, static_k=2560)",
+        ):
+            self.assertIn(row, block)
+        # The fusion-off and TP=2 gate/up shapes must survive alongside.
+        self.assertIn("(13312, 2560): {", gemm)
+        self.assertIn("(640, 2560): {", gemm)
+        start = gemm.index("(13312, 2560): {")
+        block = gemm[start : gemm.index("},", start)]
+        self.assertIn(
+            "2: SkinnyGemmConfig(2, 32, 1, vector_width=4, static_k=2560)", block)
+        self.assertIn(
+            "16: SkinnyGemmConfig(16, 32, 1, vector_width=4, static_k=2560)", block)
+
     def test_rerun_gives_same_output(self):
         self.assertEqual(self.run_patch().returncode, 0)
         first = {o: (self.out / o).read_text() for o in OUTS}
