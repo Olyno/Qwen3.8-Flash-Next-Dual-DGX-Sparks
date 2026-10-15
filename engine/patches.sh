@@ -106,14 +106,34 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     # QKV shape mismatch. Now divides by total_num_heads. Correctness fix,
     # so no toggle. nvidia/qsa.py is mounted here (not in the qsa_prepare
     # block above): this patcher chains off the qsa_prepare output — the two
-    # touch non-overlapping regions.
+    # touch non-overlapping regions. With QSA_QKVG_MERGE=true the merge block
+    # below chains off this output in turn and mounts qsa.py in its place.
     QH="$SCRIPT_DIR/patches/qsa_head_dim"
     mkdir -p "$QH/orig"
     cp "$QP/qsa_v030.py" "$QH/orig/qsa.py"
     python3 "$QH/apply_patch.py" || err "qsa_head_dim apply_patch.py failed"
-    add_overlay "$QH/qsa_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/qsa.py"
+    if [[ "$QSA_QKVG_MERGE" != "true" ]]; then
+        add_overlay "$QH/qsa_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/qsa.py"
+    fi
     add_overlay "$QP/indexer_qsa_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/indexer_qsa.py"
     add_overlay "$QP/qsa_prepare_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_prepare.py"
+    if [[ "$QSA_QKVG_MERGE" == "true" ]]; then
+        info "=== Step 4c: QSA QKV/gate + indexer projection merge (vllm#59533, vLLM 0.30) ==="
+        # Backport of vllm#59533 (patches/qsa_qkvg_merge/): packs the sharded
+        # Q/gate/K/V and the replicated indexer Q/K into one GEMM per
+        # attention layer; the checkpoint's indexer weight stacks into the
+        # merged projection via an attention-level WeightsMapper, and the
+        # fused output's indexer slice (a row-strided column view) is
+        # accepted by the qsa_prepare overlay's main_qkv_stride_token
+        # fold-in. TP=1 only — config.sh hard-gates: the merged (13952, 2560)
+        # shape has a skinny plan (patches/gb10_skinny_gemm) at TP=1 but none
+        # at TP=2, where the merged GEMM would fall back to cuBLAS.
+        QM="$SCRIPT_DIR/patches/qsa_qkvg_merge"
+        mkdir -p "$QM/orig"
+        cp "$QH/qsa_v030.py" "$QM/orig/qsa.py"
+        python3 "$QM/apply_patch.py" || err "qsa_qkvg_merge apply_patch.py failed"
+        add_overlay "$QM/qsa_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/qsa.py"
+    fi
     info "=== Step 4c: QSA prefill logits workspace (vllm#57105, vLLM 0.30) ==="
     # Backport of vllm#57105 (patches/qsa_logits_workspace/): the chunked
     # prefill scoring loop sliced a fresh torch.empty per chunk; the overlay
