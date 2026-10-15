@@ -9,6 +9,34 @@ import unittest
 REPO = Path(__file__).resolve().parent.parent
 FILES = REPO / "files"
 ORIG = FILES / "mtp_v030_patched.py.orig"
+SCRIPT = REPO / "patches" / "patch_mtp_draft_vocab_v030.py"
+
+
+class Fp8DraftHeadAnchors(unittest.TestCase):
+    """Source-level pins for the FP8 draft-head block (no extracted orig needed)."""
+
+    def setUp(self):
+        self.src = SCRIPT.read_text()
+
+    def test_slice_guard_fails_closed(self):
+        self.assertIn('rows = getattr(model, "_draft_lm_head_weight", None)', self.src)
+        self.assertIn("if rows is None:", self.src)
+        self.assertIn("no draft-vocab slice", self.src)
+
+    def test_no_full_vocab_fallback(self):
+        self.assertNotIn("_draft_head_full", self.src)
+        self.assertNotIn("full vocab", self.src)
+        self.assertNotIn("shard_indices", self.src)
+
+    def test_empty_cache_after_build(self):
+        self.assertIn("torch.cuda.empty_cache()", self.src)
+
+    def test_memory_instrumentation(self):
+        self.assertIn("torch.cuda.memory_allocated()", self.src)
+        self.assertIn("torch.cuda.memory_reserved()", self.src)
+
+    def test_attach_reports_draft_vocab_only(self):
+        self.assertIn('logger.info(\n        "MTP FP8 draft head (draft vocab):', self.src)
 
 
 @unittest.skipUnless(ORIG.is_file(), "no extracted v0.30 mtp.py; boot the prod recipe once (RECIPE=prod ./start.sh)")

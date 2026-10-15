@@ -10,9 +10,10 @@ https://github.com/sfxnz/Qwen3.8-Flash-Next-NVFP4-vLLM-2x-DGX-Spark, see
 licenses/sfxnz-MIT.LICENSE):
 VLLM_MTP_DRAFT_HEAD_FP8=1 (or marlin | w8a8) makes the drafter quantize its own
 lm_head rows to E4M3 with a per-row scale at load -- the reduced draft-vocab
-slice when _attach_draft_vocab built one (the BF16 slice is then dropped), else
-this rank's full shard. The target keeps its BF16 lm_head for verification, so
-emitted tokens are unchanged; only the draft-step head bandwidth drops (~2x).
+slice built by _attach_draft_vocab (the BF16 slice is then dropped). Without
+the slice it refuses to run: no full-vocab FP8 fallback. The target keeps its
+BF16 lm_head for verification, so emitted tokens are unchanged; only the
+draft-step head bandwidth drops (~2x).
 Kernel: Marlin W8A16 first, CUTLASS W8A8 fallback, BF16 rows if neither builds
 (fail closed, agreed across TP ranks).
 
@@ -164,10 +165,11 @@ def _tp_agree(ok: bool, err: str) -> tuple:
 def _attach_fp8_draft_head(model: nn.Module) -> None:
     """Quantize the drafter's lm_head rows to FP8 (VLLM_MTP_DRAFT_HEAD_FP8).
 
-    Rows are the reduced draft-vocab slice when _attach_draft_vocab built one
-    (the BF16 slice is then dropped), else this rank's full lm_head shard.
-    Fail closed: any problem logs a warning and drafting stays on the BF16
-    rows or the stock head, agreed across TP ranks so no rank diverges.
+    Rows are the reduced draft-vocab slice built by _attach_draft_vocab (the
+    BF16 slice is then dropped). Without the slice there is no FP8 head at
+    all -- drafting stays on the stock head; a full-vocab FP8 copy would cost
+    more than it saves. Fail closed: any problem logs a warning and drafting
+    stays on the BF16 rows, agreed across TP ranks so no rank diverges.
     """
     try:
         kernels = _draft_head_fp8_kernels(os.environ.get(_DRAFT_HEAD_FP8_ENV, ""))
@@ -180,22 +182,26 @@ def _attach_fp8_draft_head(model: nn.Module) -> None:
         logger.warning("MTP FP8 draft head: pipeline parallel unsupported; disabled.")
         return
     rows = getattr(model, "_draft_lm_head_weight", None)
-    full = rows is None
+    if rows is None:
+        logger.warning(
+            "MTP FP8 draft head: no draft-vocab slice (mtp_draft_vocab off or "
+            "empty); disabled, drafting on the stock head."
+        )
+        return
+    alloc0 = torch.cuda.memory_allocated()
+    resv0 = torch.cuda.memory_reserved()
     head, err = None, ""
     try:
-        if full:
-            shard = model.lm_head.shard_indices
-            w = model.lm_head.weight.data
-            if shard.num_org_vocab_padding or shard.num_added_elements_padded:
-                raise ValueError("padded or added-vocab lm_head shard")
-            if w.dtype not in (torch.bfloat16, torch.float16):
-                raise ValueError(f"lm_head dtype {w.dtype} is not BF16/FP16")
-            if w.shape[0] != shard.num_org_elements:
-                raise ValueError(f"lm_head shard has {w.shape[0]} rows")
-            rows = w
         head, err = _build_fp8_draft_head(rows, kernels)
     except Exception as exc:  # noqa: BLE001 - fail closed to BF16
         head, err = None, f"{type(exc).__name__}: {exc}"
+    torch.cuda.empty_cache()
+    logger.info(
+        "MTP FP8 draft head attach: cuda %.1f -> %.1f MiB allocated, "
+        "%.1f -> %.1f MiB reserved.",
+        alloc0 / 2**20, torch.cuda.memory_allocated() / 2**20,
+        resv0 / 2**20, torch.cuda.memory_reserved() / 2**20,
+    )
     ok, err = _tp_agree(head is not None, err)
     if not ok:
         logger.warning(
@@ -203,22 +209,11 @@ def _attach_fp8_draft_head(model: nn.Module) -> None:
             err or "not requested on every rank",
         )
         return
-    if full:
-        start = int(model.lm_head.shard_indices.org_vocab_start_index)
-        model.register_buffer(
-            "_draft_id_to_target_id",
-            torch.arange(start, start + rows.shape[0], dtype=torch.long,
-                         device=rows.device),
-            persistent=False,
-        )
-        model._draft_head_full = True
-    else:
-        model._draft_lm_head_weight = None  # the FP8 copy replaces the BF16 slice
+    model._draft_lm_head_weight = None  # the FP8 copy replaces the BF16 slice
     model._draft_head_fp8 = head
     logger.info(
-        "MTP FP8 draft head (%s): %d rows on this rank, %s, %.1f MiB; "
+        "MTP FP8 draft head (draft vocab): %d rows on this rank, %s, %.1f MiB; "
         "the target keeps its BF16 lm_head for verify.",
-        "full vocab" if full else "draft vocab",
         head.n, head.kernel, head.nbytes / 2**20,
     )
 
@@ -249,20 +244,6 @@ GTT_FP8 = """\
 """
 
 LOGITS_STOCK_LINE = "        return self.logits_processor(self.lm_head, hidden_states)\n"
-LOGITS_FP8 = """\
-        fp8_head = getattr(self, "_draft_head_fp8", None)
-        if fp8_head is not None and getattr(self, "_draft_head_full", False):
-            # FP8-only full-vocab draft logits (no reduced vocab): gathered
-            # like the stock head, for greedy drafting without local argmax
-            # and for probabilistic drafting.
-            logits = fp8_head.logits(hidden_states)
-            if get_tensor_model_parallel_world_size() > 1:
-                logits = self.logits_processor._gather_logits(logits)
-            if logits is not None:
-                logits = logits[..., : self.logits_processor.org_vocab_size]
-            return logits
-        return self.logits_processor(self.lm_head, hidden_states)
-"""
 
 
 def _blocks():
@@ -306,8 +287,7 @@ def main() -> None:
          "\nlogger = init_logger(__name__)\n" + draft_vocab_block
          + (FP8_BLOCK if args.fp8 else "")
          + "\nclass Qwen4ExpMultiTokenPredictor(nn.Module):\n"),
-        (LOGITS_STOCK_LINE,
-         (LOGITS_FP8 if args.fp8 else LOGITS_STOCK_LINE) + get_top_tokens),
+        (LOGITS_STOCK_LINE, LOGITS_STOCK_LINE + get_top_tokens),
         ("        return loader.load_weights(remap_weight_names(), mapper=mapper)\n",
          "        loaded = loader.load_weights(remap_weight_names(), mapper=mapper)\n"
          "        _attach_draft_vocab(self)\n"
