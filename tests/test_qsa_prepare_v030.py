@@ -66,6 +66,37 @@ class QSAPrepareFusionV030(unittest.TestCase):
         self.assertIn('os.environ.get("VLLM_QSA_ROPE_CLAMP", "0") == "1"', prep)
         self.assertIn("pos = tl.minimum(tl.maximum(pos, 0), MAX_POS)", prep)
 
+    def test_qkvg_stride_support_vllm_59533(self):
+        # Folded-in vllm#59533 prepare side: the kernel reads main_qkv through
+        # an explicit row stride (the merged QKVG projection hands it a
+        # row-strided column slice), the assert relaxes to stride(-1) == 1,
+        # and the token-index computations cast to tl.int64.
+        r = self.run_patch()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        prep = (self.out / "qsa_prepare_v030.py").read_text()
+        ast.parse(prep)
+        self.assertIn("    main_qkv_stride_token,\n", prep)
+        self.assertIn("row = main_qkv_ptr + token * main_qkv_stride_token", prep)
+        self.assertIn("main_qkv_stride_token=main_qkv.stride(0),", prep)
+        self.assertIn("assert main_qkv.stride(-1) == 1", prep)
+        self.assertNotIn("main_qkv.is_contiguous()", prep)
+        # One cast in the main-attention section (added by this overlay) and
+        # three in the inherited pre-indexer regions.
+        self.assertIn(
+            "token = (main_pid // (MAIN_HQ + MAIN_HK)).to(tl.int64)", prep)
+        self.assertIn(
+            "tokens = (token_tile * TILE_T_Q + tl.arange(0, TILE_T_Q)).to(tl.int64)",
+            prep)
+        self.assertIn(
+            "+ tl.maximum(source_tokens, 0).to(tl.int64)[:, None] * k_stride_token",
+            prep)
+        self.assertIn(
+            "token = (query_end - num_state_rows + state_offset).to(tl.int64)",
+            prep)
+        self.assertNotIn(
+            "row = main_qkv_ptr + token * (2 * (MAIN_HQ + MAIN_HK) * MAIN_D)",
+            prep)
+
     def test_rerun_gives_same_output(self):
         self.assertEqual(self.run_patch().returncode, 0)
         first = {n: (self.out / n).read_text() for n in OUTS}
