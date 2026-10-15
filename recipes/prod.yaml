@@ -132,7 +132,7 @@ load_drop_cache: true
 # Free-list block-id sort (vllm#31371 RFC port, patches/free_block_sort/):
 # freed KV blocks go back onto the free list sorted by block_id, so pops hand
 # out address-sequential blocks — contiguous ids coalesce into larger DMA
-# bursts on KV offload/prefetch. Boot-verified on the test box (2026-10-10): decodebench
+# bursts on KV offload/prefetch. Boot-verified on GB10 (2026-10-10): decodebench
 # and MTP acceptance identical to stock (accepted/draft 1.990 vs 1.99),
 # quality gate PASS.
 free_block_sort: true
