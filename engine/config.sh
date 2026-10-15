@@ -165,6 +165,12 @@ QSA_FUSED_DRAFT="${QSA_FUSED_DRAFT:-false}"
 # unchecked, and CUDA-graph warmup dummy positions can index past the table
 # (IMA on SM121/GB10).
 QSA_ROPE_CLAMP="${QSA_ROPE_CLAMP:-false}"
+# QSA QKV/gate + indexer projection merge (v0.30 lane only,
+# patches/qsa_qkvg_merge/, vllm#59533): one GEMM per attention layer instead
+# of two. TP=1 only — the merged (13952, 2560) shape has a TP=1 skinny plan
+# but no TP=2 one, so at TP=2 the merged GEMM falls off the skinny path
+# (likely regression); gated off under LoRA upstream.
+QSA_QKVG_MERGE="${QSA_QKVG_MERGE:-false}"
 # Adaptive MTP draft depth (v0.30 lane only,
 # patches/patch_mtp_adaptive_depth.py): the V2 speculator truncates the
 # per-step draft chain once the draft head's own survival product (running
@@ -195,6 +201,8 @@ FREE_BLOCK_SORT="${FREE_BLOCK_SORT:-false}"
 [[ "$FP8_DRAFT_HEAD" != "true" || "$V030" == "true" ]] || err "fp8_draft_head is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$QSA_FUSED_DRAFT" != "true" || "$V030" == "true" ]] || err "qsa_fused_draft is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$QSA_ROPE_CLAMP" != "true" || "$V030" == "true" ]] || err "qsa_rope_clamp is only supported on the vLLM 0.30 lane (v030: true)."
+[[ "$QSA_QKVG_MERGE" != "true" || "$V030" == "true" ]] || err "qsa_qkvg_merge is only supported on the vLLM 0.30 lane (v030: true)."
+[[ "$QSA_QKVG_MERGE" != "true" || "$TENSOR_PARALLEL_SIZE" == "1" ]] || err "qsa_qkvg_merge requires tensor_parallel_size 1 (no TP=2 skinny plan exists for the merged QKVG GEMM — at TP=2 it falls off the skinny path, a likely regression)."
 [[ "$LOAD_DROP_CACHE" != "true" || "$V030" == "true" ]] || err "load_drop_cache is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$NVFP4_ACT_HOOKS" != "true" || "$V030" == "true" ]] || err "nvfp4_act_hooks is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$FREE_BLOCK_SORT" != "true" || "$V030" == "true" ]] || err "free_block_sort is only supported on the vLLM 0.30 lane (v030: true)."

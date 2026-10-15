@@ -126,6 +126,13 @@ qsa_fused_draft: true
 # Clamp pre-indexer RoPE positions into the cos/sin table (fixes a CUDA-graph
 # warmup OOB read on SM121).
 qsa_rope_clamp: true
+# qsa_qkvg_merge: QSA QKV/gate + indexer projection merge (vllm#59533
+# backport, patches/qsa_qkvg_merge/) — one GEMM per attention layer instead
+# of two. TP=1 only: config.sh hard-gates it (the merged 13952x2560 GEMM has
+# a TP=1 skinny plan but no TP=2 one, so at TP=2 it falls off the skinny
+# path). Expected ~0.5-1% decode at our shape; boot-verify before enabling.
+# Self-deletes at the next image bump, which ships the PR natively.
+qsa_qkvg_merge: false
 # fadvise(DONTNEED) each checkpoint shard as the loader finishes it, keeping
 # the page cache one shard deep during the load.
 load_drop_cache: true
