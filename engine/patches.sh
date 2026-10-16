@@ -35,7 +35,19 @@ extract_from_image() {   # extract_from_image <container path> <host dest>
 if $DO_LAUNCH && [[ "$FP8_DENSE" == "true" ]]; then
     info "=== Step 4c: FP8-dense overlay ==="
     OV="$SCRIPT_DIR/overlays/fp8dense"
-    [[ -f "$OV/modelopt.py" ]] || python3 "$OV/apply_patches.py"
+    NVIDIA="$VLLM_PKG/models/qwen3_8_flash_next/nvidia"
+    for spec in \
+        "modelopt.py $VLLM_PKG/model_executor/layers/quantization/modelopt.py" \
+        "model.py $NVIDIA/model.py" \
+        "hyperconnection.py $NVIDIA/hyperconnection.py" \
+        "mtp.py $NVIDIA/mtp.py"; do
+        read -r f src <<< "$spec"
+        if [[ ! -f "$OV/$f" ]]; then
+            extract_from_image "$src" "$OV/$f"
+            (cd "$OV" && git apply -p2 "${f%.py}.diff") \
+                || err "fp8dense: git apply ${f%.py}.diff failed (image layout changed?)"
+        fi
+    done
     add_overlay "$OV/modelopt.py"        "$VLLM_PKG/model_executor/layers/quantization/modelopt.py"
     add_overlay "$OV/model.py"           "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/model.py"
     add_overlay "$OV/hyperconnection.py" "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/hyperconnection.py"

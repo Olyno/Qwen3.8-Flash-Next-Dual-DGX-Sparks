@@ -28,6 +28,14 @@ class TestFp8DenseLocal(unittest.TestCase):
         self.assertIn('MODEL_PATH="${FP8_DENSE_MODEL_ID/#\\~/$HOME}"', sh)
         self.assertIn('[[ "$FP8_DENSE" == "true" && -z "${FP8_DENSE_LOCAL:-}" ]]', sh)
 
+    def test_overlay_applies_committed_diffs(self):
+        sh = (REPO / "engine" / "patches.sh").read_text()
+        self.assertNotIn("apply_patches.py", sh)  # deleted in the reorg
+        self.assertIn("git apply -p2", sh)
+        for name in ("modelopt", "model", "hyperconnection", "mtp"):
+            self.assertTrue((REPO / "overlays" / "fp8dense" / f"{name}.diff").is_file(), name)
+            self.assertIn(f'"{name}.py ', sh)
+
 
 if __name__ == "__main__":
     unittest.main()
