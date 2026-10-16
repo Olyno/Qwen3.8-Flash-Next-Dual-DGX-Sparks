@@ -138,9 +138,14 @@ qsa_rope_clamp: true
 # backport, patches/qsa_qkvg_merge/) — one GEMM per attention layer instead
 # of two. TP=1 only: config.sh hard-gates it (the merged 13952x2560 GEMM has
 # a TP=1 skinny plan but no TP=2 one, so at TP=2 it falls off the skinny
-# path). Expected ~0.5-1% decode at our shape; boot-verify before enabling.
+# path). Boot-verified on GB10: clean load (no missing index_qk_proj), 13
+# (13952,2560) skinny modules (12 QSA + MTP), A/B accepted/draft 1.724 ->
+# 1.898 (ref 1.692, both within run noise), decodebench ctx1k/dec500 means
+# over repeat runs prose ~21.2 -> ~21.2, code ~30.9 -> ~35.9, copy ~60.9 ->
+# ~61.6 tok/s, quality gate PASS. Cost: +2.2 GiB device memory (KV cache
+# 262k -> 153k tokens, still 2.3x full-context concurrency).
 # Self-deletes at the next image bump, which ships the PR natively.
-qsa_qkvg_merge: false
+qsa_qkvg_merge: true
 # fadvise(DONTNEED) each checkpoint shard as the loader finishes it, keeping
 # the page cache one shard deep during the load.
 load_drop_cache: true
