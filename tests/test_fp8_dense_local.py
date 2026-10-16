@@ -21,8 +21,9 @@ class TestFp8DenseLocal(unittest.TestCase):
         self.assertEqual(env["FP8_DENSE"], "true")
         self.assertEqual(env["FP8_DENSE_MODEL_ID"], "~/models/q38-lean-hyb")
         self.assertNotIn("MODEL_ID", env)  # no Hub id — local dir
-        self.assertEqual(env["V030"], "true")               # vLLM 0.30 lane
-        self.assertEqual(env["TENSOR_PARALLEL_SIZE"], "1")  # single-node
+        self.assertEqual(env["V030"], "true")  # vLLM 0.30 lane
+        # no TP pin: config.sh derives tensor_parallel_size from NODES
+        self.assertNotIn("TENSOR_PARALLEL_SIZE", env)
         # the reduced draft head assumes a BF16 draft lm_head; this
         # checkpoint's draft head is FP8 — the combination is refused.
         self.assertNotIn("MTP_DRAFT_VOCAB", env)
