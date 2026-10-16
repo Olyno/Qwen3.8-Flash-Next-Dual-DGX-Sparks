@@ -1,0 +1,13 @@
+--- files/overlay/modelopt.py.orig
++++ files/overlay/modelopt.py
+@@ -1749,6 +1749,10 @@
+             candidates.append(
+                 "language_model.model." + prefix[len("model.language_model.") :]
+             )
++        elif prefix.startswith("model."):
++            # [fp8dense overlay] text-only entry point (Qwen4ExpForCausalLM)
++            # strips "model.language_model." to "model."; keep the HF spelling too.
++            candidates.append("model.language_model." + prefix[len("model.") :])
+ 
+         return tuple(dict.fromkeys(candidates))
+ 

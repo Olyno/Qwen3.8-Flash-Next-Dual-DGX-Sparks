@@ -46,6 +46,8 @@ patches/mtp_v030_patched.py
 patches/v030_fp8kv/
 patches/qsa_nvidia_patched.py
 overlays/fp8dense/*.py
+overlays/fp8dense_v030/*.py
+overlays/fp8dense_v030/orig/
 overlays/qsa_gb10/qsa.py
 patches/block_drop/
 patches/determinism/
