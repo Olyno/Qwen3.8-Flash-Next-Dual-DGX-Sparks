@@ -32,7 +32,7 @@ extract_from_image() {   # extract_from_image <container path> <host dest>
     docker rm "$c" >/dev/null 2>&1
     [[ -f "$2" ]] || err "Failed to extract $1 from image."
 }
-if $DO_LAUNCH && [[ "$FP8_DENSE" == "true" ]]; then
+if $DO_LAUNCH && [[ "$FP8_DENSE" == "true" && "$V030" != "true" ]]; then
     info "=== Step 4c: FP8-dense overlay ==="
     OV="$SCRIPT_DIR/overlays/fp8dense"
     NVIDIA="$VLLM_PKG/models/qwen3_8_flash_next/nvidia"
@@ -75,7 +75,6 @@ fi
 #     is rejected at verification, never emitted. See patches/patch_mtp_draft_vocab.py.
 # ---------------------------------------------------------------------------
 if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
-    [[ "$FP8_DENSE" == "true" ]] && err "V030: FP8_DENSE is not supported on the vLLM 0.30 lane."
     [[ "$QSA_PROFILE" == "stock" ]] || err "V030: QSA_PROFILE=$QSA_PROFILE is not supported on the vLLM 0.30 lane."
     if [[ "$KV_CACHE_DTYPE" == fp8* ]]; then
         mkdir -p "$SCRIPT_DIR/patches/v030_fp8kv/orig/ops"
@@ -172,12 +171,51 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/hyperconnection.py" "$HC/orig/hyperconnection.py"
     extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/model.py" "$HC/orig/model.py"
     python3 "$HC/apply_patch.py" || err "hc_down_silu apply_patch.py failed"
-    add_overlay "$HC/hyperconnection_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/hyperconnection.py"
-    [[ "$REPLAYSSM_GDN" == "true" ]] || add_overlay "$HC/model_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/model.py"
+    # With FP8_DENSE the fp8dense block below chains off these outputs and
+    # mounts the chained files itself (two overlays on one container path
+    # trip add_overlay's conflict guard).
+    if [[ "$FP8_DENSE" != "true" ]]; then
+        add_overlay "$HC/hyperconnection_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/hyperconnection.py"
+        [[ "$REPLAYSSM_GDN" == "true" ]] || add_overlay "$HC/model_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/model.py"
+    fi
     add_overlay "$HC/__init__.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/__init__.py"
     add_overlay "$HC/hc_down_silu.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/hc_down_silu.py"
     add_overlay "$HC/_hc_down_silu_fma.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/_hc_down_silu_fma.py"
     add_overlay "$HC/_hc_down_silu_mma.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/_hc_down_silu_mma.py"
+    if [[ "$FP8_DENSE" == "true" ]]; then
+        info "=== Step 4c: FP8-dense overlay (vLLM 0.30) ==="
+        # Port of overlays/fp8dense onto the qwen4_exp tree: GatedResidual and
+        # the two ParallelLMHeads get quant_config so the MIXED_PRECISION
+        # config's per-prefix resolution reaches the dense HC and head
+        # projections. v0.30's modelopt.py already dispatches
+        # FP8_PER_CHANNEL_PER_TOKEN / FP8_PB_WO natively (LINEAR_ALGOS +
+        # resolve()), so its only delta is the "model." prefix candidate the
+        # text-only entry point needs. model.py / hyperconnection.py chain off
+        # the hc_down_silu outputs above (non-overlapping regions; that block
+        # skips its own mounts when FP8_DENSE is on). MTP_DRAFT_VOCAB /
+        # FP8_DRAFT_HEAD are refused in Step 4e: their reduced head assumes a
+        # BF16 draft lm_head and this checkpoint's draft head is FP8.
+        [[ "$REPLAYSSM_GDN" != "true" ]] || err "fp8_dense and replayssm_gdn both overlay qwen4_exp/nvidia/model.py - pick one."
+        FD="$SCRIPT_DIR/overlays/fp8dense_v030"
+        NVIDIA_V030="$VLLM_PKG/models/qwen4_exp/nvidia"
+        mkdir -p "$FD/orig"
+        extract_from_image "$VLLM_PKG/model_executor/layers/quantization/modelopt.py" \
+                           "$FD/orig/modelopt.py"
+        extract_from_image "$NVIDIA_V030/mtp.py" "$FD/orig/mtp.py"
+        cp "$FD/orig/modelopt.py" "$FD/modelopt.py"
+        cp "$HC/model_v030.py" "$FD/model.py"
+        cp "$HC/hyperconnection_v030.py" "$FD/hyperconnection.py"
+        cp "$FD/orig/mtp.py" "$FD/mtp.py"
+        for f in modelopt model hyperconnection mtp; do
+            (cd "$FD" && git apply -p2 "$f.diff") \
+                || err "fp8dense v030: git apply $f.diff failed (image layout changed?)"
+        done
+        add_overlay "$FD/modelopt.py" "$VLLM_PKG/model_executor/layers/quantization/modelopt.py"
+        add_overlay "$FD/model.py" "$NVIDIA_V030/model.py"
+        add_overlay "$FD/hyperconnection.py" "$NVIDIA_V030/hyperconnection.py"
+        add_overlay "$FD/mtp.py" "$NVIDIA_V030/mtp.py"
+        ok "FP8-dense overlay (v030): 4 files"
+    fi
     info "=== Step 4c: PLE short-conv metadata sync removal (vllm#58114, vLLM 0.30) ==="
     # Backport of vllm#58114 (patches/ple_metadata_syncs/): the PLE short-conv
     # metadata builder computed causal_conv1d Triton metadata and CPU
@@ -451,6 +489,10 @@ fi
 if $DO_LAUNCH && [[ "$V030" == "true" ]] && { [[ -n "$MTP_DRAFT_VOCAB" ]] || [[ "$FP8_DRAFT_HEAD" == "true" ]]; }; then
     info "=== Step 4e: MTP draft head (vLLM 0.30) ==="
     [[ "$MTP_NUM_SPECULATIVE_TOKENS" == "0" ]] && err "MTP_DRAFT_VOCAB/FP8_DRAFT_HEAD is set but MTP_NUM_SPECULATIVE_TOKENS=0 - nothing drafts."
+    # The fp8dense checkpoint's draft lm_head is FP8; the reduced/FP8 draft
+    # head paths here assume BF16 rows (a bare F.linear on the slice dies with
+    # "addmm_cuda not implemented for Float8_e4m3fn"). Refuse the combination.
+    [[ "$FP8_DENSE" != "true" ]] || err "MTP_DRAFT_VOCAB/FP8_DRAFT_HEAD and FP8_DENSE both touch the qwen4_exp draft head, and the reduced/FP8 draft head assumes a BF16 lm_head - pick one."
     if [[ -n "$MTP_DRAFT_VOCAB" ]]; then
         [[ -f "$MTP_DRAFT_VOCAB" ]] || err "MTP_DRAFT_VOCAB file not found: $MTP_DRAFT_VOCAB"
     fi
