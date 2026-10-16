@@ -1,0 +1,36 @@
+# recipes/fp8.yaml — FP8-dense hybrid checkpoint (NVFP4 experts + FP8
+# per-channel dense projections) on the legacy lane. Same vendor serving
+# contract as mia.yaml except checkpoint selection.
+#
+# DUAL-NODE ONLY: the legacy lane loads all ~120 GiB to device memory (the
+# mmap PLE offload exists only on the v030 lane), so a single Spark cannot
+# hold it. fp8_dense is hard-blocked on the v030 lane (overlay not ported).
+# mtp_draft_vocab is omitted on purpose: it and fp8_dense both overlay
+# nvidia/mtp.py (engine/patches.sh refuses the combination).
+name: fp8
+image: vllm/vllm-openai:qwen38-flash-next
+fp8_dense: true
+fp8_dense_model_id: ~/models/q38-lean-hyb
+served_model_name: Qwen3.8-Flash-Next-NVFP4
+max_model_len: 262144
+yarn_enable: false
+yarn_factor: 4.0
+gpu_memory_utilization: 0.80
+max_num_seqs: 8
+max_num_batched_tokens: 8192
+port: 8888
+master_port: 50000
+kv_cache_dtype: fp8
+mamba_ssm_cache_dtype: bfloat16
+tensor_parallel_size: 2
+enable_expert_parallel: true
+mm_encoder_tp_mode: data
+mtp_num_speculative_tokens: 3
+mtp_disable_block_drop: 1
+mtp_index_share: true
+ple_offload: false
+qsa_profile: stock
+require_idle_gpu: true
+evict_page_cache: true
+nfs_share: false
+vllm_allow_long_max_model_len: 1
