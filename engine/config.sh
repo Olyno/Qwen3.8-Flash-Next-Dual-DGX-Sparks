@@ -216,8 +216,14 @@ FREE_BLOCK_SORT="${FREE_BLOCK_SORT:-false}"
 FP8_DENSE="${FP8_DENSE:-false}"
 FP8_DENSE_MODEL_ID="${FP8_DENSE_MODEL_ID:-MiaAI-Lab/Qwen3.8-Flash-Next-NVFP4-FP8dense}"
 if [[ "$FP8_DENSE" == "true" ]]; then
-    MODEL_ID="$FP8_DENSE_MODEL_ID"
     DO_DOWNLOAD_DEFAULT=false   # local-only checkpoint, never on the Hub
+    case "$FP8_DENSE_MODEL_ID" in
+        ~*|/*)  # local directory: serve it through the model_path bind-mount
+                [[ -z "${MODEL_PATH:-}" ]] || err "model_path and fp8_dense are mutually exclusive"
+                MODEL_PATH="${FP8_DENSE_MODEL_ID/#\~/$HOME}"
+                FP8_DENSE_LOCAL=1 ;;
+        *)      MODEL_ID="$FP8_DENSE_MODEL_ID" ;;
+    esac
 fi
 
 # Local checkpoint (recipe model_path): served via bind-mount at /model,
@@ -226,7 +232,7 @@ MODEL_PATH="${MODEL_PATH:-}"
 if [[ -n "$MODEL_PATH" ]]; then
     [[ "$NFS_SHARE" == "true" ]] && err "model_path and nfs_share are mutually exclusive (NFS shares an HF cache)"
     [[ "$ABLIT" == "1" ]] && err "model_path and ABLIT=1 are mutually exclusive"
-    [[ "$FP8_DENSE" == "true" ]] && err "model_path and fp8_dense are mutually exclusive"
+    [[ "$FP8_DENSE" == "true" && -z "${FP8_DENSE_LOCAL:-}" ]] && err "model_path and fp8_dense are mutually exclusive"
     MODEL_PATH="${MODEL_PATH/#\~/$HOME}"
     [[ -d "$MODEL_PATH" ]] || err "model_path not found: $MODEL_PATH"
     MODEL_ID="${MODEL_ID:-local/$(basename "$MODEL_PATH")}"
