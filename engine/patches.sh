@@ -152,14 +152,16 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     # boundary preserved; upstream pins against the ll_bf16+hc_silu reference)
     # and the fused path self-gates (bf16 weight, K%8==0, SM90+, 1<=M<=48, not
     # VLLM_BATCH_INVARIANT), so no toggle. model.py overlaps replayssm_gdn's
-    # target, which chains off this block's output below.
+    # target: with REPLAYSSM_GDN on, that block chains off this block's
+    # model.py output and mounts the chained file itself, so skip our mount
+    # (two overlays on one container path trip add_overlay's conflict guard).
     HC="$SCRIPT_DIR/patches/hc_down_silu"
     mkdir -p "$HC/orig"
     extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/hyperconnection.py" "$HC/orig/hyperconnection.py"
     extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/model.py" "$HC/orig/model.py"
     python3 "$HC/apply_patch.py" || err "hc_down_silu apply_patch.py failed"
     add_overlay "$HC/hyperconnection_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/hyperconnection.py"
-    add_overlay "$HC/model_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/model.py"
+    [[ "$REPLAYSSM_GDN" == "true" ]] || add_overlay "$HC/model_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/model.py"
     add_overlay "$HC/__init__.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/__init__.py"
     add_overlay "$HC/hc_down_silu.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/hc_down_silu.py"
     add_overlay "$HC/_hc_down_silu_fma.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/_hc_down_silu_fma.py"

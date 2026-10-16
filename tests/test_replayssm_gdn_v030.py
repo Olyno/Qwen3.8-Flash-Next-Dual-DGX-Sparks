@@ -90,5 +90,18 @@ class ReplaySSMGdnV030(unittest.TestCase):
         self.assertFalse((self.out / "gdn_attn_v030.py").exists())
 
 
+class ReplaySSMOverlayWiring(unittest.TestCase):
+    # Static wiring check, no extracted origs needed: hc_down_silu and
+    # replayssm_gdn both patch qwen4_exp model.py, and replayssm chains off
+    # hc's output and mounts the chained file itself, so hc's own model.py
+    # mount must be conditional — add_overlay refuses two mounts on one
+    # container path.
+    def test_hc_model_mount_skipped_when_replayssm_on(self):
+        sh = (REPO / "engine" / "patches.sh").read_text()
+        self.assertIn(
+            '[[ "$REPLAYSSM_GDN" == "true" ]] || add_overlay "$HC/model_v030.py"',
+            sh)
+
+
 if __name__ == "__main__":
     unittest.main()
