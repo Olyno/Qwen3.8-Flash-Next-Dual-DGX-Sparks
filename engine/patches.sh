@@ -151,8 +151,9 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         OVERLAY_ENV+=("-e VLLM_PLE_MMAP_DIR=/root/.cache/vllm/ple_mmap_v030")
         # VLLM_PLE_MMAP_ADVICE is also the unified-memory page-cache hygiene
         # kill-switch: nonzero (=1) additionally sets FADV_RANDOM on the table
-        # fd and pre-faults a ready table with MADV_POPULATE_READ; 0 disables
-        # the whole set. See patches/patch_ple_mmap_v030.py's docstring.
+        # fd, pre-faults a ready table with MADV_POPULATE_READ, and warms each
+        # eager PLE batch's row pages with coalesced preads; 0 disables the
+        # whole set. See patches/patch_ple_mmap_v030.py's docstring.
         OVERLAY_ENV+=("-e VLLM_PLE_MMAP_ADVICE=1")
     fi
     if [[ "$QSA_FUSED_DRAFT" == "true" ]]; then

@@ -30,15 +30,54 @@ VLLM_PLE_MMAP_ADVICE madvise advice for the mapping (default 1 = MADV_RANDOM).
     Idea credit: NVIDIA/flare-local-inference (Apache-2.0), commit 5dd6769
     ignition/preparation/host_memory.py (readahead probe: a 256 MiB read under
     default advice retained 8 MiB, under RANDOM 0); idea-level, own implementation.
+
+The eager prefetch hook (start_prefetch) additionally warms the page-cache
+pages of each batch's rows through coalesced preads planned by
+_ple_gather_plan (offset-sorted rows, same-page / near-gap rows folded into
+one range) -- design credit NVIDIA/flare-local-inference (Apache-2.0)
+helios/src/engram/reader.rs:437-490, idea-level, own implementation. The
+gather itself stays GPU/ATS-driven; see the ponytail note on _ple_mmap_warm.
 """
 import ast
+import inspect
 import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-HELPERS = '''
-@triton.jit
+
+def _ple_gather_plan(offsets, row_bytes, page_size=4096):
+    """Sort row file offsets and coalesce rows whose pages run together.
+
+    Rows sharing a 4KiB page, or separated by a gap smaller than one page,
+    fold into one read range; duplicate offsets fold trivially. Returns
+    [(start, length, [row_index, ...])] ordered by ascending start and
+    non-overlapping, each range covering every row it lists; row_index is
+    the position in the input list. Pure -- stdlib only -- so it unit-tests
+    offline (tests/test_ple_gather_coalesce.py). Design credit:
+    NVIDIA/flare-local-inference helios/src/engram/reader.rs coalesced
+    reader (idea-level, own implementation).
+    """
+    if row_bytes <= 0:
+        raise ValueError("row_bytes must be positive")
+    if page_size <= 0:
+        raise ValueError("page_size must be positive")
+    plan = []
+    for i in sorted(range(len(offsets)), key=lambda i: (offsets[i], i)):
+        start = offsets[i]
+        end = start + row_bytes
+        if plan:
+            prev = plan[-1]
+            same_page = start // page_size == (prev[1] - 1) // page_size
+            if same_page or start - prev[1] < page_size:
+                if end > prev[1]:
+                    prev[1] = end
+                prev[2].append(i)
+                continue
+        plan.append([start, end, [i]])
+    return [(start, end - start, rows) for start, end, rows in plan]
+
+HELPERS = inspect.getsource(_ple_gather_plan) + "\n\n" + '''@triton.jit
 def _lookup_ple_rows_from_host_addr_kernel(
     weight_addr,
     ids_ptr,
@@ -317,7 +356,51 @@ EDITS_COMMON = [
         "        self._mmap_ready = True\n"
         "        logger.info(\"PLE %s: built persistent table\", self._mmap_path)\n"
         "\n"
+        "    _PLE_MMAP_WARM_MAX = 1 << 23\n"
+        "\n"
+        "    def _ple_mmap_warm(self, ids: torch.Tensor) -> None:\n"
+        "        \"\"\"Warm the page-cache pages this batch's rows live on.\n"
+        "\n"
+        "        Coalesced host preads over _ple_gather_plan ranges on the\n"
+        "        table's read fd, so the ATS gather the kernel below issues\n"
+        "        hits resident pages and first-touch is deterministic.\n"
+        "\n"
+        "        ponytail: this warms, it does not stage. The gather itself\n"
+        "        stays GPU-driven (Triton over ATS inside _lookup): a host\n"
+        "        staging gather would replace a kernel the graph path depends\n"
+        "        on, and start_prefetch (eager_break_during_capture) is the\n"
+        "        only hook where host row work is capture-safe -- so under\n"
+        "        graph replay this never runs. The pread payload is\n"
+        "        discarded, so no pinned staging buffer is allocated\n"
+        "        (pinning buys a discarded read nothing); ranges over\n"
+        "        _PLE_MMAP_WARM_MAX are skipped. Decode measured not\n"
+        "        fault-bound: this is deterministic first-touch, not\n"
+        "        bandwidth.\n"
+        "        \"\"\"\n"
+        "        values = ids.reshape(-1).to(\"cpu\").tolist()\n"
+        "        row_bytes = self._row_bytes\n"
+        "        lo = self.shard_indices.org_vocab_start_index\n"
+        "        hi = self.shard_indices.org_vocab_end_index\n"
+        "        offsets = [(v - lo) * row_bytes for v in values if lo <= v < hi]\n"
+        "        if not offsets:\n"
+        "            return\n"
+        "        for start, length, _rows in _ple_gather_plan(offsets, row_bytes):\n"
+        "            if length > self._PLE_MMAP_WARM_MAX:\n"
+        "                continue\n"
+        "            try:\n"
+        "                os.pread(self._mmap_fd, length, start)\n"
+        "            except OSError:\n"
+        "                return\n"
+        "\n"
         "    def _lookup(\n        self,\n        input_ids: torch.Tensor,\n",
+    ),
+    (
+        "        active_output = buffer[: gathered_ids.shape[0]]\n"
+        "        prefetch_stream.wait_stream(torch.cuda.current_stream())\n",
+        "        if self._mmap_fd is not None and _ple_advice_value():\n"
+        "            self._ple_mmap_warm(gathered_ids)\n"
+        "        active_output = buffer[: gathered_ids.shape[0]]\n"
+        "        prefetch_stream.wait_stream(torch.cuda.current_stream())\n",
     ),
     (
         "            _lookup_ple_embedding_from_pinned_kernel[(flat_ids.numel(),)](\n"

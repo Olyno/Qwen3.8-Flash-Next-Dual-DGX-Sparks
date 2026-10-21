@@ -153,7 +153,8 @@ Ideas and approaches (no code copied)
     table fd + MADV_POPULATE_READ pre-fault in
     patches/patch_ple_mmap_v030.py, and the end-of-load FADV_DONTNEED
     sweep gap in patches/patch_load_drop_cache_v030.py (the per-shard
-    drop there was already ported from myllmbox). Causal+lagged draft
-    depth selection and the coalesced n-gram gather design
-    (helios/src/engram/reader.rs) remain idea-level credits. No code
-    copied; direct ports will carry modified-file notices per Apache-2.0 §4(b).
+    drop there was already ported from myllmbox) and an own-write
+    coalesced n-gram gather plan (helios/src/engram/reader.rs design)
+    warming the eager PLE lookup path in the same patcher. Causal+lagged
+    draft depth selection remains an idea-level credit. No code copied;
+    direct ports will carry modified-file notices per Apache-2.0 §4(b).

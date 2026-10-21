@@ -53,6 +53,12 @@ class PleMmapV032(unittest.TestCase):
         self.assertIn("self._mmap_fd: int | None = None", common)
         self.assertIn("weight, self._mmap_ready, self._mmap_fd = _ple_mmap_open(",
                       common)
+        # offset-sorted coalesced warm-gather, mirrored from the patcher
+        self.assertIn("def _ple_gather_plan(offsets, row_bytes, page_size=4096):",
+                      common)
+        self.assertIn("def _ple_mmap_warm(self, ids: torch.Tensor) -> None:",
+                      common)
+        self.assertIn("self._ple_mmap_warm(gathered_ids)", common)
         # native prefetch machinery kept; its lazy stream/buffer now bind to
         # the mmap-safe device selector instead of the (None) UVA view
         self.assertEqual(common.count("device=self._lookup_device"), 2)
