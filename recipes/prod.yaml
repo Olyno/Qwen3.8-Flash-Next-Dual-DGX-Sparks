@@ -80,6 +80,13 @@ mtp_disable_block_drop: 1
 # Block verification (Sun et al.) jointly verifies the draft block; lossless
 # w.r.t. the target distribution, gated by bench/output_gate.py.
 mtp_rejection_sample_method: block
+# mtp_skip_prefix: draft-prefill tail-window skip of the drafter's MoE block
+# and final HC mixer (patches/patch_mtp_prefix_skip.py; attention stays full
+# width for the drafter's KV cache; a first-prefill parity self-check pins
+# each stage to stock unless the tail rows are bit-identical). Default OFF —
+# boot verification pending (bench/longctx.py TTFT + the parity lines in the
+# boot log).
+mtp_skip_prefix: false
 # ple_offload: derived from NODES (true at 1 node — the n-gram table is
 # offloaded so the model fits; false at 2 — halved per-rank weights leave the
 # host table out of the loop).

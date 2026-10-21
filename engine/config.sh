@@ -182,6 +182,15 @@ MTP_ADAPTIVE_DEPTH_THRESHOLD="${MTP_ADAPTIVE_DEPTH_THRESHOLD:-0.5}"
 # VLLM_MTP_ADAPTIVE_DEBUG=1 in the container: rate-limited logging of the
 # recorded per-step probs / survival products / widths (see the patcher).
 MTP_ADAPTIVE_DEBUG="${MTP_ADAPTIVE_DEBUG:-false}"
+# Skip the MTP drafter's discarded prefill computation (v0.30 lane only,
+# patches/patch_mtp_prefix_skip.py): during draft prefill only each
+# sequence's last row feeds the first draft token, so the drafter's sparse
+# MoE block and final HC mixer run on just those tail rows and the other
+# prompt rows are skipped. Attention stays full width — every prompt row's
+# K/V populates the drafter's own KV cache that the decode draft steps
+# read. A first-prefill parity self-check pins each stage to stock unless
+# the tail-windowed outputs are bit-identical (see the patcher docstring).
+MTP_SKIP_PREFIX="${MTP_SKIP_PREFIX:-false}"
 # posix_fadvise(DONTNEED) on each checkpoint shard right after the loader
 # consumes it (v0.30 lane only, patches/patch_load_drop_cache_v030.py): keeps
 # the page cache one shard deep during the load on unified memory.
@@ -207,6 +216,9 @@ FREE_BLOCK_SORT="${FREE_BLOCK_SORT:-false}"
 [[ "$NVFP4_ACT_HOOKS" != "true" || "$V030" == "true" ]] || err "nvfp4_act_hooks is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$FREE_BLOCK_SORT" != "true" || "$V030" == "true" ]] || err "free_block_sort is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$MTP_ADAPTIVE_DEPTH" != "true" || "$V030" == "true" ]] || err "mtp_adaptive_depth is only supported on the vLLM 0.30 lane (v030: true)."
+[[ "$MTP_SKIP_PREFIX" != "true" || "$V030" == "true" ]] || err "mtp_skip_prefix is only supported on the vLLM 0.30 lane (v030: true)."
+[[ "$MTP_SKIP_PREFIX" != "true" || "${FP8_DENSE:-false}" != "true" ]] || err "mtp_skip_prefix and fp8_dense both overlay qwen4_exp/nvidia/mtp.py - pick one."
+[[ "$MTP_SKIP_PREFIX" != "true" || "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]] || err "mtp_skip_prefix needs speculative decoding (mtp_num_speculative_tokens > 0)."
 [[ "$MTP_ADAPTIVE_DEPTH" != "true" || "$MTP_NUM_SPECULATIVE_TOKENS" -gt 1 ]] || err "mtp_adaptive_depth needs mtp_num_speculative_tokens > 1 (k <= 1 has no chain to truncate)."
 [[ "$MTP_ADAPTIVE_DEPTH_THRESHOLD" =~ ^0(\.[0-9]+)?$|^1(\.0+)?$ ]] || err "mtp_adaptive_depth_threshold must be in [0, 1] (got: '$MTP_ADAPTIVE_DEPTH_THRESHOLD')"
 [[ -z "$GDN_PREFILL_BACKEND" || "$V030" == "true" ]] || err "gdn_prefill_backend is only supported on the vLLM 0.30 lane (v030: true)."

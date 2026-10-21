@@ -509,8 +509,13 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]] && { [[ -n "$MTP_DRAFT_VOCAB" ]] || [[ 
     else
         python3 "$SCRIPT_DIR/patches/patch_mtp_draft_vocab_v030.py" || err "patch_mtp_draft_vocab_v030.py failed"
     fi
-    add_overlay "$SCRIPT_DIR/patches/mtp_v030_patched.py" \
-                "$VLLM_PKG/models/qwen4_exp/nvidia/mtp.py"
+    # With MTP_SKIP_PREFIX the prefix-skip block below chains off this output
+    # and mounts the chained file itself (two overlays on one container path
+    # trip add_overlay's conflict guard).
+    if [[ "$MTP_SKIP_PREFIX" != "true" ]]; then
+        add_overlay "$SCRIPT_DIR/patches/mtp_v030_patched.py" \
+                    "$VLLM_PKG/models/qwen4_exp/nvidia/mtp.py"
+    fi
     if [[ -n "$MTP_DRAFT_VOCAB" ]]; then
         add_overlay "$MTP_DRAFT_VOCAB" "/etc/vllm-draft-vocab.txt"
         OVERLAY_ENV+=("-e VLLM_MTP_DRAFT_VOCAB=/etc/vllm-draft-vocab.txt")
@@ -538,6 +543,32 @@ elif $DO_LAUNCH && [[ "$MTP_NUM_SPECULATIVE_TOKENS" != "0" ]]; then
     warn "MTP=$MTP_NUM_SPECULATIVE_TOKENS is drafting over the FULL 248,320-token head"
     warn "     (0.59 GiB/rank at TP=2, read once per draft step). Setting MTP_DRAFT_VOCAB"
     warn "     to vocab/draft_vocab_en_code_47k.txt cuts that ~5x; see the recipes."
+fi
+
+if $DO_LAUNCH && [[ "$V030" == "true" && "$MTP_SKIP_PREFIX" == "true" ]]; then
+    info "=== Step 4e: MTP prefill prefix skip (vLLM 0.30) ==="
+    [[ "$MTP_NUM_SPECULATIVE_TOKENS" == "0" ]] && err "MTP_SKIP_PREFIX is on but MTP_NUM_SPECULATIVE_TOKENS=0 - nothing drafts."
+    # patches/patch_mtp_prefix_skip.py: the draft prefill forward is consumed
+    # at the per-sequence last rows only, so the drafter's sparse-MoE block
+    # and final HC mixer run on just those tail rows (attention stays full
+    # width — the drafter's own KV cache needs every prompt row's K/V). Each
+    # stage self-checks bit-parity on the first eager prefill and pins itself
+    # to stock on a mismatch. Idea credit: ds4-dfm-rs + flashrt, see the
+    # patcher docstring. Chains the draft-vocab output when that block is
+    # active (disjoint regions; it skips its own mount for ours).
+    PS="$SCRIPT_DIR/patches/mtp_prefix_skip"
+    mkdir -p "$PS/orig"
+    if [[ -n "$MTP_DRAFT_VOCAB" || "$FP8_DRAFT_HEAD" == "true" ]]; then
+        cp "$SCRIPT_DIR/patches/mtp_v030_patched.py" "$PS/orig/mtp.py"
+    else
+        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/mtp.py" \
+                           "$PS/orig/mtp.py"
+    fi
+    python3 "$SCRIPT_DIR/patches/patch_mtp_prefix_skip.py" "$PS" \
+        || err "patch_mtp_prefix_skip.py failed"
+    add_overlay "$PS/mtp_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/mtp.py"
+    OVERLAY_ENV+=("-e VLLM_MTP_SKIP_PREFIX=1")
+    ok "MTP prefix skip armed (parity self-check lands with the first prefill)"
 fi
 
 if $DO_LAUNCH && [[ "$V030" == "true" && "$MTP_ADAPTIVE_DEPTH" == "true" ]]; then
