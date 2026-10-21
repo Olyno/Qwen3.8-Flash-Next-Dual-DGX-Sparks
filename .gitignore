@@ -101,3 +101,4 @@ patches/qsa_qkvg_merge/*_v030.py
 patches/mtp_adaptive_depth/
 patches/mtp_prefix_skip/orig/
 patches/mtp_prefix_skip/*_v030.py
+bench/data/gate_perf.json

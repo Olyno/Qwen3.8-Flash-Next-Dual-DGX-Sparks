@@ -146,3 +146,33 @@ Ideas and approaches (no code copied)
   FR-Spec (frequency-ranked speculative sampling, arXiv:2502.19797) —
     the reduced draft-vocabulary technique implemented by
     patches/patch_mtp_draft_vocab*.py.
+
+  Niko1221/Strata (MIT) — https://github.com/Niko1221/Strata
+    Measurement discipline and spec-decode policy shapes (measured-cost
+    window decisions, per-size round-time pricing, PLE gather prefetch
+    design). Idea-level only in this repo; MIT code may be ported later
+    under licenses/Strata-MIT.LICENSE (not yet vendored — nothing copied).
+
+  Baekpica/ds4-dfm-rs (MIT) — https://github.com/Baekpica/ds4-dfm-rs
+    GB10-host memory-guard discipline (PSI trigger, cgroup admission),
+    MTP prefix-cache preparation (skip the drafter's discarded prefill
+    rows; basis of patches/patch_mtp_prefix_skip.py), draft-logit-margin
+    gating data, width-invariance test doctrine. Idea-level only.
+
+  BFinn/flashrt (Apache-2.0) — https://github.com/BFinn/flashrt
+    Same-model-family measurements feeding the prefix-skip design and the
+    KLD-with-self-noise-floor quality-gate protocol (bench/kl_yardstick.py).
+    Idea-level only; no code copied.
+
+  fodelf/YoungAi (MIT, ds4/DwarfStar engine) — spec-decode cost-gating and
+    cgroup-shaped memory guard; idea-level only.
+
+  MistVVK/XeStrata (LGPL-3.0 — ideas only, code not copyleft-compatible)
+    — https://github.com/MistVVK/XeStrata. PLE engagement startup
+    assertion, PLE read/prefetch discipline, per-device gating practice.
+
+  NVIDIA/flare-local-inference (Apache-2.0)
+    — https://github.com/NVIDIA/flare-local-inference. Page-cache hygiene
+    for unified memory (FADV_DONTNEED/FADV_RANDOM), causal+lagged draft
+    depth selection, coalesced n-gram gather design. Idea-level so far;
+    direct ports will carry modified-file notices per Apache-2.0 §4(b).
