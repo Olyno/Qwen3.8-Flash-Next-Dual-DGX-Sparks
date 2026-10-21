@@ -18,6 +18,8 @@ pick up foreign traffic; without the counters the extra columns read "nan".
 (chat_template_kwargs enable_thinking=false), temperature 0, and three fixed
 prompts (short code-gen, long prose, mixed) -- so numbers line up with
 myllmbox's 64.7/86.3/49.8 claims. --dry-run prints the plan without a server.
+Endpoint/model come from BENCH_BASE/BENCH_MODEL when set (prod-recipe
+defaults); --jsonl appends machine-readable rows for bench/gate_report.sh.
 
 Findings that motivated the shape of this script:
   * decode is dominated by MTP acceptance, not context length
@@ -28,11 +30,12 @@ Findings that motivated the shape of this script:
   * the "entropy" task at temperature 0 degenerates into repetition, which
     MTP then predicts easily -- read it only at temp 0.8.
 """
-import json, time, argparse, urllib.request
+import json, os, time, argparse, urllib.request
 
 import mtp_accept
 
-BASE, MODEL = "http://localhost:8888", "Qwen3.8-Flash-Next-NVFP4"
+BASE = os.environ.get("BENCH_BASE", "http://localhost:8888")
+MODEL = os.environ.get("BENCH_MODEL", "Qwen3.8-Flash-Next-NVFP4")
 DRAFTS = "vllm:spec_decode_num_drafts_total"
 DRAFT_TOK = "vllm:spec_decode_num_draft_tokens_total"
 ACCEPTED = "vllm:spec_decode_num_accepted_tokens_total"
@@ -113,6 +116,7 @@ def main():
     ap.add_argument("--contexts")
     ap.add_argument("--temps")
     ap.add_argument("--conditions", choices=["default", "myllmbox"], default="default")
+    ap.add_argument("--jsonl", help="append each row as a JSON line (for bench/gate_report.sh)")
     ap.add_argument("--dry-run", action="store_true", help="print the run plan and exit")
     a = ap.parse_args()
     myll = a.conditions == "myllmbox"
@@ -137,5 +141,11 @@ def main():
                 p, ct, tt, dec, sps, tps, acc = run(ctx, task, a.decode, t, tkwargs)
                 print(f"{c:>9,} {t:>5.1f} {name:<10} {p:>9,} {ct:>6,} {tt:>9.2f} {dec:>10.1f} "
                       f"{sps:>8.1f} {tps:>8.2f} {acc:>6.1f}", flush=True)
+                if a.jsonl:
+                    with open(a.jsonl, "a") as jf:
+                        jf.write(json.dumps({"context": c, "temp": t, "task": name,
+                                             "ptok": p, "ctok": ct, "ttft_s": tt,
+                                             "decode_tps": dec, "steps_ps": sps,
+                                             "tok_per_step": tps, "accept_pct": acc}) + "\n")
 
 main()
