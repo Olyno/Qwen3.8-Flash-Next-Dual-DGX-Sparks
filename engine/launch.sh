@@ -316,6 +316,22 @@ LAUNCH_EOF
             kill $LOGPID 2>/dev/null || true
             echo ""
             ok "vLLM is ready and serving on port $PORT!"
+            # PLE engagement assertion — idea-level credit: XeStrata
+            # (LGPL-3.0, idea only), which refuses to run with layer-1 PLE
+            # silently skipped. On the v030 lane ple_offload routes the table
+            # through the mmap overlay (patches/patch_ple_mmap_v030.py, or
+            # patches/patch_ple_offload.py's packed tables on the legacy
+            # lane); both log a table-engagement line during load. A silent
+            # fallback parks the table in ~32 GiB of pinned host RAM — the
+            # exact config that OOM-reboots this box — so fail loudly here,
+            # while the container is still healthy enough to archive its log.
+            if [[ "$V030" == "true" && "$PLE_OFFLOAD" == "true" ]]; then
+                if ! docker logs vllm-fn 2>&1 | grep -qE 'using packed mmap table|mmap table attached|file-backed table'; then
+                    dump_failure_logs
+                    err "ple_offload is on but the container log has no PLE table engagement line — PLE silently disengaged. Run ./stop.sh before relaunching; see the archived log above."
+                fi
+                ok "PLE engaged (table load line present in container log)."
+            fi
             # Host-memory watchdog, now that the load-time memory ramp is over.
             "$SCRIPT_DIR/scripts/start-memwatch.sh" vllm-fn >/dev/null
             info "Memory watchdog running (logs/memwatch-vllm-fn.log)"

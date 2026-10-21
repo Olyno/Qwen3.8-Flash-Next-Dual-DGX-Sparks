@@ -17,6 +17,9 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 MEMINFO="$WORK/meminfo"
 write_mem() { printf 'MemTotal:       127000000 kB\nMemAvailable:   %s kB\n' "$1" > "$MEMINFO"; }
+# Pin the cgroup probe to a nonexistent dir so every case tests the meminfo
+# path regardless of any cgroup limit the test host happens to run under.
+NOCG="$WORK/no-cgroup"
 
 GATE=(bash engine/mem-gate.sh)
 
@@ -38,20 +41,20 @@ echo "== mem-gate.sh shell tests =="
 # 1. Already above the threshold: immediate pass, no waiting.
 write_mem 110000000   # ~105 GiB
 run "above threshold exits immediately" \
-    env LAUNCH_MEMINFO="$MEMINFO" LAUNCH_MIN_MEM_AVAIL_GIB=100 "${GATE[@]}"
+    env LAUNCH_MEMINFO="$MEMINFO" LAUNCH_CGROUP_DIR="$NOCG" LAUNCH_MIN_MEM_AVAIL_GIB=100 "${GATE[@]}"
 
 # 2. Below the threshold, then memory settles: waits, then passes.
 write_mem 90000000    # ~86 GiB
 ( sleep 2; write_mem 110000000 ) &
 run "waits until the threshold is reached" \
-    env LAUNCH_MEMINFO="$MEMINFO" LAUNCH_MIN_MEM_AVAIL_GIB=100 \
+    env LAUNCH_MEMINFO="$MEMINFO" LAUNCH_CGROUP_DIR="$NOCG" LAUNCH_MIN_MEM_AVAIL_GIB=100 \
         LAUNCH_MEM_POLL_S=1 LAUNCH_MEM_WAIT_TIMEOUT_S=10 "${GATE[@]}"
 
 # 3. Stays below the threshold past the deadline: hard failure.
 write_mem 90000000
 run "timeout is a hard failure (non-zero exit)" bash -c "
     set +e
-    LAUNCH_MEMINFO=$MEMINFO LAUNCH_MIN_MEM_AVAIL_GIB=100 \
+    LAUNCH_MEMINFO=$MEMINFO LAUNCH_CGROUP_DIR=$NOCG LAUNCH_MIN_MEM_AVAIL_GIB=100 \
         LAUNCH_MEM_POLL_S=1 LAUNCH_MEM_WAIT_TIMEOUT_S=2 \
         bash engine/mem-gate.sh >/dev/null 2>&1
     rc=\$?
