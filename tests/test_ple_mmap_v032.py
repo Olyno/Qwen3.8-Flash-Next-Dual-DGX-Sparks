@@ -47,6 +47,12 @@ class PleMmapV032(unittest.TestCase):
         self.assertIn("def commit_mmap_table", common)
         self.assertIn("_lookup_ple_rows_from_host_addr_kernel", common)
         self.assertIn("file-backed table", common)
+        # unified-memory hygiene set on the VLLM_PLE_MMAP_ADVICE switch
+        self.assertIn("os.POSIX_FADV_RANDOM", common)
+        self.assertIn("MADV_POPULATE_READ", common)
+        self.assertIn("self._mmap_fd: int | None = None", common)
+        self.assertIn("weight, self._mmap_ready, self._mmap_fd = _ple_mmap_open(",
+                      common)
         # native prefetch machinery kept; its lazy stream/buffer now bind to
         # the mmap-safe device selector instead of the (None) UVA view
         self.assertEqual(common.count("device=self._lookup_device"), 2)

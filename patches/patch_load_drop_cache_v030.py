@@ -23,9 +23,25 @@ shard as it is consumed keeps the cache about one shard deep during the load
 itself; engine/ step 4b-2 (scripts/evict_page_cache.py) already evicts the
 checkpoint from the host side before launch, this covers the load window.
 
-Changes vs the vendor commit: the helper is renamed and the gate is
+Added here (not in the vendor commit), as end-of-load sweep
+_fadvise_dontneed_load_end: the per-shard drops above already cover every
+shard streamed through safetensors_weights_iterator (all three strategies),
+so the end-of-load window only leaves two gaps, and the sweep covers exactly
+those, without duplicating the per-shard drop: (1) the generator-termination
+straggler sweep (DONTNEED on an already-dropped shard is a cheap no-op), and
+(2) the files the loader opens but never streams — config.json, the chat
+template, tokenizer files, generation_config, the shard index,
+hf_quant_config — which sit beside the shards (under /model when the recipe
+bind-mounts a local checkpoint). Out of reach of both: the threaded
+iterator (multi_thread_safetensors_weights_iterator, only used by
+--load-format threaded). End-credit for the unified-memory sweep idea:
+NVIDIA/flare-local-inference (Apache-2.0) 5dd6769, idea-level, own
+implementation.
+
+Changes vs the vendor commit: the helper is renamed, the gate is
 VLLM_LOAD_DROP_CACHE, default OFF (fail closed; engine/patches.sh passes
--e VLLM_LOAD_DROP_CACHE=1 via OVERLAY_ENV when it mounts the file).
+-e VLLM_LOAD_DROP_CACHE=1 via OVERLAY_ENV when it mounts the file), and the
+load-end sweep above is new.
 
 Inputs:  patches/v030_dropcache/orig/weight_utils.py (from the image)
 Outputs: patches/v030_dropcache/weight_utils_v030.py
@@ -59,6 +75,37 @@ def _fadvise_dontneed(path: str) -> None:
             os.close(fd)
     except OSError:
         pass
+
+
+_END_SWEEP_SIDECARS = (
+    "chat_template.jinja",
+    "config.json",
+    "generation_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "model.safetensors.index.json",
+    "hf_quant_config.json",
+)
+
+
+def _fadvise_dontneed_load_end(hf_weights_files: list[str]) -> None:
+    \"\"\"End-of-load sweep: the two gaps the per-shard drop cannot reach.
+
+    Re-dropping every streamed shard is a cheap no-op for anything already
+    dropped and catches stragglers; the sidecar set (config, chat template,
+    tokenizer, generation_config, shard index, hf_quant_config) is opened
+    by the loader but never streamed through the iterator, so nothing else
+    drops it. Same VLLM_LOAD_DROP_CACHE gate as the per-shard drop.
+    \"\"\"
+    if os.environ.get("VLLM_LOAD_DROP_CACHE", "0") != "1":
+        return
+    if not hf_weights_files:
+        return
+    for st_file in hf_weights_files:
+        _fadvise_dontneed(st_file)
+    snapshot = os.path.dirname(hf_weights_files[0])
+    for name in _END_SWEEP_SIDECARS:
+        _fadvise_dontneed(os.path.join(snapshot, name))
 
 
 def safetensors_weights_iterator(
@@ -105,6 +152,8 @@ LAZY_NEW = """\
                     param = f.get_tensor(name)
                     yield name, param
             _fadvise_dontneed(st_file)
+
+    _fadvise_dontneed_load_end(hf_weights_files)
 
 
 def multi_thread_safetensors_weights_iterator(

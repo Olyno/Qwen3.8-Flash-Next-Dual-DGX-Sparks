@@ -22,7 +22,14 @@ argv[1] overrides the base dir (used by the test); default
 patches/v030_ple.
 
 VLLM_PLE_MMAP_DIR  directory for the persistent tables (unset = pinned host)
-VLLM_PLE_MMAP_ADVICE madvise advice for the mapping (default 1 = MADV_RANDOM)
+VLLM_PLE_MMAP_ADVICE madvise advice for the mapping (default 1 = MADV_RANDOM).
+    Nonzero also arms the unified-memory page-cache hygiene set: POSIX_FADV_RANDOM
+    on a dedicated read fd for the table, taken before any gather read, and a
+    MADV_POPULATE_READ pre-fault of an already-complete (ready) mapping so the
+    first serve starts deterministic. 0 disables the whole set (kill-switch).
+    Idea credit: NVIDIA/flare-local-inference (Apache-2.0), commit 5dd6769
+    ignition/preparation/host_memory.py (readahead probe: a 256 MiB read under
+    default advice retained 8 MiB, under RANDOM 0); idea-level, own implementation.
 """
 import ast
 import os
@@ -58,7 +65,15 @@ def _lookup_ple_rows_from_host_addr_kernel(
 
 _PLE_MMAP_FORMAT = "ple-mmap-v1"
 
+_MADV_POPULATE_READ = 23  # linux; EINVAL on <5.14 kernels is logged, not fatal
 
+
+def _ple_advice_value() -> int:
+    """VLLM_PLE_MMAP_ADVICE: madvise advice number; 0 disables all hygiene."""
+    try:
+        return int(os.environ.get("VLLM_PLE_MMAP_ADVICE", "1"))
+    except ValueError:
+        return 1
 
 
 def _ple_mmap_sidecar(path: str) -> str:
@@ -125,7 +140,7 @@ def _ple_mmap_matches(path: str, fingerprint: dict, nbytes: int) -> bool:
 
 def _ple_mmap_open(
     path: str, shape: tuple[int, int], dtype, fingerprint: dict
-) -> tuple[torch.Tensor, bool]:
+) -> tuple[torch.Tensor, bool, int]:
     nbytes = shape[0] * shape[1] * dtype.itemsize
     ready = _ple_mmap_matches(path, fingerprint, nbytes)
     if not ready:
@@ -135,15 +150,36 @@ def _ple_mmap_open(
             _ple_fsync_dir(os.path.dirname(path))
         with open(path, "ab") as handle:
             handle.truncate(nbytes)
+    # Unified-memory page-cache hygiene (one switch, VLLM_PLE_MMAP_ADVICE;
+    # idea credit NVIDIA/flare-local-inference@5dd6769 host_memory.py).
+    # FADV_RANDOM on a dedicated read-only fd before any gather read: under
+    # default advice the kernel reads ahead around the sparse n-gram rows
+    # and that readahead comes out of the same pool the GPU allocates from
+    # on GB10. The fd stays open for the table's lifetime so the eager-path
+    # warm reads reuse it. The mmap itself is governed by madvise, not
+    # fadvise, so both are set: fadvise for fd reads, MADV_RANDOM for faults.
+    read_fd = os.open(path, os.O_RDONLY)
+    advice = _ple_advice_value()
+    if advice:
+        os.posix_fadvise(read_fd, 0, nbytes, os.POSIX_FADV_RANDOM)
     raw = torch.from_file(path, shared=True, size=nbytes, dtype=torch.uint8)
-    advice = int(os.environ.get("VLLM_PLE_MMAP_ADVICE", "1"))
     if advice:
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
         start = raw.data_ptr() & ~(mmap.PAGESIZE - 1)
         length = raw.data_ptr() + nbytes - start
         rc = libc.madvise(ctypes.c_void_p(start), ctypes.c_size_t(length), advice)
         logger.info("PLE mmap %s: madvise(%d) rc=%d", path, advice, rc)
-    return raw.view(dtype).view(*shape), ready
+        if ready:
+            # Deterministic first touch: pre-fault a reused table now.
+            # Decode measured not fault-bound, so this is predictability,
+            # not throughput. Skipped on a fresh table -- the loader writes
+            # every page shortly after anyway.
+            rc = libc.madvise(
+                ctypes.c_void_p(start), ctypes.c_size_t(length),
+                _MADV_POPULATE_READ,
+            )
+            logger.info("PLE mmap %s: MADV_POPULATE_READ rc=%d", path, rc)
+    return raw.view(dtype).view(*shape), ready, read_fd
 
 
 def _ple_mmap_commit(path: str, weight: torch.Tensor, fingerprint: dict) -> None:
@@ -193,6 +229,7 @@ EDITS_COMMON = [
         "        location = _ple_mmap_location(prefix, get_etp_group().rank_in_group)\n"
         "        self._mmap_path, self._mmap_identity = location or (None, None)\n"
         "        self._mmap_ready = False\n"
+        "        self._mmap_fd: int | None = None\n"
         "        self._mmap_shards: set[int] = set()\n"
         "        if self._mmap_path is None and not is_uva_available():\n"
         "            raise RuntimeError(\"Engram CPU offload requires UVA support\")\n",
@@ -253,7 +290,7 @@ EDITS_COMMON = [
         "            self._mmap_fingerprint = _ple_mmap_fingerprint(\n"
         "                self._mmap_identity, (num_embeddings, embedding_dim), dtype\n"
         "            )\n"
-        "            weight, self._mmap_ready = _ple_mmap_open(\n"
+        "            weight, self._mmap_ready, self._mmap_fd = _ple_mmap_open(\n"
         "                self._mmap_path,\n"
         "                (num_embeddings, embedding_dim),\n"
         "                dtype,\n"

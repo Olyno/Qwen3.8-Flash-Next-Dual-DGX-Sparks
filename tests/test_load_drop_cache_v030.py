@@ -33,10 +33,61 @@ class LoadDropCacheV030(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         src = (self.out / "weight_utils_v030.py").read_text()
         ast.parse(src)
-        self.assertEqual(src.count("def _fadvise_dontneed"), 1)
-        self.assertEqual(src.count("_fadvise_dontneed(st_file)"), 3)
+        self.assertEqual(src.count("def _fadvise_dontneed("), 1)
+        # 3 per-shard calls in the iterator + 1 inside the load-end sweep
+        self.assertEqual(src.count("_fadvise_dontneed(st_file)"), 4)
         self.assertIn("os.POSIX_FADV_DONTNEED", src)
         self.assertIn('os.environ.get("VLLM_LOAD_DROP_CACHE", "0") != "1"', src)
+
+    def test_end_of_load_sweep_after_the_shard_loop(self):
+        r = self.run_patch()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        src = (self.out / "weight_utils_v030.py").read_text()
+        self.assertEqual(src.count("def _fadvise_dontneed_load_end("), 1)
+        self.assertEqual(src.count("_fadvise_dontneed_load_end(hf_weights_files)"), 1)
+        # the sweep runs at function level, after the last per-shard drop
+        it = src[src.index("def safetensors_weights_iterator"):]
+        self.assertLess(it.rfind("_fadvise_dontneed(st_file)"),
+                        it.index("_fadvise_dontneed_load_end(hf_weights_files)"))
+        for name in ("chat_template.jinja", "model.safetensors.index.json",
+                     "hf_quant_config.json"):
+            self.assertIn(name, src)
+
+    def test_load_end_sweep_is_gated_and_covers_shards_plus_sidecars(self):
+        import os
+        import tempfile
+        import unittest.mock as mock
+        self.assertEqual(self.run_patch().returncode, 0)
+        src = (self.out / "weight_utils_v030.py").read_text()
+        tree = ast.parse(src)
+        ns = {"os": os}
+        wanted = {"_fadvise_dontneed", "_fadvise_dontneed_load_end",
+                  "_END_SWEEP_SIDECARS"}
+        for node in tree.body:
+            name = getattr(node, "name", None) or \
+                getattr(getattr(node, "targets", [None])[0], "id", "")
+            if name in wanted:
+                exec(compile(ast.Module(body=[node], type_ignores=[]),
+                             "<extract>", "exec"), ns)
+        snap = tempfile.mkdtemp()
+        shards = [os.path.join(snap, "model-00001-of-00002.safetensors"),
+                  os.path.join(snap, "model-00002-of-00002.safetensors")]
+        with mock.patch.object(os, "open", return_value=3), \
+                mock.patch.object(os, "close"), \
+                mock.patch.object(os, "posix_fadvise") as fadv, \
+                mock.patch.dict(os.environ, {"VLLM_LOAD_DROP_CACHE": "1"}):
+            ns["_fadvise_dontneed_load_end"](shards)
+        dropped = [c.args for c in fadv.call_args_list]
+        self.assertEqual(len(dropped), len(shards) + len(ns["_END_SWEEP_SIDECARS"]))
+        self.assertTrue(all(a[3] == os.POSIX_FADV_DONTNEED for a in dropped))
+        self.assertIn((3, 0, 0, os.POSIX_FADV_DONTNEED), dropped)
+        with mock.patch.object(os, "open", return_value=3), \
+                mock.patch.object(os, "close"), \
+                mock.patch.object(os, "posix_fadvise") as fadv_off, \
+                mock.patch.dict(os.environ, {"VLLM_LOAD_DROP_CACHE": "0"}):
+            ns["_fadvise_dontneed_load_end"](shards)
+            ns["_fadvise_dontneed"](shards[0])
+        fadv_off.assert_not_called()
 
     def test_rerun_gives_same_output(self):
         self.run_patch()
