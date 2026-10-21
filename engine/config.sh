@@ -181,12 +181,20 @@ NVFP4_ACT_HOOKS="${NVFP4_ACT_HOOKS:-false}"
 # FreeKVCacheBlockQueue.append_n sorts freed blocks by block_id so KV
 # offload/prefetch DMA sees address-sequential blocks (vllm#31371).
 FREE_BLOCK_SORT="${FREE_BLOCK_SORT:-false}"
+# Equal-width chunked prefill (v0.32 lane only,
+# patches/patch_chunk_equal_split.py): when a prefill must be split under
+# long_prefill_token_threshold, cut ceil(N/cap) equal chunks instead of
+# cap-sized chunks plus a stub tail — a 5,000-token prompt at cap 4,800 becomes
+# 2500+2500, not 4800+200. Same cap and same step count; the tail step is no
+# longer near-empty. Idea credit: Niko1221/Strata (MIT), chunk policy #41.
+CHUNK_EQUAL_SPLIT="${CHUNK_EQUAL_SPLIT:-false}"
 [[ "$FP8_DRAFT_HEAD" != "true" || "$V030" == "true" ]] || err "fp8_draft_head is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$QSA_FUSED_DRAFT" != "true" || "$V030" == "true" ]] || err "qsa_fused_draft is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$QSA_ROPE_CLAMP" != "true" || "$V030" == "true" ]] || err "qsa_rope_clamp is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$LOAD_DROP_CACHE" != "true" || "$V030" == "true" ]] || err "load_drop_cache is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$NVFP4_ACT_HOOKS" != "true" || "$V030" == "true" ]] || err "nvfp4_act_hooks is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$FREE_BLOCK_SORT" != "true" || "$V030" == "true" ]] || err "free_block_sort is only supported on the vLLM 0.32 lane (v030: true)."
+[[ "$CHUNK_EQUAL_SPLIT" != "true" || "$V030" == "true" ]] || err "chunk_equal_split is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$MTP_ADAPTIVE_DEPTH" != "true" || "$V030" == "true" ]] || err "mtp_adaptive_depth is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$MTP_SKIP_PREFIX" != "true" || "$V030" == "true" ]] || err "mtp_skip_prefix is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$MTP_SKIP_PREFIX" != "true" || "${FP8_DENSE:-false}" != "true" ]] || err "mtp_skip_prefix and fp8_dense both overlay qwen4_exp/nvidia/mtp.py - pick one."

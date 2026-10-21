@@ -244,6 +244,26 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         add_overlay "$FS/kv_cache_utils_v030.py" \
                     "$VLLM_PKG/v1/core/kv_cache_utils.py"
     fi
+    if [[ "$CHUNK_EQUAL_SPLIT" == "true" ]]; then
+        info "=== Step 4c: equal-width chunked prefill (vLLM 0.32) ==="
+        # patches/patch_chunk_equal_split.py (idea credit: Niko1221/Strata,
+        # MIT, chunk policy #41): stock caps a prefill chunk at
+        # long_prefill_token_threshold, so a prompt just past it lands on a
+        # stub tail — 5,000 rows at the prod cap of 4,800 splits 4800+200 and
+        # spends a whole step (metadata build, KV alloc, GDN state checkpoint)
+        # on 200 rows. The overlay keeps the cap and the step count and cuts
+        # ceil(N/cap) equal chunks instead: 2500+2500. Both clamp sites in
+        # v1/core/sched/scheduler.py take it; nothing else overlays that file
+        # on this lane.
+        CES="$SCRIPT_DIR/patches/chunk_equal_split"
+        mkdir -p "$CES/orig"
+        extract_from_image "$VLLM_PKG/v1/core/sched/scheduler.py" \
+                           "$CES/orig/scheduler.py"
+        python3 "$SCRIPT_DIR/patches/patch_chunk_equal_split.py" "$CES" \
+            || err "patch_chunk_equal_split.py failed"
+        add_overlay "$CES/scheduler_v032.py" "$VLLM_PKG/v1/core/sched/scheduler.py"
+        OVERLAY_ENV+=("-e VLLM_CHUNK_EQUAL_SPLIT=1")
+    fi
     if [[ "$NVFP4_ACT_HOOKS" == "true" ]]; then
         info "=== Step 4c: NVFP4 activation channel-stat hooks (debug) ==="
         # Debug overlay (patches/patch_nvfp4_act_hooks.py): per-channel absmax

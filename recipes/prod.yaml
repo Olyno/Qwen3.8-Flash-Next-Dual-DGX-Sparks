@@ -153,6 +153,16 @@ load_drop_cache: true
 # and MTP acceptance identical to stock (accepted/draft 1.990 vs 1.99),
 # quality gate PASS.
 free_block_sort: true
+# Equal-width chunked prefill (patches/patch_chunk_equal_split.py; idea credit
+# Niko1221/Strata (MIT), chunk policy #41): when a prefill has to be split under
+# long_prefill_token_threshold, cut ceil(N/cap) equal chunks instead of
+# cap-sized chunks plus a stub tail — a 5,000-token prompt at our cap of 4,800
+# becomes 2500+2500, not 4800+200. Same cap, same step count, and the tail step
+# stops being near-empty (a lone request already skips the cap, so this only
+# shows up with two or more eligible requests). Default OFF — boot
+# verification pending (bench/longctx.py TTFT at 2+ concurrent prompts, plus a
+# scheduler log check that no chunk lands near the 200-row stub size).
+chunk_equal_split: false
 require_idle_gpu: true
 evict_page_cache: true
 nfs_share: false

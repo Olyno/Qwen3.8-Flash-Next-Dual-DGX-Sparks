@@ -125,8 +125,11 @@ Ideas and approaches (no code copied)
   Niko1221/Strata (MIT) — https://github.com/Niko1221/Strata
     Measurement discipline and spec-decode policy shapes (measured-cost
     window decisions, per-size round-time pricing, PLE gather prefetch
-    design). Idea-level only in this repo; MIT code may be ported later
-    under licenses/Strata-MIT.LICENSE (not yet vendored — nothing copied).
+    design; chunk policy #41 — equal-width prefill chunks instead of a
+    cap-sized chunk plus a stub tail, basis of
+    patches/patch_chunk_equal_split.py). Idea-level only in this repo; MIT
+    code may be ported later under licenses/Strata-MIT.LICENSE (not yet
+    vendored — nothing copied).
 
   Baekpica/ds4-dfm-rs (MIT) — https://github.com/Baekpica/ds4-dfm-rs
     GB10-host memory-guard discipline (PSI trigger, cgroup admission),
