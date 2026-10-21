@@ -76,112 +76,6 @@ fi
 # ---------------------------------------------------------------------------
 if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     [[ "$QSA_PROFILE" == "stock" ]] || err "V030: QSA_PROFILE=$QSA_PROFILE is not supported on the vLLM 0.30 lane."
-    if [[ "$KV_CACHE_DTYPE" == fp8* ]]; then
-        mkdir -p "$SCRIPT_DIR/patches/v030_fp8kv/orig/ops"
-        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/qsa.py" "$SCRIPT_DIR/patches/v030_fp8kv/orig/qsa.py"
-        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa.py" "$SCRIPT_DIR/patches/v030_fp8kv/orig/ops/qsa.py"
-        python3 "$SCRIPT_DIR/patches/patch_qsa_fp8_kv_v030.py" || err "patch_qsa_fp8_kv_v030.py failed"
-        cp "$SCRIPT_DIR/patches/v030_fp8kv/qsa.py" "$SCRIPT_DIR/patches/v030_fp8kv/qsa_nvidia_v030.py"
-        cp "$SCRIPT_DIR/patches/v030_fp8kv/ops/qsa.py" "$SCRIPT_DIR/patches/v030_fp8kv/qsa_ops_v030.py"
-        # nvidia/qsa.py is NOT mounted here: the QSA-prepare block below
-        # re-patches this output with the vllm#57097 fusion, and the
-        # qsa_head_dim block below that mounts the final result (the patches
-        # touch non-overlapping regions).
-        add_overlay "$SCRIPT_DIR/patches/v030_fp8kv/qsa_ops_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa.py"
-    fi
-    info "=== Step 4c: QSA prepare fusion (vllm#57097 backport, vLLM 0.30) ==="
-    # Backport of vllm#57097 (patches/qsa_prepare/): the indexer prepare
-    # launch also does the main attention's QK-norm/RoPE/gate and the main
-    # K/V cache write (ops/qsa_pre_indexer.py becomes ops/qsa_prepare.py), so
-    # _project_qkv_gate and do_kv_cache_update drop out of the hot path.
-    # Quality-neutral (same math, one launch instead of three), so no toggle:
-    # fused mode self-gates on use_fused_qk_norm_rope_gate and
-    # indexer.use_fused_pre_indexer and otherwise runs the stock paths. With
-    # KV_CACHE_DTYPE=fp8 the qsa.py input is the FP8-KV overlay output above;
-    # the fused kernel writes the e4m3 cache with the same per-tensor scales.
-    QP="$SCRIPT_DIR/patches/qsa_prepare"
-    mkdir -p "$QP/orig"
-    extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/qsa.py" "$QP/orig/qsa_stock.py"
-    extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/indexer_qsa.py" "$QP/orig/indexer_qsa.py"
-    extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_pre_indexer.py" "$QP/orig/qsa_pre_indexer.py"
-    if [[ "$KV_CACHE_DTYPE" == fp8* ]]; then
-        cp "$SCRIPT_DIR/patches/v030_fp8kv/qsa_nvidia_v030.py" "$QP/orig/qsa.py"
-    else
-        cp "$QP/orig/qsa_stock.py" "$QP/orig/qsa.py"
-    fi
-    python3 "$QP/apply_patch.py" || err "qsa_prepare apply_patch.py failed"
-    info "=== Step 4c: QSA head_dim unsharded fallback fix (vllm#59945, vLLM 0.30) ==="
-    # Backport of vllm#59945 (patches/qsa_head_dim/): the fallback head_dim
-    # divided hidden_size by the TP-sharded num_heads, so at TP > 1 it came
-    # out tp_size times too large and the checkpoint failed to load with a
-    # QKV shape mismatch. Now divides by total_num_heads. Correctness fix,
-    # so no toggle. nvidia/qsa.py is mounted here (not in the qsa_prepare
-    # block above): this patcher chains off the qsa_prepare output — the two
-    # touch non-overlapping regions. With QSA_QKVG_MERGE=true the merge block
-    # below chains off this output in turn and mounts qsa.py in its place.
-    QH="$SCRIPT_DIR/patches/qsa_head_dim"
-    mkdir -p "$QH/orig"
-    cp "$QP/qsa_v030.py" "$QH/orig/qsa.py"
-    python3 "$QH/apply_patch.py" || err "qsa_head_dim apply_patch.py failed"
-    if [[ "$QSA_QKVG_MERGE" != "true" ]]; then
-        add_overlay "$QH/qsa_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/qsa.py"
-    fi
-    add_overlay "$QP/indexer_qsa_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/indexer_qsa.py"
-    add_overlay "$QP/qsa_prepare_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_prepare.py"
-    if [[ "$QSA_QKVG_MERGE" == "true" ]]; then
-        info "=== Step 4c: QSA QKV/gate + indexer projection merge (vllm#59533, vLLM 0.30) ==="
-        # Backport of vllm#59533 (patches/qsa_qkvg_merge/): packs the sharded
-        # Q/gate/K/V and the replicated indexer Q/K into one GEMM per
-        # attention layer; the checkpoint's indexer weight stacks into the
-        # merged projection via an attention-level WeightsMapper, and the
-        # fused output's indexer slice (a row-strided column view) is
-        # accepted by the qsa_prepare overlay's main_qkv_stride_token
-        # fold-in. TP=1 only — config.sh hard-gates: the merged (13952, 2560)
-        # shape has a skinny plan (patches/gb10_skinny_gemm) at TP=1 but none
-        # at TP=2, where the merged GEMM would fall back to cuBLAS.
-        QM="$SCRIPT_DIR/patches/qsa_qkvg_merge"
-        mkdir -p "$QM/orig"
-        cp "$QH/qsa_v030.py" "$QM/orig/qsa.py"
-        python3 "$QM/apply_patch.py" || err "qsa_qkvg_merge apply_patch.py failed"
-        add_overlay "$QM/qsa_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/qsa.py"
-    fi
-    info "=== Step 4c: QSA prefill logits workspace (vllm#57105, vLLM 0.30) ==="
-    # Backport of vllm#57105 (patches/qsa_logits_workspace/): the chunked
-    # prefill scoring loop sliced a fresh torch.empty per chunk; the overlay
-    # allocates the worst-case fp32 workspace once and slices per-chunk views
-    # out of it, keeping large transients out of the (unified-memory)
-    # allocator. Quality-neutral (same kernel, same math), so no toggle.
-    QW="$SCRIPT_DIR/patches/qsa_logits_workspace"
-    mkdir -p "$QW/orig"
-    extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_indexer.py" "$QW/orig/qsa_indexer.py"
-    python3 "$QW/apply_patch.py" || err "qsa_logits_workspace apply_patch.py failed"
-    add_overlay "$QW/qsa_indexer_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_indexer.py"
-    info "=== Step 4c: HC down+SiLU fused GEMM (vllm#58957, vLLM 0.30) ==="
-    # Backport of vllm#58957 (patches/hc_down_silu/): fuses the hyperconnection
-    # down-projection + SiLU gate into a single CuTe-DSL GEMM and registers a
-    # cutedsl warmup provider. Quality-neutral (production bf16 rounding
-    # boundary preserved; upstream pins against the ll_bf16+hc_silu reference)
-    # and the fused path self-gates (bf16 weight, K%8==0, SM90+, 1<=M<=48, not
-    # VLLM_BATCH_INVARIANT), so no toggle. model.py overlaps replayssm_gdn's
-    # target: with REPLAYSSM_GDN on, that block chains off this block's
-    # model.py output and mounts the chained file itself, so skip our mount
-    # (two overlays on one container path trip add_overlay's conflict guard).
-    HC="$SCRIPT_DIR/patches/hc_down_silu"
-    mkdir -p "$HC/orig"
-    extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/hyperconnection.py" "$HC/orig/hyperconnection.py"
-    extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/model.py" "$HC/orig/model.py"
-    python3 "$HC/apply_patch.py" || err "hc_down_silu apply_patch.py failed"
-    # With FP8_DENSE the fp8dense block below chains off these outputs and
-    # mounts the chained files itself (two overlays on one container path
-    # trip add_overlay's conflict guard).
-    if [[ "$FP8_DENSE" != "true" ]]; then
-        add_overlay "$HC/hyperconnection_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/hyperconnection.py"
-        [[ "$REPLAYSSM_GDN" == "true" ]] || add_overlay "$HC/model_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/model.py"
-    fi
-    add_overlay "$HC/__init__.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/__init__.py"
-    add_overlay "$HC/hc_down_silu.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/hc_down_silu.py"
-    add_overlay "$HC/_hc_down_silu_fma.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/_hc_down_silu_fma.py"
-    add_overlay "$HC/_hc_down_silu_mma.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ops/cute_dsl/_hc_down_silu_mma.py"
     if [[ "$FP8_DENSE" == "true" ]]; then
         info "=== Step 4c: FP8-dense overlay (vLLM 0.30) ==="
         # Port of overlays/fp8dense onto the qwen4_exp tree: GatedResidual and
@@ -190,48 +84,26 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         # projections. v0.30's modelopt.py already dispatches
         # FP8_PER_CHANNEL_PER_TOKEN / FP8_PB_WO natively (LINEAR_ALGOS +
         # resolve()), so its only delta is the "model." prefix candidate the
-        # text-only entry point needs. model.py / hyperconnection.py chain off
-        # the hc_down_silu outputs above (non-overlapping regions; that block
-        # skips its own mounts when FP8_DENSE is on). MTP_DRAFT_VOCAB /
-        # FP8_DRAFT_HEAD are refused in Step 4e: their reduced head assumes a
-        # BF16 draft lm_head and this checkpoint's draft head is FP8.
-        [[ "$REPLAYSSM_GDN" != "true" ]] || err "fp8_dense and replayssm_gdn both overlay qwen4_exp/nvidia/model.py - pick one."
+        # text-only entry point needs. All four diffs apply to the stock
+        # extracted files. MTP_DRAFT_VOCAB / FP8_DRAFT_HEAD are refused in
+        # Step 4e: their reduced head assumes a BF16 draft lm_head and this
+        # checkpoint's draft head is FP8.
         FD="$SCRIPT_DIR/overlays/fp8dense_v030"
         NVIDIA_V030="$VLLM_PKG/models/qwen4_exp/nvidia"
         mkdir -p "$FD/orig"
-        extract_from_image "$VLLM_PKG/model_executor/layers/quantization/modelopt.py" \
-                           "$FD/orig/modelopt.py"
-        extract_from_image "$NVIDIA_V030/mtp.py" "$FD/orig/mtp.py"
-        cp "$FD/orig/modelopt.py" "$FD/modelopt.py"
-        cp "$HC/model_v030.py" "$FD/model.py"
-        cp "$HC/hyperconnection_v030.py" "$FD/hyperconnection.py"
-        cp "$FD/orig/mtp.py" "$FD/mtp.py"
         for f in modelopt model hyperconnection mtp; do
+            case "$f" in
+                modelopt) fsrc="$VLLM_PKG/model_executor/layers/quantization/modelopt.py" ;;
+                *)        fsrc="$NVIDIA_V030/$f.py" ;;
+            esac
+            extract_from_image "$fsrc" "$FD/orig/$f.py"
+            cp "$FD/orig/$f.py" "$FD/$f.py"
             (cd "$FD" && git apply -p2 "$f.diff") \
                 || err "fp8dense v030: git apply $f.diff failed (image layout changed?)"
+            add_overlay "$FD/$f.py" "$fsrc"
         done
-        add_overlay "$FD/modelopt.py" "$VLLM_PKG/model_executor/layers/quantization/modelopt.py"
-        add_overlay "$FD/model.py" "$NVIDIA_V030/model.py"
-        add_overlay "$FD/hyperconnection.py" "$NVIDIA_V030/hyperconnection.py"
-        add_overlay "$FD/mtp.py" "$NVIDIA_V030/mtp.py"
         ok "FP8-dense overlay (v030): 4 files"
     fi
-    info "=== Step 4c: PLE short-conv metadata sync removal (vllm#58114, vLLM 0.30) ==="
-    # Backport of vllm#58114 (patches/ple_metadata_syncs/): the PLE short-conv
-    # metadata builder computed causal_conv1d Triton metadata and CPU
-    # query-loc mirrors that no PLE consumer reads — pure GPU sync + host
-    # plumbing overhead per step. Behavior-neutral (removed fields default to
-    # None on BaseMambaAttentionMetadata; ple_layer now reads the already
-    # populated query_start_loc_p), so no toggle.
-    PM="$SCRIPT_DIR/patches/ple_metadata_syncs"
-    mkdir -p "$PM/orig"
-    extract_from_image "$VLLM_PKG/v1/attention/backends/mamba_attn.py" "$PM/orig/mamba_attn.py"
-    extract_from_image "$VLLM_PKG/v1/attention/backends/short_conv_attn.py" "$PM/orig/short_conv_attn.py"
-    extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ple_layer.py" "$PM/orig/ple_layer.py"
-    python3 "$PM/apply_patch.py" || err "ple_metadata_syncs apply_patch.py failed"
-    add_overlay "$PM/mamba_attn_v030.py" "$VLLM_PKG/v1/attention/backends/mamba_attn.py"
-    add_overlay "$PM/short_conv_attn_v030.py" "$VLLM_PKG/v1/attention/backends/short_conv_attn.py"
-    add_overlay "$PM/ple_layer_v030.py" "$VLLM_PKG/models/qwen4_exp/nvidia/ple_layer.py"
     info "=== Step 4c: Mamba drop_eagle_block cache-hit fix (vllm#57128, vLLM 0.30) ==="
     # Backport of vllm#57128 (patches/mamba_eagle_drop/): MambaManager's
     # find_longest_cache_hit accepted drop_eagle_block but never acted on it,
@@ -269,108 +141,6 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         OVERLAY_ENV+=("-e VLLM_PLE_MMAP_DIR=/root/.cache/vllm/ple_mmap_v030")
         OVERLAY_ENV+=("-e VLLM_PLE_MMAP_ADVICE=1")
     fi
-    if [[ "$SKINNY_GEMM" == "true" ]]; then
-        info "=== Step 4c: GB10 skinny-GEMM plans (SM12x) ==="
-        # v0.30 already ships low_latency_gemm.py, wired into model.py and
-        # mtp.py, but its plan tables cover only SM103/SM90 TP=4 shapes, so on
-        # the GB10 the decode-sized BF16 projections stay on cuBLAS SM80 WMMA
-        # kernels. The overlay adds the SM12x table: TP=1 shapes from upstream
-        # vllm#59753, TP=2 shapes from vllm#59632 and the myllmbox
-        # gb10-skinny-gemm patch. Plans are keyed by local (N, K) shape and
-        # exact token count M; a miss keeps the standard linear path, so any
-        # TP is safe — at TP>2 only the replicated projections match. Also
-        # folded in: vllm#60027, the strided-A dispatch fix — without it the
-        # (10240, 320) HC-up plan never fires because the fused HC-down
-        # output is a column slice of a wider buffer (row_stride_ok replaces
-        # the packed-row-major check in low_latency_gemm.py and the blanket
-        # contiguity check in cute_dsl/skinny_gemm.py).
-        SG="$SCRIPT_DIR/patches/gb10_skinny_gemm"
-        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/low_latency_gemm.py" \
-                           "$SG/low_latency_gemm.py.orig"
-        extract_from_image "$VLLM_PKG/model_executor/kernels/linear/cute_dsl/skinny_gemm.py" \
-                           "$SG/skinny_gemm.py.orig"
-        python3 "$SG/apply_patch.py" || err "apply_patch.py (gb10_skinny_gemm) failed"
-        add_overlay "$SG/low_latency_gemm.py" \
-                    "$VLLM_PKG/models/qwen4_exp/nvidia/low_latency_gemm.py"
-        add_overlay "$SG/skinny_gemm.py" \
-                    "$VLLM_PKG/model_executor/kernels/linear/cute_dsl/skinny_gemm.py"
-        [[ "$TENSOR_PARALLEL_SIZE" == "1" || "$TENSOR_PARALLEL_SIZE" == "2" ]] || warn "SKINNY_GEMM: plans cover TP=1/TP=2 local shapes; at TP=$TENSOR_PARALLEL_SIZE only replicated projections take the skinny path."
-    fi
-    if [[ "$LAZY_GDN" == "true" ]]; then
-        info "=== Step 4c: K3 lazy GDN state commit (vLLM 0.30) ==="
-        # Port of the sfxnz recipe's K3 overlay (patches/patch_gdn_lazy_v030.py):
-        # the stock GDN verify kernel writes the 64 KiB fp32 state after every
-        # token; K3 commits once per step and replays exact token inputs from a
-        # ring. Bitwise-pinned to stock by a load-time self-test (fail closed).
-        [[ "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]] || err "lazy_gdn needs speculative decoding (MTP_NUM_SPECULATIVE_TOKENS > 0)."
-        [[ "$MTP_NUM_SPECULATIVE_TOKENS" -le 7 ]] || err "lazy_gdn supports k <= 7 speculative tokens (W=k+1 <= 8); got $MTP_NUM_SPECULATIVE_TOKENS."
-        [[ -z "$MAMBA_SSM_CACHE_DTYPE" || "$MAMBA_SSM_CACHE_DTYPE" == "float32" ]] || err "lazy_gdn requires an fp32 GDN state: MAMBA_SSM_CACHE_DTYPE=$MAMBA_SSM_CACHE_DTYPE
-       is incompatible (the K3 kernel is bitwise-pinned to the stock fp32 kernel and
-       would stay off anyway). Drop mamba_ssm_cache_dtype or disable lazy_gdn."
-        mkdir -p "$SCRIPT_DIR/patches/v030_gdn/orig"
-        extract_from_image "$VLLM_PKG/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py" \
-                           "$SCRIPT_DIR/patches/v030_gdn/orig/qwen_gdn_linear_attn.py"
-        extract_from_image "$VLLM_PKG/v1/attention/backends/gdn_attn.py" \
-                           "$SCRIPT_DIR/patches/v030_gdn/orig/gdn_attn.py"
-        python3 "$SCRIPT_DIR/patches/patch_gdn_lazy_v030.py" || err "patch_gdn_lazy_v030.py failed"
-        add_overlay "$SCRIPT_DIR/patches/v030_gdn/gdn_lazy_linear_attn_v030.py" \
-                    "$VLLM_PKG/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py"
-        add_overlay "$SCRIPT_DIR/patches/v030_gdn/gdn_lazy_attn_v030.py" \
-                    "$VLLM_PKG/v1/attention/backends/gdn_attn.py"
-        OVERLAY_ENV+=("-e VLLM_QWEN38_GDN_LAZY=1")
-    fi
-    if [[ "$REPLAYSSM_GDN" == "true" ]]; then
-        info "=== Step 4c: ReplaySSM-GDN spec decode (vLLM 0.30) ==="
-        # Port of vllm#47576's GDN variant (patches/replayssm_gdn/): spec
-        # verify runs a Triton kernel over an fp32 checkpoint + circular d/k/g
-        # rings instead of the per-token state slots; the block-keyed cursors
-        # live in the GDN metadata builder. python-only overlay (2 vendored
-        # Triton files + 6 patched stock files), env-gated, spec-only.
-        [[ "$LAZY_GDN" != "true" ]] || err "replayssm_gdn and lazy_gdn are mutually exclusive (same target files)."
-        [[ "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]] || err "replayssm_gdn needs speculative decoding (MTP_NUM_SPECULATIVE_TOKENS > 0)."
-        [[ "$REPLAYSSM_GDN_BUFFER_LEN" =~ ^[0-9]+$ ]] || err "replayssm_gdn_buffer_len must be an integer (got: '$REPLAYSSM_GDN_BUFFER_LEN')"
-        [[ "$REPLAYSSM_GDN_BUFFER_LEN" -gt "$MTP_NUM_SPECULATIVE_TOKENS" ]] || err "replayssm_gdn_buffer_len must be >= 1 + MTP_NUM_SPECULATIVE_TOKENS ($MTP_NUM_SPECULATIVE_TOKENS); got $REPLAYSSM_GDN_BUFFER_LEN."
-        if [[ -n "$MAMBA_SSM_CACHE_DTYPE" && "$MAMBA_SSM_CACHE_DTYPE" != "float32" ]]; then
-            warn "replayssm_gdn forces an fp32 GDN checkpoint regardless of MAMBA_SSM_CACHE_DTYPE=$MAMBA_SSM_CACHE_DTYPE (numerically >= the bf16 baseline)."
-        fi
-        RG="$SCRIPT_DIR/patches/replayssm_gdn"
-        mkdir -p "$RG/orig"
-        extract_from_image "$VLLM_PKG/model_executor/layers/mamba/mamba_utils.py" \
-                           "$RG/orig/mamba_utils.py"
-        extract_from_image "$VLLM_PKG/model_executor/layers/mamba/gdn/base.py" \
-                           "$RG/orig/base.py"
-        extract_from_image "$VLLM_PKG/model_executor/layers/mamba/abstract.py" \
-                           "$RG/orig/abstract.py"
-        extract_from_image "$VLLM_PKG/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py" \
-                           "$RG/orig/qwen_gdn_linear_attn.py"
-        extract_from_image "$VLLM_PKG/v1/attention/backends/gdn_attn.py" \
-                           "$RG/orig/gdn_attn.py"
-        # Chain off the hc_down_silu block's model.py output (always produced
-        # above); the two patchers touch non-overlapping regions of model.py.
-        cp "$SCRIPT_DIR/patches/hc_down_silu/model_v030.py" \
-           "$RG/orig/model.py"
-        extract_from_image "$VLLM_PKG/model_executor/layers/mamba/ops/replayssm_config.py" \
-                           "$RG/orig/replayssm_config.py"
-        python3 "$RG/apply_patch.py" || err "replayssm_gdn apply_patch.py failed"
-        add_overlay "$RG/mamba_utils_v030.py" \
-                    "$VLLM_PKG/model_executor/layers/mamba/mamba_utils.py"
-        add_overlay "$RG/gdn_base_v030.py" \
-                    "$VLLM_PKG/model_executor/layers/mamba/gdn/base.py"
-        add_overlay "$RG/mamba_abstract_v030.py" \
-                    "$VLLM_PKG/model_executor/layers/mamba/abstract.py"
-        add_overlay "$RG/qwen_gdn_linear_attn_v030.py" \
-                    "$VLLM_PKG/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py"
-        add_overlay "$RG/gdn_attn_v030.py" \
-                    "$VLLM_PKG/v1/attention/backends/gdn_attn.py"
-        add_overlay "$RG/qwen4_exp_model_v030.py" \
-                    "$VLLM_PKG/models/qwen4_exp/nvidia/model.py"
-        add_overlay "$RG/gdn_replayssm_spec_decode.py" \
-                    "$VLLM_PKG/model_executor/layers/mamba/ops/gdn_replayssm_spec_decode.py"
-        add_overlay "$RG/replayssm_config.py" \
-                    "$VLLM_PKG/model_executor/layers/mamba/ops/replayssm_config.py"
-        OVERLAY_ENV+=("-e VLLM_REPLAYSSM_GDN=1")
-        OVERLAY_ENV+=("-e VLLM_REPLAYSSM_GDN_BUFFER_LEN=$REPLAYSSM_GDN_BUFFER_LEN")
-    fi
     if [[ "$QSA_FUSED_DRAFT" == "true" ]]; then
         info "=== Step 4c: QSA fused multi-step draft metadata (vLLM 0.30) ==="
         # Port of myllmbox/vllm@c3f56fe (the code proposed upstream as
@@ -384,30 +154,11 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         extract_from_image "$VLLM_PKG/models/qwen4_exp/common/qsa_cache.py" \
                            "$SCRIPT_DIR/patches/v030_qsa_fused/orig/qsa_cache.py"
         python3 "$SCRIPT_DIR/patches/patch_qsa_fused_draft_v030.py" || err "patch_qsa_fused_draft_v030.py failed"
-        # qsa_cache.py is NOT mounted here: the qsa_cache_views block below
-        # re-patches this output with the vllm#58961 view-lifetime fix and
+        # qsa_cache.py is NOT mounted here: the qsa_meta_clamp block below
+        # re-patches this output with the vllm#58040 graph-padding clamp and
         # mounts the result (the two patches touch non-overlapping regions).
         OVERLAY_ENV+=("-e VLLM_QSA_FUSED_DRAFT=1")
     fi
-    info "=== Step 4c: QSA key-cache view lifetime (vllm#58961, vLLM 0.30) ==="
-    # Backport of vllm#58961 (patches/qsa_cache_views/): key_cache and
-    # rope_position_cache become on-access properties instead of persistent
-    # views, so clear_layer_kv_caches actually frees the bound storage after
-    # CUDA-graph memory profiling (the pinned-block leak is real memory on a
-    # unified-memory box). Quality-neutral, so no toggle. With
-    # QSA_FUSED_DRAFT=true the input is the fused-draft overlay output above
-    # (non-overlapping regions); otherwise it is the stock file. The output
-    # is NOT mounted here: the qsa_meta_clamp block below re-patches it with
-    # the vllm#58040 graph-padding clamp and mounts the result.
-    QV="$SCRIPT_DIR/patches/qsa_cache_views"
-    mkdir -p "$QV/orig"
-    extract_from_image "$VLLM_PKG/models/qwen4_exp/common/qsa_cache.py" "$QV/orig/qsa_cache_stock.py"
-    if [[ "$QSA_FUSED_DRAFT" == "true" ]]; then
-        cp "$SCRIPT_DIR/patches/v030_qsa_fused/qsa_cache_v030.py" "$QV/orig/qsa_cache.py"
-    else
-        cp "$QV/orig/qsa_cache_stock.py" "$QV/orig/qsa_cache.py"
-    fi
-    python3 "$QV/apply_patch.py" || err "qsa_cache_views apply_patch.py failed"
     info "=== Step 4c: QSA metadata graph-padding clamp (vllm#58040, vLLM 0.30) ==="
     # Backport of vllm#58040 (patches/qsa_meta_clamp/): CUDA-graph capture
     # pads query_start_loc_cpu[-1] past num_actual_tokens while the QSA
@@ -415,23 +166,34 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     # read/wrote past those buffers. Both metadata builders (and, with
     # QSA_FUSED_DRAFT=true, the fused-draft inline call arg + recorded
     # metadata field) now clamp the mapped count to num_actual_tokens.
-    # Correctness fix, so no toggle. Chains off the qsa_cache_views output
-    # above and mounts the result in its place.
+    # Correctness fix, so no toggle. With QSA_FUSED_DRAFT=true the input is
+    # the fused-draft overlay output above; otherwise the stock file (the
+    # clamped regions are identical in both flavors). Mounts the result.
     QC="$SCRIPT_DIR/patches/qsa_meta_clamp"
     mkdir -p "$QC/orig"
-    cp "$QV/qsa_cache_v030.py" "$QC/orig/qsa_cache.py"
+    extract_from_image "$VLLM_PKG/models/qwen4_exp/common/qsa_cache.py" "$QC/orig/qsa_cache_stock.py"
+    if [[ "$QSA_FUSED_DRAFT" == "true" ]]; then
+        cp "$SCRIPT_DIR/patches/v030_qsa_fused/qsa_cache_v030.py" "$QC/orig/qsa_cache.py"
+    else
+        cp "$QC/orig/qsa_cache_stock.py" "$QC/orig/qsa_cache.py"
+    fi
     python3 "$QC/apply_patch.py" || err "qsa_meta_clamp apply_patch.py failed"
     add_overlay "$QC/qsa_cache_v030.py" "$VLLM_PKG/models/qwen4_exp/common/qsa_cache.py"
     if [[ "$QSA_ROPE_CLAMP" == "true" ]]; then
         info "=== Step 4c: QSA pre-indexer RoPE clamp (vLLM 0.30) ==="
-        # The clamp (myllmbox/vllm@9ff17c0) now lives inside the qsa_prepare
-        # overlay above: the vllm#57097 backport replaces qsa_pre_indexer.py
-        # outright, so patches/patch_qsa_rope_clamp_v030.py's CLAMP_POS/
-        # MAX_POS deltas are folded into patches/qsa_prepare (main-attention
-        # section included), behind the same VLLM_QSA_ROPE_CLAMP constexpr
-        # gate — bit-exact stock kernel when off. Only the env flag is set
-        # here; the standalone patcher is kept for reference but no longer
-        # wired.
+        # Clamp (myllmbox/vllm@9ff17c0): the pre-indexer kernel loads
+        # cos_sin[pos] unchecked and CUDA-graph warmup feeds dummy positions
+        # past the table (IMA on SM121/GB10). patches/patch_qsa_rope_clamp_v030.py
+        # adds the clamp behind a CLAMP_POS constexpr (default OFF, fail
+        # closed — the constexpr-false branch compiles to the bit-exact stock
+        # kernel); mount the patched file and arm it via the env flag.
+        mkdir -p "$SCRIPT_DIR/patches/v030_qsa_rope/orig"
+        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_pre_indexer.py" \
+                           "$SCRIPT_DIR/patches/v030_qsa_rope/orig/qsa_pre_indexer.py"
+        python3 "$SCRIPT_DIR/patches/patch_qsa_rope_clamp_v030.py" \
+            || err "patch_qsa_rope_clamp_v030.py failed"
+        add_overlay "$SCRIPT_DIR/patches/v030_qsa_rope/qsa_pre_indexer_v030.py" \
+                    "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_pre_indexer.py"
         OVERLAY_ENV+=("-e VLLM_QSA_ROPE_CLAMP=1")
     fi
     if [[ "$LOAD_DROP_CACHE" == "true" ]]; then
@@ -483,8 +245,6 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     fi
     OVERLAY_ENV+=("-e VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=/tmp/fi_autotune")
     OVERLAY_ENV+=("-e VLLM_USE_BREAKABLE_CUDAGRAPH=${V030_BREAKABLE_CUDAGRAPH:-0}")
-    [[ "${V030_BREAKABLE_CUDAGRAPH:-0}" == "1" && "$PLE_OFFLOAD" == "true" ]] && \
-        warn "breakable cudagraphs + PLE offload = silent nondeterminism (vllm#58489, unfixed in v0.30) — keep V030_BREAKABLE_CUDAGRAPH=0"
 fi
 if $DO_LAUNCH && [[ "$V030" == "true" ]] && { [[ -n "$MTP_DRAFT_VOCAB" ]] || [[ "$FP8_DRAFT_HEAD" == "true" ]]; }; then
     info "=== Step 4e: MTP draft head (vLLM 0.30) ==="

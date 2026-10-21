@@ -92,13 +92,9 @@ mtp_skip_prefix: false
 # host table out of the loop).
 qsa_profile: stock
 fp8_dense: false
-# skinny_gemm: GB10 SM12x skinny-GEMM plan overlay. Plans are TP=2 local
-# shapes, so config.sh auto-enables it at TP=2 (NODES=2); a plan miss keeps
-# the standard linear path. Set true/false here to override.
-# sfxnz "bit-exact" v030 overlay ports, default OFF until boot-verified.
-# lazy_gdn: K3 lazy GDN state commit for MTP verify (~4x fewer GDN state
-# writes/step; bitwise-pinned to stock by a load-time self-test). Requires an
-# fp32 GDN state, so it refuses to boot with mamba_ssm_cache_dtype: bfloat16.
+# The SM12x skinny-GEMM plan table (vllm#59632/#59753, strided-A fix
+# vllm#60027) ships in the image; the overlay was dropped with the v0.32
+# migration. A plan miss keeps the standard linear path.
 # fp8_draft_head: FP8 (E4M3/row-scale) copy of the drafter's lm_head rows
 # (~2x less draft-head bandwidth; composes with mtp_draft_vocab).
 # Disabled: on the GB10 bench host the attach itself is fully accounted
@@ -109,13 +105,7 @@ fp8_dense: false
 # ~9 GiB delta lands outside torch accounting, in the host-memory release at
 # end of weight load (stock boots free ~19 GiB of MemAvailable there, fp8
 # boots only ~3-6 GiB); mechanism unidentified. Keep off until root-caused.
-lazy_gdn: false
 fp8_draft_head: false
-# replayssm_gdn: ReplaySSM-GDN spec decode (vllm#47576 port, spec-only): MTP
-# verify reads an fp32 checkpoint + d/k/g ring instead of the per-token GDN
-# state slots (~2x smaller mamba page, one checkpoint rewrite per ring fill).
-# Mutually exclusive with lazy_gdn; needs mtp_num_speculative_tokens > 0.
-replayssm_gdn: false
 # SketchSSM (arXiv 2609.33051) and SuffixReplay (arXiv 2609.33477) assessed,
 # both SKIPPED: approximate methods that fail the quality bar by design
 # (SketchSSM's own table shows −2.4 pts on LiveCodeBench at G=8; SuffixReplay
@@ -123,7 +113,7 @@ replayssm_gdn: false
 # collapsed here, and at batch ≤4 the GDN state read is ≲1% of step time.
 # SuffixReplay's gap is also already closed by stock align-mode mamba
 # prefix caching (block-granular checkpoints vs SGLang's 8192-token ones).
-# Revisit only at batch ≥64 or if ReplaySSM-GDN is ever fixed.
+# Revisit only at batch ≥64.
 # gdn_prefill_backend: flashinfer pins the FlashInfer CuTe-DSL GDN prefill
 # kernel (vllm#55715, gate widened to SM12x). Measured on GB10 (2026-10-10,
 # salted cold-prompt TTFT A/B, verified kernel engaged): NEUTRAL — 8k TTFT
@@ -141,18 +131,8 @@ qsa_fused_draft: true
 # Clamp pre-indexer RoPE positions into the cos/sin table (fixes a CUDA-graph
 # warmup OOB read on SM121).
 qsa_rope_clamp: true
-# qsa_qkvg_merge: QSA QKV/gate + indexer projection merge (vllm#59533
-# backport, patches/qsa_qkvg_merge/) — one GEMM per attention layer instead
-# of two. TP=1 only: config.sh hard-gates it (the merged 13952x2560 GEMM has
-# a TP=1 skinny plan but no TP=2 one, so at TP=2 it falls off the skinny
-# path). Boot-verified on GB10: clean load (no missing index_qk_proj), 13
-# (13952,2560) skinny modules (12 QSA + MTP), A/B accepted/draft 1.724 ->
-# 1.898 (ref 1.692, both within run noise), decodebench ctx1k/dec500 means
-# over repeat runs prose ~21.2 -> ~21.2, code ~30.9 -> ~35.9, copy ~60.9 ->
-# ~61.6 tok/s, quality gate PASS. Cost: +2.2 GiB device memory (KV cache
-# 262k -> 153k tokens, still 2.3x full-context concurrency).
-# Self-deletes at the next image bump, which ships the PR natively.
-qsa_qkvg_merge: true
+# The QKV/gate + indexer projection merge (vllm#59533) is now native in the
+# target image — one GEMM per attention layer, no overlay, no toggle.
 # fadvise(DONTNEED) each checkpoint shard as the loader finishes it, keeping
 # the page cache one shard deep during the load.
 load_drop_cache: true

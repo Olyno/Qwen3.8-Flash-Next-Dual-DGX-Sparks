@@ -98,13 +98,6 @@ ATTENTION_BLOCK_SIZE="${ATTENTION_BLOCK_SIZE:-}"
 MAMBA_SSM_CACHE_DTYPE="${MAMBA_SSM_CACHE_DTYPE:-}"
 # PLE_OFFLOAD default is topology-derived in the NODES block above.
 
-# SM12x plan table covers TP=1 and TP=2 shapes (vllm#59753 + vllm#59632); at
-# other TP sizes no plan matches and the standard linear path is kept
-# (patches/gb10_skinny_gemm), so default it on only where it can engage.
-# Recipe true/false overrides.
-if [[ -z "${SKINNY_GEMM:-}" ]]; then
-    [[ "$TENSOR_PARALLEL_SIZE" == "1" || "$TENSOR_PARALLEL_SIZE" == "2" ]] && SKINNY_GEMM=true || SKINNY_GEMM=false
-fi
 # Vision MLP intermediate_size=4304 is not divisible by 16 after TP split (4304/2=2152).
 # NVFP4 kernels require input features % 16 == 0, so replicate the encoder on each GPU.
 MM_ENCODER_TP_MODE="${MM_ENCODER_TP_MODE:-data}"
@@ -134,22 +127,7 @@ NFS_SHARE="${NFS_SHARE:-false}"
 # Optional: head ConnectX address used as the NFS server (auto-detected from IFACE).
 NFS_SERVER_IP="${NFS_SERVER_IP:-}"
 V030="${V030:-false}"
-[[ "$SKINNY_GEMM" != "true" || "$V030" == "true" ]] || warn "skinny_gemm ignored: the SM12x plan overlay only exists on the v030 lane (v030: false)."
 SKIP_PLE_PATCH="${SKIP_PLE_PATCH:-false}"
-# K3 lazy GDN state commit for MTP verify (v0.30 lane only,
-# patches/patch_gdn_lazy_v030.py): the verify kernel commits the fp32 GDN state
-# once per step instead of after every token. Needs speculative decoding
-# (k=1..7) and an fp32 GDN state; a load-time self-test keeps the stock kernel
-# unless the Triton reimplementation is bitwise-identical on this GPU.
-LAZY_GDN="${LAZY_GDN:-false}"
-# ReplaySSM-GDN spec decode (v0.30 lane only, patches/replayssm_gdn/): port of
-# vllm#47576's GDN variant. MTP verify reconstructs each window from an fp32
-# checkpoint + a circular d/k/g ring instead of writing the full GDN state per
-# accepted token; the checkpoint is rewritten only when the ring fills
-# (REPLAYSSM_GDN_BUFFER_LEN + 1 + k tokens). Needs speculative decoding;
-# mutually exclusive with lazy_gdn. Buffer len must be >= 1 + k.
-REPLAYSSM_GDN="${REPLAYSSM_GDN:-false}"
-REPLAYSSM_GDN_BUFFER_LEN="${REPLAYSSM_GDN_BUFFER_LEN:-16}"
 # Draft-only FP8 (E4M3, per-row scale) copy of the MTP drafter's lm_head rows
 # (v0.30 lane only, patches/patch_mtp_draft_vocab_v030.py --fp8): quantizes the
 # reduced draft-vocab slice when MTP_DRAFT_VOCAB is set, else the full shard.
@@ -165,12 +143,6 @@ QSA_FUSED_DRAFT="${QSA_FUSED_DRAFT:-false}"
 # unchecked, and CUDA-graph warmup dummy positions can index past the table
 # (IMA on SM121/GB10).
 QSA_ROPE_CLAMP="${QSA_ROPE_CLAMP:-false}"
-# QSA QKV/gate + indexer projection merge (v0.30 lane only,
-# patches/qsa_qkvg_merge/, vllm#59533): one GEMM per attention layer instead
-# of two. TP=1 only — the merged (13952, 2560) shape has a TP=1 skinny plan
-# but no TP=2 one, so at TP=2 the merged GEMM falls off the skinny path
-# (likely regression); gated off under LoRA upstream.
-QSA_QKVG_MERGE="${QSA_QKVG_MERGE:-false}"
 # Adaptive MTP draft depth (v0.30 lane only,
 # patches/patch_mtp_adaptive_depth.py): the V2 speculator truncates the
 # per-step draft chain once the draft head's own survival product (running
@@ -205,13 +177,9 @@ NVFP4_ACT_HOOKS="${NVFP4_ACT_HOOKS:-false}"
 # FreeKVCacheBlockQueue.append_n sorts freed blocks by block_id so KV
 # offload/prefetch DMA sees address-sequential blocks (vllm#31371).
 FREE_BLOCK_SORT="${FREE_BLOCK_SORT:-false}"
-[[ "$LAZY_GDN" != "true" || "$V030" == "true" ]] || err "lazy_gdn is only supported on the vLLM 0.30 lane (v030: true)."
-[[ "$REPLAYSSM_GDN" != "true" || "$V030" == "true" ]] || err "replayssm_gdn is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$FP8_DRAFT_HEAD" != "true" || "$V030" == "true" ]] || err "fp8_draft_head is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$QSA_FUSED_DRAFT" != "true" || "$V030" == "true" ]] || err "qsa_fused_draft is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$QSA_ROPE_CLAMP" != "true" || "$V030" == "true" ]] || err "qsa_rope_clamp is only supported on the vLLM 0.30 lane (v030: true)."
-[[ "$QSA_QKVG_MERGE" != "true" || "$V030" == "true" ]] || err "qsa_qkvg_merge is only supported on the vLLM 0.30 lane (v030: true)."
-[[ "$QSA_QKVG_MERGE" != "true" || "$TENSOR_PARALLEL_SIZE" == "1" ]] || err "qsa_qkvg_merge requires tensor_parallel_size 1 (no TP=2 skinny plan exists for the merged QKVG GEMM — at TP=2 it falls off the skinny path, a likely regression)."
 [[ "$LOAD_DROP_CACHE" != "true" || "$V030" == "true" ]] || err "load_drop_cache is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$NVFP4_ACT_HOOKS" != "true" || "$V030" == "true" ]] || err "nvfp4_act_hooks is only supported on the vLLM 0.30 lane (v030: true)."
 [[ "$FREE_BLOCK_SORT" != "true" || "$V030" == "true" ]] || err "free_block_sort is only supported on the vLLM 0.30 lane (v030: true)."

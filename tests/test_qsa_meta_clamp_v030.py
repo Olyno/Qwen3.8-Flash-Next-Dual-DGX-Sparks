@@ -9,7 +9,6 @@ import unittest
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "patches" / "qsa_meta_clamp" / "apply_patch.py"
 FUSED_SCRIPT = REPO / "patches" / "patch_qsa_fused_draft_v030.py"
-VIEWS_SCRIPT = REPO / "patches" / "qsa_cache_views" / "apply_patch.py"
 ORIG_DIR = REPO / "patches" / "qsa_meta_clamp" / "orig"
 ORIGS = ("qsa_cache.py",)
 CLAMP = "min(\n        int(common_attn_metadata.query_start_loc_cpu[-1]), num_tokens\n    )"
@@ -53,27 +52,20 @@ class QSAMetaClampV030(unittest.TestCase):
             "num_mapped_tokens = int(common_attn_metadata.query_start_loc_cpu[-1])",
             src)
 
-    def test_fused_draft_views_input_clamps_all_sites(self):
+    def test_fused_draft_input_clamps_all_sites(self):
         # Chain the way engine/patches.sh does with QSA_FUSED_DRAFT=true:
-        # stock -> fused-draft overlay -> views overlay -> this clamp.
+        # stock -> fused-draft overlay -> this clamp.
         fused_out = self.tmp / "fused"
-        views_orig = self.tmp / "views_orig"
-        views_out = self.tmp / "views"
         clamp_out = self.tmp / "clamp"
-        for d in (fused_out, views_orig, views_out, clamp_out):
+        for d in (fused_out, clamp_out):
             d.mkdir()
         r = subprocess.run(
             [sys.executable, str(FUSED_SCRIPT), str(self.orig), str(fused_out)],
             capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        shutil.copy(fused_out / "qsa_cache_v030.py", views_orig / "qsa_cache.py")
-        r = subprocess.run(
-            [sys.executable, str(VIEWS_SCRIPT), str(views_orig), str(views_out)],
-            capture_output=True, text=True)
-        self.assertEqual(r.returncode, 0, r.stderr)
         clamp_orig = self.tmp / "clamp_orig"
         clamp_orig.mkdir()
-        shutil.copy(views_out / "qsa_cache_v030.py", clamp_orig / "qsa_cache.py")
+        shutil.copy(fused_out / "qsa_cache_v030.py", clamp_orig / "qsa_cache.py")
         r = self.run_patch(orig=clamp_orig, out=clamp_out)
         self.assertEqual(r.returncode, 0, r.stderr)
         src = (clamp_out / "qsa_cache_v030.py").read_text()

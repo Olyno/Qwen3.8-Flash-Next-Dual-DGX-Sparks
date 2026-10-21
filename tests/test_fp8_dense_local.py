@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """recipes/fp8.yaml wiring: fp8_dense with a local directory must route through
 the model_path bind-mount machinery (config.sh), and the v030 overlay must
-chain off the hc_down_silu outputs instead of double-mounting those paths."""
+apply its diffs to stock-extracted files (the hc_down_silu chaining went away
+when that patch shipped upstream)."""
 import subprocess
 import unittest
 from pathlib import Path
@@ -42,23 +43,24 @@ class TestFp8DenseLocal(unittest.TestCase):
             self.assertTrue((REPO / "overlays" / "fp8dense" / f"{name}.diff").is_file(), name)
             self.assertIn(f'"{name}.py ', sh)
 
-    def test_v030_overlay_diffs_present_and_chained(self):
+    def test_v030_overlay_diffs_present_and_standalone(self):
         sh = (REPO / "engine" / "patches.sh").read_text()
         for name in ("modelopt", "model", "hyperconnection", "mtp"):
             self.assertTrue((REPO / "overlays" / "fp8dense_v030" / f"{name}.diff").is_file(), name)
         self.assertIn('FD="$SCRIPT_DIR/overlays/fp8dense_v030"', sh)
-        # model.py / hyperconnection.py chain off the hc_down_silu outputs,
-        # which skip their own mounts when fp8_dense claims those paths.
-        self.assertIn('cp "$HC/model_v030.py" "$FD/model.py"', sh)
-        self.assertIn('cp "$HC/hyperconnection_v030.py" "$FD/hyperconnection.py"', sh)
-        self.assertIn('if [[ "$FP8_DENSE" != "true" ]]; then', sh)
+        # All four diffs apply to the stock files extracted from the image;
+        # the hc_down_silu chaining is gone (patch shipped upstream).
+        self.assertIn('for f in modelopt model hyperconnection mtp; do', sh)
+        self.assertIn('cp "$FD/orig/$f.py" "$FD/$f.py"', sh)
+        self.assertNotIn('cp "$HC/model_v030.py"', sh)
+        self.assertNotIn('$HC/hyperconnection_v030.py', sh)
 
     def test_v030_mtp_draft_head_combo_refused(self):
         sh = (REPO / "engine" / "patches.sh").read_text()
         # the draft-vocab/FP8 draft-head block must fail fast with fp8_dense
         self.assertIn('[[ "$FP8_DENSE" != "true" ]] || err "MTP_DRAFT_VOCAB/FP8_DRAFT_HEAD', sh)
-        # and the fp8dense block mounts its own mtp.py unconditionally
-        self.assertIn('add_overlay "$FD/mtp.py" "$NVIDIA_V030/mtp.py"', sh)
+        # and the fp8dense block mounts all four files from its own loop
+        self.assertIn('add_overlay "$FD/$f.py" "$fsrc"', sh)
 
 
 if __name__ == "__main__":

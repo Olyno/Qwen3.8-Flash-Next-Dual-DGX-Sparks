@@ -68,36 +68,6 @@ curl http://localhost:8888/v1/chat/completions \
 
 `./stop.sh` stops the server (and the worker, when NODES=2).
 
-## Opt-in: ReplaySSM-GDN spec decode (`replayssm_gdn`)
-
-**Measured broken on GB10 (2026-10-09), do not enable.** Buffer-16 boot passed
-its self-test but greedy decode collapses: quality gate 5.6/100, decodebench
-0% acceptance and 1.00 tok/step at temp 0 (16.3 tok/s vs 45.4 stock), and
-degenerate 5.00 tok/step loops at temp 0.8. Buffer-32 wedged the server
-mid-request. Kept for reference only.
-
-v0.30 lane only. Ports the GDN variant of upstream
-[vllm#47576](https://github.com/vllm-project/vllm/pull/47576): MTP verify
-reconstructs each window from an fp32 checkpoint plus a small circular ring of
-per-token d/k/g vectors instead of writing the full GDN state after every
-accepted token; the checkpoint is rewritten only when the ring fills. The
-mamba page grows to a 5-tuple that is ~2x smaller than the baseline spec page,
-and block-keyed ring cursors live in the GDN metadata builder.
-
-Requires MTP (`mtp_num_speculative_tokens > 0`, already the default) and
-is mutually exclusive with `lazy_gdn`. `replayssm_gdn_buffer_len` (default 16)
-is the ring history per block and must be `>= 1 + k`.
-
-```bash
-REPLAYSSM_GDN=true ./start.sh --launch   # or replayssm_gdn: true in the recipe
-python3 bench/sweep.py                   # A/B against the stock page
-```
-
-Overlay mechanics: `patches/replayssm_gdn/apply_patch.py` rewrites 6 stock
-files against extracted originals (fail-closed anchors) and mounts them plus
-two vendored Triton files; everything is gated on `VLLM_REPLAYSSM_GDN=1` at
-runtime. `tests/test_replayssm_gdn_v030.py` covers the patcher.
-
 ## Flags
 
 ```
@@ -174,9 +144,9 @@ with copied code are in [licenses/](licenses). The short version:
 | Upstream repository | [MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-Sparks](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-Sparks) (AGPL-3.0-or-later) |
 | Base deployment (via the above) | [getrefined/Qwen3.8-Flash-Next-NVFP4-vLLM-DGX-Spark](https://github.com/getrefined/Qwen3.8-Flash-Next-NVFP4-vLLM-DGX-Spark) |
 | FP8 KV cache kernels, draft-vocabulary builder | [MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark) (AGPL-3.0-or-later) |
-| K3 lazy GDN commit, FP8 draft head, determinism knobs | [sfxnz/Qwen3.8-Flash-Next-NVFP4-vLLM-2x-DGX-Spark](https://github.com/sfxnz/Qwen3.8-Flash-Next-NVFP4-vLLM-2x-DGX-Spark) (MIT) |
-| QSA fused draft, RoPE clamp, loader cache drop, TP=2 skinny-GEMM rows | [myllmbox/qwen38-flash-next-recipe](https://github.com/myllmbox/qwen38-flash-next-recipe) (MIT) and its Apache-2.0 vLLM fork |
-| vLLM PR backports under `patches/` | [vllm-project/vllm](https://github.com/vllm-project/vllm) (Apache-2.0) — [#47576](https://github.com/vllm-project/vllm/pull/47576), [#53388](https://github.com/vllm-project/vllm/pull/53388), [#53899](https://github.com/vllm-project/vllm/pull/53899), [#55557](https://github.com/vllm-project/vllm/pull/55557), [#57097](https://github.com/vllm-project/vllm/pull/57097), [#57105](https://github.com/vllm-project/vllm/pull/57105), [#57128](https://github.com/vllm-project/vllm/pull/57128), [#58040](https://github.com/vllm-project/vllm/pull/58040), [#58114](https://github.com/vllm-project/vllm/pull/58114), [#58449](https://github.com/vllm-project/vllm/pull/58449), [#58957](https://github.com/vllm-project/vllm/pull/58957), [#58961](https://github.com/vllm-project/vllm/pull/58961), [#59632](https://github.com/vllm-project/vllm/pull/59632), [#59753](https://github.com/vllm-project/vllm/pull/59753), [#59945](https://github.com/vllm-project/vllm/pull/59945); authors in NOTICE |
+| FP8 draft head, determinism knobs | [sfxnz/Qwen3.8-Flash-Next-NVFP4-vLLM-2x-DGX-Spark](https://github.com/sfxnz/Qwen3.8-Flash-Next-NVFP4-vLLM-2x-DGX-Spark) (MIT) |
+| QSA fused draft, RoPE clamp, loader cache drop | [myllmbox/qwen38-flash-next-recipe](https://github.com/myllmbox/qwen38-flash-next-recipe) (MIT) and its Apache-2.0 vLLM fork |
+| vLLM PR backports under `patches/` | [vllm-project/vllm](https://github.com/vllm-project/vllm) (Apache-2.0) — [#53388](https://github.com/vllm-project/vllm/pull/53388), [#53899](https://github.com/vllm-project/vllm/pull/53899), [#57128](https://github.com/vllm-project/vllm/pull/57128), [#58040](https://github.com/vllm-project/vllm/pull/58040), [#58449](https://github.com/vllm-project/vllm/pull/58449); authors in NOTICE. Backports superseded by native vLLM v0.32.0 delivery were removed |
 | FP8-KV approach (via MiaAI-Lab) | [lancelind/qwen3.8-Flash-DGX](https://github.com/lancelind/qwen3.8-Flash-DGX) (Apache-2.0) |
 | Concurrency / prefill benchmarks | [MiaAI-Lab/sparkDash](https://github.com/MiaAI-Lab/sparkDash) |
 | Reduced draft vocabulary technique | [FR-Spec](https://arxiv.org/abs/2502.19797) |
