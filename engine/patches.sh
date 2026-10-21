@@ -75,13 +75,13 @@ fi
 #     is rejected at verification, never emitted. See patches/patch_mtp_draft_vocab.py.
 # ---------------------------------------------------------------------------
 if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
-    [[ "$QSA_PROFILE" == "stock" ]] || err "V030: QSA_PROFILE=$QSA_PROFILE is not supported on the vLLM 0.30 lane."
+    [[ "$QSA_PROFILE" == "stock" ]] || err "V030: QSA_PROFILE=$QSA_PROFILE is not supported on the vLLM 0.32 lane."
     if [[ "$FP8_DENSE" == "true" ]]; then
-        info "=== Step 4c: FP8-dense overlay (vLLM 0.30) ==="
+        info "=== Step 4c: FP8-dense overlay (vLLM 0.32) ==="
         # Port of overlays/fp8dense onto the qwen4_exp tree: GatedResidual and
         # the two ParallelLMHeads get quant_config so the MIXED_PRECISION
         # config's per-prefix resolution reaches the dense HC and head
-        # projections. v0.30's modelopt.py already dispatches
+        # projections. v0.32's modelopt.py already dispatches
         # FP8_PER_CHANNEL_PER_TOKEN / FP8_PB_WO natively (LINEAR_ALGOS +
         # resolve()), so its only delta is the "model." prefix candidate the
         # text-only entry point needs. All four diffs apply to the stock
@@ -104,7 +104,7 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         done
         ok "FP8-dense overlay (v030): 4 files"
     fi
-    info "=== Step 4c: Mamba drop_eagle_block cache-hit fix (vllm#57128, vLLM 0.30) ==="
+    info "=== Step 4c: Mamba drop_eagle_block cache-hit fix (vllm#57128, vLLM 0.32) ==="
     # Backport of vllm#57128 (patches/mamba_eagle_drop/): MambaManager's
     # find_longest_cache_hit accepted drop_eagle_block but never acted on it,
     # so with GDN + MTP + prefix caching the most recent matched block (state
@@ -124,27 +124,37 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
                 "$VLLM_PKG/v1/core/single_type_kv_cache_manager.py"
     add_overlay "$MD/kv_cache_coordinator_v030.py" \
                 "$VLLM_PKG/v1/core/kv_cache_coordinator.py"
-    [[ "$VLLM_QSA_DET_TOPK" == "1" || "$VLLM_MOE_DET_FINALIZE" == "1" ]] && err "V030: the determinism knobs are not ported to vLLM 0.30."
+    [[ "$VLLM_QSA_DET_TOPK" == "1" || "$VLLM_MOE_DET_FINALIZE" == "1" ]] && err "V030: the determinism knobs are not ported to vLLM 0.32."
     if [[ "$PLE_OFFLOAD" == "true" ]]; then
-        info "=== Step 4c: PLE mmap offload (vLLM 0.30) ==="
-        # v0.30's PLE CPU offload parks the table in pinned anonymous host
+        info "=== Step 4c: PLE mmap offload (vLLM 0.32) ==="
+        # v0.32's PLE CPU offload parks the table in pinned anonymous host
         # memory (~32 GiB/node). The mmap overlay reroutes it to a file-backed
         # table read over ATS (VLLM_PLE_MMAP_DIR), persisted across launches
         # under ~/.cache/vllm. Single-node Spark needs the offload to fit the
-        # model at TP=1; the mmap form avoids the pin on any topology.
-        mkdir -p "$SCRIPT_DIR/patches/v030_ple/orig"
+        # model at TP=1; the mmap form avoids the pin on any topology. The
+        # implementation lives in models/qwen4_exp/common/ngram_embedding.py
+        # (v0.32 split it out of the nvidia wrapper), so the patcher rewrites
+        # both files and both are mounted; the patched subclass inherits the
+        # native supports_prefetch side-stream for free.
+        PL="$SCRIPT_DIR/patches/v030_ple"
+        mkdir -p "$PL/orig"
+        extract_from_image "$VLLM_PKG/models/qwen4_exp/common/ngram_embedding.py" \
+                           "$PL/orig/ngram_common.py"
         extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ngram_embedding.py" \
-                           "$SCRIPT_DIR/patches/v030_ple/orig/ngram_embedding.py"
-        python3 "$SCRIPT_DIR/patches/patch_ple_mmap_v030.py" || err "patch_ple_mmap_v030.py failed"
-        add_overlay "$SCRIPT_DIR/patches/v030_ple/ngram_embedding.py" \
+                           "$PL/orig/ngram_nvidia.py"
+        python3 "$SCRIPT_DIR/patches/patch_ple_mmap_v030.py" "$PL" \
+            || err "patch_ple_mmap_v030.py failed"
+        add_overlay "$PL/ple_common_v032.py" \
+                    "$VLLM_PKG/models/qwen4_exp/common/ngram_embedding.py"
+        add_overlay "$PL/ple_nvidia_v032.py" \
                     "$VLLM_PKG/models/qwen4_exp/nvidia/ngram_embedding.py"
         OVERLAY_ENV+=("-e VLLM_PLE_MMAP_DIR=/root/.cache/vllm/ple_mmap_v030")
         OVERLAY_ENV+=("-e VLLM_PLE_MMAP_ADVICE=1")
     fi
     if [[ "$QSA_FUSED_DRAFT" == "true" ]]; then
-        info "=== Step 4c: QSA fused multi-step draft metadata (vLLM 0.30) ==="
+        info "=== Step 4c: QSA fused multi-step draft metadata (vLLM 0.32) ==="
         # Port of myllmbox/vllm@c3f56fe (the code proposed upstream as
-        # vllm#58449, patches/patch_qsa_fused_draft_v030.py): stock v0.30
+        # vllm#58449, patches/patch_qsa_fused_draft_v030.py): stock v0.32
         # rebuilds attention metadata for the whole model between MTP draft
         # steps because the QSA builder never opted into the speculator's
         # in-place update; the overlay re-launches the builder's own metadata
@@ -159,7 +169,7 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         # mounts the result (the two patches touch non-overlapping regions).
         OVERLAY_ENV+=("-e VLLM_QSA_FUSED_DRAFT=1")
     fi
-    info "=== Step 4c: QSA metadata graph-padding clamp (vllm#58040, vLLM 0.30) ==="
+    info "=== Step 4c: QSA metadata graph-padding clamp (vllm#58040, vLLM 0.32) ==="
     # Backport of vllm#58040 (patches/qsa_meta_clamp/): CUDA-graph capture
     # pads query_start_loc_cpu[-1] past num_actual_tokens while the QSA
     # metadata buffers hold only real tokens, so a padded decode step
@@ -180,24 +190,27 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     python3 "$QC/apply_patch.py" || err "qsa_meta_clamp apply_patch.py failed"
     add_overlay "$QC/qsa_cache_v030.py" "$VLLM_PKG/models/qwen4_exp/common/qsa_cache.py"
     if [[ "$QSA_ROPE_CLAMP" == "true" ]]; then
-        info "=== Step 4c: QSA pre-indexer RoPE clamp (vLLM 0.30) ==="
-        # Clamp (myllmbox/vllm@9ff17c0): the pre-indexer kernel loads
-        # cos_sin[pos] unchecked and CUDA-graph warmup feeds dummy positions
-        # past the table (IMA on SM121/GB10). patches/patch_qsa_rope_clamp_v030.py
-        # adds the clamp behind a CLAMP_POS constexpr (default OFF, fail
-        # closed — the constexpr-false branch compiles to the bit-exact stock
-        # kernel); mount the patched file and arm it via the env flag.
+        info "=== Step 4c: QSA prepare RoPE clamp (vLLM 0.32) ==="
+        # The clamp (myllmbox/vllm@9ff17c0) retargeted to v0.32's fused
+        # prepare kernel: ops/qsa_prepare.py (native since vllm#57097) loads
+        # cos_sin[pos] unchecked both inside _norm_rope and in its inline
+        # main-attention RoPE, and CUDA-graph warmup feeds dummy positions
+        # past the cos/sin table (IMA on SM121/GB10). patches/
+        # patch_qsa_rope_clamp_v030.py clamps all of them behind a CLAMP_POS
+        # constexpr (default OFF, fail closed — the constexpr-false branch
+        # compiles to the bit-exact stock kernel); mount the patched file and
+        # arm it via the env flag.
         mkdir -p "$SCRIPT_DIR/patches/v030_qsa_rope/orig"
-        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_pre_indexer.py" \
-                           "$SCRIPT_DIR/patches/v030_qsa_rope/orig/qsa_pre_indexer.py"
+        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_prepare.py" \
+                           "$SCRIPT_DIR/patches/v030_qsa_rope/orig/qsa_prepare.py"
         python3 "$SCRIPT_DIR/patches/patch_qsa_rope_clamp_v030.py" \
             || err "patch_qsa_rope_clamp_v030.py failed"
-        add_overlay "$SCRIPT_DIR/patches/v030_qsa_rope/qsa_pre_indexer_v030.py" \
-                    "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_pre_indexer.py"
+        add_overlay "$SCRIPT_DIR/patches/v030_qsa_rope/qsa_prepare_v032.py" \
+                    "$VLLM_PKG/models/qwen4_exp/nvidia/ops/qsa_prepare.py"
         OVERLAY_ENV+=("-e VLLM_QSA_ROPE_CLAMP=1")
     fi
     if [[ "$LOAD_DROP_CACHE" == "true" ]]; then
-        info "=== Step 4c: loader page-cache drop (vLLM 0.30) ==="
+        info "=== Step 4c: loader page-cache drop (vLLM 0.32) ==="
         # Port of myllmbox/vllm@354bfc2 (patches/patch_load_drop_cache_v030.py):
         # posix_fadvise(DONTNEED) on each safetensors shard right after the
         # loader consumes it. Step 4b-2 evicts the checkpoint from the host
@@ -212,7 +225,7 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         OVERLAY_ENV+=("-e VLLM_LOAD_DROP_CACHE=1")
     fi
     if [[ "$FREE_BLOCK_SORT" == "true" ]]; then
-        info "=== Step 4c: free-list block-id sort (vllm#31371, vLLM 0.30) ==="
+        info "=== Step 4c: free-list block-id sort (vllm#31371, vLLM 0.32) ==="
         # RFC overlay (patches/free_block_sort/): FreeKVCacheBlockQueue.append_n
         # sorts freed blocks by block_id before linking, so pops hand out
         # address-sequential blocks — contiguous ids coalesce into larger DMA
@@ -247,7 +260,7 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     OVERLAY_ENV+=("-e VLLM_USE_BREAKABLE_CUDAGRAPH=${V030_BREAKABLE_CUDAGRAPH:-0}")
 fi
 if $DO_LAUNCH && [[ "$V030" == "true" ]] && { [[ -n "$MTP_DRAFT_VOCAB" ]] || [[ "$FP8_DRAFT_HEAD" == "true" ]]; }; then
-    info "=== Step 4e: MTP draft head (vLLM 0.30) ==="
+    info "=== Step 4e: MTP draft head (vLLM 0.32) ==="
     [[ "$MTP_NUM_SPECULATIVE_TOKENS" == "0" ]] && err "MTP_DRAFT_VOCAB/FP8_DRAFT_HEAD is set but MTP_NUM_SPECULATIVE_TOKENS=0 - nothing drafts."
     # The fp8dense checkpoint's draft lm_head is FP8; the reduced/FP8 draft
     # head paths here assume BF16 rows (a bare F.linear on the slice dies with
@@ -306,7 +319,7 @@ elif $DO_LAUNCH && [[ "$MTP_NUM_SPECULATIVE_TOKENS" != "0" ]]; then
 fi
 
 if $DO_LAUNCH && [[ "$V030" == "true" && "$MTP_SKIP_PREFIX" == "true" ]]; then
-    info "=== Step 4e: MTP prefill prefix skip (vLLM 0.30) ==="
+    info "=== Step 4e: MTP prefill prefix skip (vLLM 0.32) ==="
     [[ "$MTP_NUM_SPECULATIVE_TOKENS" == "0" ]] && err "MTP_SKIP_PREFIX is on but MTP_NUM_SPECULATIVE_TOKENS=0 - nothing drafts."
     # patches/patch_mtp_prefix_skip.py: the draft prefill forward is consumed
     # at the per-sequence last rows only, so the drafter's sparse-MoE block
@@ -332,7 +345,7 @@ if $DO_LAUNCH && [[ "$V030" == "true" && "$MTP_SKIP_PREFIX" == "true" ]]; then
 fi
 
 if $DO_LAUNCH && [[ "$V030" == "true" && "$MTP_ADAPTIVE_DEPTH" == "true" ]]; then
-    info "=== Step 4e: adaptive MTP draft depth (vLLM 0.30) ==="
+    info "=== Step 4e: adaptive MTP draft depth (vLLM 0.32) ==="
     # patches/patch_mtp_adaptive_depth.py: the V2 speculator (the code the
     # gpu_worker V2 runner actually executes) stops the draft chain early
     # once the draft head's own survival product (running product of per-step

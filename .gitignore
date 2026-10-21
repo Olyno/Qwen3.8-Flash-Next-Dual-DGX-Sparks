@@ -79,6 +79,7 @@ patches/mamba_eagle_drop/*_v030.py
 patches/qsa_meta_clamp/orig/
 patches/qsa_meta_clamp/*_v030.py
 patches/mtp_adaptive_depth/
+patches/free_block_sort/orig/
 patches/mtp_prefix_skip/orig/
 patches/mtp_prefix_skip/*_v030.py
 bench/data/gate_perf.json

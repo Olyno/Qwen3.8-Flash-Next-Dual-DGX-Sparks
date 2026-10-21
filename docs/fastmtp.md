@@ -32,6 +32,10 @@ draft depth (`mtp_adaptive_depth`, shipped opt-in but INERT 2026-10-10: the
 v0.30 lane resolves async scheduling ON, and AsyncScheduler schedules a fixed
 k from config without ever reading the worker's proposed width — the cutoff
 computes correctly but the truncation is a no-op; see the patcher docstring).
+On the v0.32.0 image the overlay's target path is gone (the V2 autoregressive
+speculator moved); the flag is DEFERRED pending a decision between a re-port
+and the native dynamic-K work (vllm#57053/#60945, `enable_adaptive_verification`
++ `adaptive_verification.py`).
 Dead ends, measured:
 adaptive verification / MRV2 (in the v0.30 image; boot-probed 2026-10-10 —
 conflicts with `use_local_argmax_reduction` which `mtp_draft_vocab` requires,

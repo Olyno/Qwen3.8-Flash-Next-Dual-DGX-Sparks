@@ -16,10 +16,11 @@ FAKE_ORIG = '''\
 class FreeKVCacheBlockQueue:
     def append_n(self, blocks):
         """Put a list of blocks back into the free list"""
-        if len(blocks) == 0:
+        if not blocks:
             return
 
-        last_block = self.fake_free_list_tail.prev_free_block
+        tail = self.fake_free_list_tail
+        last_block = tail.prev_free_block
         assert last_block is not None, (
             "prev_free_block of fake_free_list_tail should always exist"
         )
@@ -30,8 +31,8 @@ class FreeKVCacheBlockQueue:
             last_block = block
 
         # Connect the last block of <blocks> to the fake tail
-        last_block.next_free_block = self.fake_free_list_tail
-        self.fake_free_list_tail.prev_free_block = last_block
+        last_block.next_free_block = tail
+        tail.prev_free_block = last_block
 
         self.num_free_blocks += len(blocks)
 '''
@@ -92,9 +93,9 @@ class AppendNSort(unittest.TestCase):
     def test_empty_batch_is_a_noop(self):
         append_n = _patched_append_ns(
             FAKE_ORIG.replace(
-                "        last_block = self.fake_free_list_tail.prev_free_block",
+                "        tail = self.fake_free_list_tail\n",
                 "        blocks.sort(key=lambda x: x.block_id)\n"
-                "        last_block = self.fake_free_list_tail.prev_free_block"))
+                "        tail = self.fake_free_list_tail\n"))
         self_ns = SimpleNamespace(num_free_blocks=0)
         append_n(self_ns, [])
         self.assertEqual(self_ns.num_free_blocks, 0)
@@ -139,8 +140,8 @@ class PatchAnchors(unittest.TestCase):
 
     def test_anchor_drift_fails_closed(self):
         drifted = FAKE_ORIG.replace(
-            "        last_block = self.fake_free_list_tail.prev_free_block",
-            "        last_block = self.fake_free_list_tail.prev")
+            "        tail = self.fake_free_list_tail",
+            "        tail =  self.fake_free_list_tail")
         tmp = _stage(drifted)
         out = tmp / "out"
         try:
@@ -151,11 +152,11 @@ class PatchAnchors(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
-    def test_patches_real_v030_source(self):
-        # orig extracted from the v0.30.0 image at boot; skipped until then.
+    def test_patches_real_v032_source(self):
+        # orig extracted from the v0.32.0 image at boot; skipped until then.
         orig_dir = REPO / "patches" / "free_block_sort" / "orig"
         if not (orig_dir / "kv_cache_utils.py").is_file():
-            self.skipTest("no extracted v0.30 kv_cache_utils.py; boot once with free_block_sort")
+            self.skipTest("no extracted v0.32 kv_cache_utils.py; boot once with free_block_sort")
         tmp = Path(tempfile.mkdtemp())
         try:
             r = _run(orig_dir, tmp)

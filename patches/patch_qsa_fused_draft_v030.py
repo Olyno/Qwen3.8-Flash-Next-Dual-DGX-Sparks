@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 MiaAI Lab (https://x.com/MiaAI_lab)
-"""Fused multi-step MTP draft metadata for QSA on the vLLM 0.30.0 lane
+"""Fused multi-step MTP draft metadata for QSA on the vLLM v0.32.0 lane
 (opt-in, QSA_FUSED_DRAFT=true).
 
 Ports myllmbox/vllm@c3f56fe3b412 ("Qwen4Exp: QSA fused multi-step draft
 metadata", the code proposed upstream as vllm-project/vllm#58449) onto the
-stock v0.30.0 file:
+stock v0.32.0 file:
 
 Upstream: https://github.com/vllm-project/vllm/pull/58449 (bilikaz,
 unmerged), Apache-2.0; ported from the myllmbox/vllm fork
@@ -21,11 +21,11 @@ and image patches — see licenses/myllmbox-MIT.LICENSE).
       the update path never reads query_start_loc_cpu.
     - QSAMetadataBuilder: opts into supports_draft_decode_metadata_update and
       implements update_draft_decode_metadata, re-launching the metadata
-      kernel between draft steps (the DeepseekSparseSWA pattern the v0.30
+      kernel between draft steps (the DeepseekSparseSWA pattern the v0.32
       speculator already calls at
       v1/worker/gpu/spec_decode/autoregressive/speculator.py).
 
-Stock v0.30 rebuilds attention metadata for the whole model between MTP draft
+Stock v0.32 rebuilds attention metadata for the whole model between MTP draft
 steps because the QSA builder never opted in; the speculator logs "Fused
 multi-step draft decode is not supported by attention backend(s) ...". With
 the overlay the speculator takes its fused path for QSA too.

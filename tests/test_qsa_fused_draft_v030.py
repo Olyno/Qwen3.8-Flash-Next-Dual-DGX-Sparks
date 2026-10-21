@@ -11,7 +11,7 @@ SCRIPT = REPO / "patches" / "patch_qsa_fused_draft_v030.py"
 ORIG = REPO / "patches" / "v030_qsa_fused" / "orig" / "qsa_cache.py"
 
 
-@unittest.skipUnless(ORIG.is_file(), "no extracted v0.30 qsa_cache.py; boot the prod recipe once (RECIPE=prod ./start.sh)")
+@unittest.skipUnless(ORIG.is_file(), "no extracted v0.32 qsa_cache.py; boot the prod recipe once (RECIPE=prod ./start.sh)")
 class QsaFusedDraftV030(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

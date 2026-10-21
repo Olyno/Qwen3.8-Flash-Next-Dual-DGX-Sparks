@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 MiaAI Lab (https://x.com/MiaAI_lab)
-"""Adaptive MTP draft depth for the vLLM 0.30.0 lane (opt-in,
+"""Adaptive MTP draft depth for the vLLM v0.32.0 lane (opt-in,
 MTP_ADAPTIVE_DEPTH=true).
 
 Targets the V2 model runner's draft loop — the code gpu_worker.py actually
@@ -80,7 +80,8 @@ argv[0]/argv[1] override the orig/output directories (used by the test).
 STATUS (2026-10-10, boot-verified): INERT in this lane. The scoring
 and the cutoff work end to end (VLLM_MTP_ADAPTIVE_DEBUG=1 shows correct
 per-step probs and keep=1..4 decisions; the model_runner handoff slices to
-the published width), but vLLM 0.30 resolves ASYNC SCHEDULING ON for MTP +
+the published width), but the lane image (v0.32.0) resolves ASYNC
+SCHEDULING ON for MTP +
 the mp executor (engine/config.sh), and AsyncScheduler never consults the
 worker for the proposal width: _update_after_schedule sets
 request.spec_token_ids = [-1] * num_spec_tokens_to_schedule with

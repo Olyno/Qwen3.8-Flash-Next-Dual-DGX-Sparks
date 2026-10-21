@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 MiaAI Lab (https://x.com/MiaAI_lab)
-"""NVFP4 per-channel activation hooks for the vLLM 0.30.0 lane (opt-in debug
+"""NVFP4 per-channel activation hooks for the vLLM v0.32.0 lane (opt-in debug
 tooling, nvfp4_act_hooks: true).
 
 Answers the question scripts/check_nvfp4_activations.py cannot answer from

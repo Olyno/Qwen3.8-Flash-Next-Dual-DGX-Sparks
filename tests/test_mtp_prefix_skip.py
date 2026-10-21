@@ -1,6 +1,6 @@
 """Source pins + application tests for patches/patch_mtp_prefix_skip.py.
 
-The real-orig class needs the v0.30 image's nvidia/mtp.py extracted by a prod
+The real-orig class needs the v0.32 image's nvidia/mtp.py extracted by a prod
 boot (same file the draft-vocab v0.30 tests use); it skips until then. The
 fake-orig class embeds a module whose string literals carry the three patch
 anchors verbatim, so the anchor/gate logic runs anywhere.
@@ -28,7 +28,7 @@ MIXER_ANCHOR = """        multi_hidden, sample_hidden_states, _ = (
             )
         )
 """
-CLASS_ANCHOR = "class Qwen4ExpMTP(nn.Module, SupportsPP, Qwen4ExpMixtureOfExperts):\n"
+CLASS_ANCHOR = "class Qwen4ExpMTP(nn.Module, SupportsHCSP, SupportsPP, Qwen4ExpMixtureOfExperts):\n"
 
 
 def fake_mtp_src():
@@ -137,7 +137,7 @@ class AppliesToFakeOrig(unittest.TestCase):
         self.assertIn("missing", r.stderr)
 
 
-@unittest.skipUnless(ORIG.is_file(), "no extracted v0.30 mtp.py; boot the prod recipe once (RECIPE=prod ./start.sh)")
+@unittest.skipUnless(ORIG.is_file(), "no extracted v0.32 mtp.py; boot the prod recipe once (RECIPE=prod ./start.sh)")
 class AppliesToRealOrig(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

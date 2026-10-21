@@ -1,14 +1,16 @@
 # recipes/fp8.yaml — FP8-dense hybrid checkpoint (NVFP4 experts + FP8
-# per-channel dense projections) on the vLLM 0.30 lane. Same vendor serving
-# contract as prod.yaml except checkpoint selection.
+# per-channel dense projections) on the vLLM v0.32.0 (v030) lane. Same
+# vendor serving contract as prod.yaml except checkpoint selection.
 #
 # Single-node capable: on this lane the PLE mmap offload (derived at NODES=1)
 # parks the n-gram table in a file-backed host table, so the ~120 GiB local
 # checkpoint fits one Spark at TP=1. mtp_draft_vocab is omitted on purpose:
 # the reduced draft head assumes a BF16 draft lm_head and this checkpoint's
-# draft head is FP8 (engine/patches.sh refuses the combination).
+# draft head is FP8 (engine/patches.sh refuses the combination). All four
+# overlay diffs apply to the plain v0.32.0 stock files (git apply -p2,
+# verified against the extracted image layout).
 name: fp8
-image: vllm/vllm-openai:v0.30.0@sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90
+image: vllm/vllm-openai:v0.32.0@sha256:befccf0e7e4089aa23926bb6f887a85c0d46c2a99e6de5c5ffdf5cb7957c5b34
 v030: true
 skip_ple_patch: true
 fp8_dense: true

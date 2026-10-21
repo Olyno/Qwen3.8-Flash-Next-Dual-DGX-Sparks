@@ -269,10 +269,10 @@ class PatchAnchors(unittest.TestCase):
             shutil.rmtree(tmp)
 
     def test_patches_real_v030_source(self):
-        # origs extracted from the v0.30.0 image at boot; skipped until then.
+        # origs extracted from the v0.32.0 image at boot; skipped until then.
         orig_dir = REPO / "patches" / "mtp_adaptive_depth" / "orig"
         if not (orig_dir / "speculator.py").is_file():
-            self.skipTest("no extracted v0.30 speculator.py; boot the prod recipe once")
+            self.skipTest("no extracted v0.32 speculator.py; boot the prod recipe once")
         tmp = Path(tempfile.mkdtemp())
         try:
             r = _run(orig_dir, tmp)

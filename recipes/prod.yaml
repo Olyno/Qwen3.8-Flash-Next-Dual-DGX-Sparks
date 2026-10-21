@@ -3,8 +3,9 @@
 #
 # Model: the local checkpoint (marker-penalty thinking suppression baked into the weights — the
 # thinking suppression needs no serving-side code). Local dir, bind-mounted
-# at /model, never downloaded. vLLM 0.30 lane: PLE handling and the
-# block-drop fix are native, FP8 KV comes from the v030 backport overlay.
+# at /model, never downloaded. vLLM v0.32.0 (v030 lane): PLE handling, the
+# block-drop fix and FP8 KV (vllm#55557) are all native — the FP8-KV overlay
+# is gone.
 #
 # Serving shape follows the topology (NODES in .env): at NODES=1 the PLE mmap
 # offload parks the ~48 GiB packed n-gram embedding table (16 heads, hashed
@@ -15,15 +16,19 @@
 # per-rank footprint. Pin any of them here to override.
 #
 # (2026-10, measured on GB10): decode is NOT page-fault-bound — the
-# upstream side-stream prefetch engages for this mmap path under
-# FULL_DECODE_ONLY capture and warm vs verified-cold decode are identical, so
-# no hot-row cache. vllm#58441 (prefetch reads graph-pool ids that later
-# segments reuse) is a PIECEWISE-only hazard; we run FULL_DECODE_ONLY +
-# CompilationMode.NONE — no segment reuse, no port needed, and #58489's
-# persistent-buffer fix lands with the next image anyway. Remaining PLE pain:
+# side-stream prefetch engages for this mmap path under FULL_DECODE_ONLY
+# capture and warm vs verified-cold decode are identical, so no hot-row
+# cache. On v0.32 the mmap table rides the class's native supports_prefetch
+# (lazy side stream + persistent buffer), so persistence is now
+# native-prefetch-plus-restart-skip; the boot probe re-checks it still
+# eliminates the ~48 GiB re-gather. vllm#58441 (prefetch reads graph-pool
+# ids that later segments reuse) remains a PIECEWISE-only hazard; we run
+# FULL_DECODE_ONLY + CompilationMode.NONE — no segment reuse, no port
+# needed. #58489's persistent-buffer fix shipped in v0.32.0, so the
+# breakable-cudagraph warn-guard came off with it. Remaining PLE pain:
 # prefill TTFT under concurrent decode (prefill-time gather is not hidden).
 name: prod
-image: vllm/vllm-openai:v0.30.0@sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90
+image: vllm/vllm-openai:v0.32.0@sha256:befccf0e7e4089aa23926bb6f887a85c0d46c2a99e6de5c5ffdf5cb7957c5b34
 v030: true
 skip_ple_patch: true
 model_path: ~/models/Qwen3.8-Flash-Next-NVFP4-lean
@@ -121,7 +126,7 @@ fp8_draft_head: false
 # reading was host contention from leftover bench processes.) No benefit —
 # keep unset (stock auto resolution).
 # gdn_prefill_backend: flashinfer
-# Pass --async-scheduling explicitly. vLLM 0.30 already resolves it ON for
+# Pass --async-scheduling explicitly. vLLM 0.32 already resolves it ON for
 # MTP + the mp executor, so false changes nothing today; true pins it.
 async_scheduling: false
 # myllmbox v030 port, default OFF until boot-verified: reuse one QSA
@@ -131,8 +136,13 @@ qsa_fused_draft: true
 # Clamp pre-indexer RoPE positions into the cos/sin table (fixes a CUDA-graph
 # warmup OOB read on SM121).
 qsa_rope_clamp: true
-# The QKV/gate + indexer projection merge (vllm#59533) is now native in the
-# target image — one GEMM per attention layer, no overlay, no toggle.
+# The QKV/gate + indexer projection merge (vllm#59533) is native in v0.32.0:
+# one GEMM per attention layer, no overlay, no toggle. Overlay-era A/B on
+# this host for reference: 13 (13952,2560) skinny modules (12 QSA + MTP),
+# accepted/draft 1.724 -> 1.898 (ref 1.692), decodebench ctx1k/dec500 prose
+# ~21.2 / code ~30.9 -> ~35.9 / copy ~60.9 -> ~61.6 tok/s, quality gate
+# PASS, +2.2 GiB device (KV 262k -> 153k tokens). The merged plan ships in
+# the image table (skinny_gemm.py QWEN4_EXP_SM121_GEMM_PLANS).
 # fadvise(DONTNEED) each checkpoint shard as the loader finishes it, keeping
 # the page cache one shard deep during the load.
 load_drop_cache: true

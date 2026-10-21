@@ -16,7 +16,7 @@ CLAMP = "min(\n        int(common_attn_metadata.query_start_loc_cpu[-1]), num_to
 
 @unittest.skipUnless(
     all((ORIG_DIR / o).is_file() for o in ORIGS),
-    "no extracted v0.30 origs; boot once on the v030 lane (engine/patches.sh "
+    "no extracted v0.32 origs; boot once on the v030 lane (engine/patches.sh "
     "extracts them) or stage patches/qsa_meta_clamp/orig/ from the image",
 )
 class QSAMetaClampV030(unittest.TestCase):

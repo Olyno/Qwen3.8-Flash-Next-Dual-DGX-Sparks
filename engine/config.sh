@@ -84,7 +84,8 @@ TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-$NNODES}"
 [[ "$TENSOR_PARALLEL_SIZE" == "$NNODES" ]] || err "tensor_parallel_size=$TENSOR_PARALLEL_SIZE but NODES=$NNODES (one GPU per Spark — fix the recipe pin or NODES)"
 ENABLE_EXPERT_PARALLEL="${ENABLE_EXPERT_PARALLEL:-true}"
 MTP_NUM_SPECULATIVE_TOKENS="${MTP_NUM_SPECULATIVE_TOKENS:-3}"
-KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8}"   # fp8 needs patches/patch_qsa_fp8_kv.py, applied automatically in step 4f; auto = bf16
+KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8}"   # fp8: native on the v032 lane (vllm#55557 in-image); legacy lane needs
+#     patches/patch_qsa_fp8_kv.py (step 4f); auto = bf16
 # Optional forced attention block size (--block-size). Empty = engine-derived
 # (see scripts/mtp_block.py). The engine only raises a too-small value, and
 # the MTP guard validates ring-capacity legality before weight loading.
@@ -102,12 +103,12 @@ MAMBA_SSM_CACHE_DTYPE="${MAMBA_SSM_CACHE_DTYPE:-}"
 # NVFP4 kernels require input features % 16 == 0, so replicate the encoder on each GPU.
 MM_ENCODER_TP_MODE="${MM_ENCODER_TP_MODE:-data}"
 EXTRA_VLLM_ARGS="${EXTRA_VLLM_ARGS:-}"
-# MoE backend overrides (v0.30 kernel config). Empty = vLLM auto per quant type.
+# MoE backend overrides (v0.32 kernel config). Empty = vLLM auto per quant type.
 # flashinfer_b12x only supports NVFP4, so with our mixed checkpoint the FP8
 # block-scale draft experts must be pinned separately (DRAFT_MOE_BACKEND=auto).
 MOE_BACKEND="${MOE_BACKEND:-}"
 DRAFT_MOE_BACKEND="${DRAFT_MOE_BACKEND:-}"
-# Optional --gdn-prefill-backend (v0.30, flag shipped by vllm#55715):
+# Optional --gdn-prefill-backend (flag shipped by vllm#55715):
 # flashinfer pins the FlashInfer CuTe-DSL chunk_gated_delta_rule GDN prefill
 # kernel (its gate was widened to SM12x), triton forces the stock FLA path.
 # Empty = vLLM's own resolution (auto), i.e. stock behavior.
@@ -126,6 +127,9 @@ CPUSET="${CPUSET:-}"
 NFS_SHARE="${NFS_SHARE:-false}"
 # Optional: head ConnectX address used as the NFS server (auto-detected from IFACE).
 NFS_SERVER_IP="${NFS_SERVER_IP:-}"
+# v030 lane: qwen4_exp model-lane selector (key name is historical). The lane
+# now targets vLLM v0.32.0 — recipes set v030: true together with the v0.32.0
+# image pin; the legacy qwen3_8_flash_next lane keeps the old image.
 V030="${V030:-false}"
 SKIP_PLE_PATCH="${SKIP_PLE_PATCH:-false}"
 # Draft-only FP8 (E4M3, per-row scale) copy of the MTP drafter's lm_head rows
@@ -177,19 +181,19 @@ NVFP4_ACT_HOOKS="${NVFP4_ACT_HOOKS:-false}"
 # FreeKVCacheBlockQueue.append_n sorts freed blocks by block_id so KV
 # offload/prefetch DMA sees address-sequential blocks (vllm#31371).
 FREE_BLOCK_SORT="${FREE_BLOCK_SORT:-false}"
-[[ "$FP8_DRAFT_HEAD" != "true" || "$V030" == "true" ]] || err "fp8_draft_head is only supported on the vLLM 0.30 lane (v030: true)."
-[[ "$QSA_FUSED_DRAFT" != "true" || "$V030" == "true" ]] || err "qsa_fused_draft is only supported on the vLLM 0.30 lane (v030: true)."
-[[ "$QSA_ROPE_CLAMP" != "true" || "$V030" == "true" ]] || err "qsa_rope_clamp is only supported on the vLLM 0.30 lane (v030: true)."
-[[ "$LOAD_DROP_CACHE" != "true" || "$V030" == "true" ]] || err "load_drop_cache is only supported on the vLLM 0.30 lane (v030: true)."
-[[ "$NVFP4_ACT_HOOKS" != "true" || "$V030" == "true" ]] || err "nvfp4_act_hooks is only supported on the vLLM 0.30 lane (v030: true)."
-[[ "$FREE_BLOCK_SORT" != "true" || "$V030" == "true" ]] || err "free_block_sort is only supported on the vLLM 0.30 lane (v030: true)."
-[[ "$MTP_ADAPTIVE_DEPTH" != "true" || "$V030" == "true" ]] || err "mtp_adaptive_depth is only supported on the vLLM 0.30 lane (v030: true)."
-[[ "$MTP_SKIP_PREFIX" != "true" || "$V030" == "true" ]] || err "mtp_skip_prefix is only supported on the vLLM 0.30 lane (v030: true)."
+[[ "$FP8_DRAFT_HEAD" != "true" || "$V030" == "true" ]] || err "fp8_draft_head is only supported on the vLLM 0.32 lane (v030: true)."
+[[ "$QSA_FUSED_DRAFT" != "true" || "$V030" == "true" ]] || err "qsa_fused_draft is only supported on the vLLM 0.32 lane (v030: true)."
+[[ "$QSA_ROPE_CLAMP" != "true" || "$V030" == "true" ]] || err "qsa_rope_clamp is only supported on the vLLM 0.32 lane (v030: true)."
+[[ "$LOAD_DROP_CACHE" != "true" || "$V030" == "true" ]] || err "load_drop_cache is only supported on the vLLM 0.32 lane (v030: true)."
+[[ "$NVFP4_ACT_HOOKS" != "true" || "$V030" == "true" ]] || err "nvfp4_act_hooks is only supported on the vLLM 0.32 lane (v030: true)."
+[[ "$FREE_BLOCK_SORT" != "true" || "$V030" == "true" ]] || err "free_block_sort is only supported on the vLLM 0.32 lane (v030: true)."
+[[ "$MTP_ADAPTIVE_DEPTH" != "true" || "$V030" == "true" ]] || err "mtp_adaptive_depth is only supported on the vLLM 0.32 lane (v030: true)."
+[[ "$MTP_SKIP_PREFIX" != "true" || "$V030" == "true" ]] || err "mtp_skip_prefix is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$MTP_SKIP_PREFIX" != "true" || "${FP8_DENSE:-false}" != "true" ]] || err "mtp_skip_prefix and fp8_dense both overlay qwen4_exp/nvidia/mtp.py - pick one."
 [[ "$MTP_SKIP_PREFIX" != "true" || "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]] || err "mtp_skip_prefix needs speculative decoding (mtp_num_speculative_tokens > 0)."
 [[ "$MTP_ADAPTIVE_DEPTH" != "true" || "$MTP_NUM_SPECULATIVE_TOKENS" -gt 1 ]] || err "mtp_adaptive_depth needs mtp_num_speculative_tokens > 1 (k <= 1 has no chain to truncate)."
 [[ "$MTP_ADAPTIVE_DEPTH_THRESHOLD" =~ ^0(\.[0-9]+)?$|^1(\.0+)?$ ]] || err "mtp_adaptive_depth_threshold must be in [0, 1] (got: '$MTP_ADAPTIVE_DEPTH_THRESHOLD')"
-[[ -z "$GDN_PREFILL_BACKEND" || "$V030" == "true" ]] || err "gdn_prefill_backend is only supported on the vLLM 0.30 lane (v030: true)."
+[[ -z "$GDN_PREFILL_BACKEND" || "$V030" == "true" ]] || err "gdn_prefill_backend is only supported on the vLLM 0.32 lane (v030: true)."
 # FP8-dense hybrid checkpoint (NVFP4 experts + FP8 per-channel dense projections,
 # built by scripts/fp8dense/make_fp8_dense_checkpoint.py). Needs the vLLM overlay
 # patches in overlays/fp8dense (bind-mounted, no image rebuild).
@@ -255,11 +259,12 @@ fi
 QSA_PROFILE="${QSA_PROFILE:-stock}"
 MTP_DISABLE_BLOCK_DROP="${MTP_DISABLE_BLOCK_DROP:-0}"
 MTP_INDEX_SHARE="${MTP_INDEX_SHARE:-false}"
-# Explicit --async-scheduling. vLLM 0.30 already resolves async scheduling ON
-# for MTP + the mp executor (config/vllm.py enables it unless incompatible;
-# mtp is in EagleModelTypes and the mp executor supports it), so false here
-# keeps the resolved default — it does NOT turn async scheduling off. true
-# pins the flag explicitly against future resolution changes.
+# Explicit --async-scheduling. vLLM 0.32 resolves async scheduling ON for
+# MTP + the mp executor (config/vllm.py enables it unless incompatible; mtp
+# is in EagleModelTypes and the mp executor supports it — re-confirm on the
+# boot probe), so false here keeps the resolved default — it does NOT turn
+# async scheduling off. true pins the flag explicitly against future
+# resolution changes.
 ASYNC_SCHEDULING="${ASYNC_SCHEDULING:-false}"
 # Optional spec-config sampling overrides (empty = vLLM defaults: greedy draft,
 # standard rejection). Both are lossless w.r.t. the target distribution.

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 MiaAI Lab (https://x.com/MiaAI_lab)
-"""Loader page-cache drop for the vLLM 0.30.0 lane (opt-in,
+"""Loader page-cache drop for the vLLM v0.32.0 lane (opt-in,
 LOAD_DROP_CACHE=true).
 
 Ports myllmbox/vllm@354bfc281aab ("Loader: drop each safetensors shard from
-the page cache once consumed") onto the stock v0.30.0 file:
+the page cache once consumed") onto the stock v0.32.0 file:
 
 Upstream: https://github.com/myllmbox/qwen38-flash-next-recipe (MIT for kit
 scripts and image patches — see licenses/myllmbox-MIT.LICENSE); the

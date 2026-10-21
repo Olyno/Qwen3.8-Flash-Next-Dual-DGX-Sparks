@@ -1,13 +1,34 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 MiaAI Lab (https://x.com/MiaAI_lab)
+"""PLE mmap offload overlay for the vLLM v0.32.0 lane (v030 lane, PLE_OFFLOAD).
+
+v0.32's PLE CPU offload parks the n-gram table in pinned anonymous host
+memory (~32 GiB/node). This overlay reroutes the pinned-host embedding class
+to a file-backed table (VLLM_PLE_MMAP_DIR) read over ATS and persisted across
+launches, so a restart skips the multi-hundred-second re-gather. v0.32 split
+the implementation: models/qwen4_exp/common/ngram_embedding.py holds the real
+Qwen4ExpPLEPinnedHostEmbedding (the overlay target) and the nvidia module is
+a thin wrapper whose load_weights tracks shard completion for the commit.
+Both files are patched and mounted. The subclass keeps v0.32's native
+supports_prefetch, so the mmap table gets the side-stream prefetch for free;
+the redundant _row_bytes/_block_d plumbing the v0.30 overlay added itself is
+now stock and only the mmap branch is layered on.
+
+Inputs:  <dir>/orig/ngram_common.py and <dir>/orig/ngram_nvidia.py
+         (start.sh extracts both from the image)
+Outputs: <dir>/ple_common_v032.py and <dir>/ple_nvidia_v032.py
+argv[1] overrides the base dir (used by the test); default
+patches/v030_ple.
+
+VLLM_PLE_MMAP_DIR  directory for the persistent tables (unset = pinned host)
+VLLM_PLE_MMAP_ADVICE madvise advice for the mapping (default 1 = MADV_RANDOM)
+"""
 import ast
 import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ORIG = os.path.join(HERE, "v030_ple", "orig", "ngram_embedding.py")
-OUT = os.path.join(HERE, "v030_ple", "ngram_embedding.py")
 
 HELPERS = '''
 @triton.jit
@@ -142,7 +163,7 @@ def _ple_mmap_commit(path: str, weight: torch.Tensor, fingerprint: dict) -> None
 
 '''
 
-EDITS = [
+EDITS_COMMON = [
     (
         "from abc import ABC, abstractmethod\n",
         "import ctypes\nimport hashlib\nimport json\nimport mmap\nimport os\n"
@@ -178,14 +199,13 @@ EDITS = [
     ),
     (
         "        self._uva_weight = get_accelerator_view_from_cpu_tensor(self.weight)\n"
-        "        self._block_d = triton.next_power_of_2(self.embedding_dim)\n"
-        "        self._prefetch_stream = torch.cuda.Stream(device=self._uva_weight.device)\n",
+        "        self._row_bytes = self.embedding_dim * self.weight.element_size()\n"
+        "        self._block_d = triton.next_power_of_2(self._row_bytes)\n"
+        "        self._prefetch_stream: torch.cuda.Stream | None = None\n",
         "        if self._mmap_path is None:\n"
         "            self._uva_weight = get_accelerator_view_from_cpu_tensor(self.weight)\n"
-        "            device = self._uva_weight.device\n"
         "        else:\n"
         "            self._uva_weight = None\n"
-        "            device = torch.device(\"cuda\", torch.cuda.current_device())\n"
         "            logger.info(\n"
         "                \"PLE %s: %s file-backed table %s (%.2f GiB), read over ATS\",\n"
         "                prefix,\n"
@@ -193,14 +213,37 @@ EDITS = [
         "                self._mmap_path,\n"
         "                self.weight.numel() * self.weight.element_size() / 2**30,\n"
         "            )\n"
-        "        self._block_d = triton.next_power_of_2(self.embedding_dim)\n"
+        "        self._lookup_device = (\n"
+        "            torch.device(\"cuda\", torch.cuda.current_device())\n"
+        "            if self._uva_weight is None\n"
+        "            else self._uva_weight.device\n"
+        "        )\n"
         "        self._row_bytes = self.embedding_dim * self.weight.element_size()\n"
-        "        self._block_b = triton.next_power_of_2(self._row_bytes)\n"
-        "        self._prefetch_stream = torch.cuda.Stream(device=device)\n",
+        "        self._block_d = triton.next_power_of_2(self._row_bytes)\n"
+        "        self._prefetch_stream: torch.cuda.Stream | None = None\n"
+        "        self._block_b = triton.next_power_of_2(self._row_bytes)\n",
     ),
     (
-        "            device=self._uva_weight.device,\n        )\n        self._output_dim",
-        "            device=device,\n        )\n        self._output_dim",
+        "                    self._prefetch_stream = torch.cuda.Stream(\n"
+        "                        device=self._uva_weight.device\n"
+        "                    )\n"
+        "                    buffer = torch.empty(\n"
+        "                        self._prefetch_rows,\n"
+        "                        self._num_ngram_heads,\n"
+        "                        self.embedding_dim,\n"
+        "                        dtype=self.weight.dtype,\n"
+        "                        device=self._uva_weight.device,\n"
+        "                    )\n",
+        "                    self._prefetch_stream = torch.cuda.Stream(\n"
+        "                        device=self._lookup_device\n"
+        "                    )\n"
+        "                    buffer = torch.empty(\n"
+        "                        self._prefetch_rows,\n"
+        "                        self._num_ngram_heads,\n"
+        "                        self.embedding_dim,\n"
+        "                        dtype=self.weight.dtype,\n"
+        "                        device=self._lookup_device,\n"
+        "                    )\n",
     ),
     (
         "        \"\"\"Allocate the complete PLE weight directly in pinned CPU memory.\"\"\"\n"
@@ -256,6 +299,9 @@ EDITS = [
         "            _lookup_ple_embedding_from_pinned_kernel[(flat_ids.numel(),)](\n"
         "                self._uva_weight,\n",
     ),
+]
+
+EDITS_NVIDIA = [
     (
         "                embedding.weight.weight_loader(\n"
         "                    embedding.weight,\n"
@@ -277,28 +323,40 @@ EDITS = [
 ]
 
 
-def patch(src: str) -> str:
-    for i, (old, new) in enumerate(EDITS):
+def patch(src: str, edits, name: str) -> str:
+    if "_PLE_MMAP_FORMAT" in src:
+        sys.exit(f"{name}: orig is already patched")
+    for i, (old, new) in enumerate(edits):
         count = src.count(old)
         if count != 1:
-            sys.exit(f"ngram_embedding.py: anchor {i} not unique/missing (count={count}):\n{old[:180]}")
+            sys.exit(f"{name}: anchor {i} not unique/missing (count={count}):\n{old[:180]}")
         src = src.replace(old, new)
     try:
         ast.parse(src)
     except SyntaxError as exc:
-        sys.exit(f"ngram_embedding.py: patched source does not parse: {exc}")
+        sys.exit(f"{name}: patched source does not parse: {exc}")
     return src
 
 
 def main() -> None:
-    orig = sys.argv[1] if len(sys.argv) > 1 else ORIG
-    out = sys.argv[2] if len(sys.argv) > 2 else OUT
-    with open(orig) as handle:
-        src = patch(handle.read())
-    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-    with open(out, "w") as handle:
-        handle.write(src)
-    print(f"patched {out}")
+    base = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "v030_ple")
+    jobs = (
+        ("orig/ngram_common.py", "ple_common_v032.py", EDITS_COMMON,
+         "ngram_embedding.py (common)"),
+        ("orig/ngram_nvidia.py", "ple_nvidia_v032.py", EDITS_NVIDIA,
+         "ngram_embedding.py (nvidia)"),
+    )
+    for orig_rel, out_rel, edits, name in jobs:
+        orig = os.path.join(base, orig_rel)
+        if not os.path.isfile(orig):
+            sys.exit(f"ERROR: missing {orig} (start.sh extracts it from the image)")
+        with open(orig) as handle:
+            src = patch(handle.read(), edits, name)
+        out = os.path.join(base, out_rel)
+        os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+        with open(out, "w") as handle:
+            handle.write(src)
+        print(f"patched {out}")
 
 
 if __name__ == "__main__":

@@ -39,7 +39,7 @@ Config is split in two, on purpose:
 
 | Recipe | Model | Image | Use |
 |---|---|---|---|
-| `prod` (default) | local checkpoint (`model_path`, no download) | `vllm/vllm-openai:v0.30.0` | Olyno/Qwen-3.8-Flash-Next (prod) |
+| `prod` (default) | local checkpoint (`model_path`, no download) | `vllm/vllm-openai:v0.32.0` | Olyno/Qwen-3.8-Flash-Next (prod) |
 | `mia` | `nvidia/Qwen3.8-Flash-Next-NVFP4` (HF cache) | `vllm/vllm-openai:qwen38-flash-next` | vendor reference, day-0 defaults |
 
 All new optimizations land in `prod.yaml`.

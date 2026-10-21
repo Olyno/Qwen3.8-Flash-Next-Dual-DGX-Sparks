@@ -15,7 +15,7 @@ OUTS = ("single_type_kv_cache_manager_v030.py", "kv_cache_coordinator_v030.py")
 
 @unittest.skipUnless(
     all((ORIG_DIR / o).is_file() for o in ORIGS),
-    "no extracted v0.30 origs; boot once on the v030 lane (engine/patches.sh "
+    "no extracted v0.32 origs; boot once on the v030 lane (engine/patches.sh "
     "extracts them) or stage patches/mamba_eagle_drop/orig/ from the image",
 )
 class MambaEagleDropV030(unittest.TestCase):

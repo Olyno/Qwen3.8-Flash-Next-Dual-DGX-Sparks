@@ -11,7 +11,7 @@ SCRIPT = REPO / "patches" / "patch_nvfp4_act_hooks.py"
 ORIG = REPO / "patches" / "v030_nvfp4hooks" / "orig" / "nvfp4_emulation_moe.py"
 
 
-@unittest.skipUnless(ORIG.is_file(), "no extracted v0.30 nvfp4_emulation_moe.py; boot once with nvfp4_act_hooks: true")
+@unittest.skipUnless(ORIG.is_file(), "no extracted v0.32 nvfp4_emulation_moe.py; boot once with nvfp4_act_hooks: true")
 class Nvfp4ActHooksV030(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

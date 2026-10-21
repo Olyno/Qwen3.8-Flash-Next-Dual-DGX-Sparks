@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 MiaAI Lab (https://x.com/MiaAI_lab)
-"""QSA metadata graph-padding clamp for the vLLM 0.30.0 lane (unconditional).
+"""QSA metadata graph-padding clamp for the vLLM v0.32.0 lane (unconditional).
 
-Backports vllm-project/vllm#58040 onto the stock v0.30.0 file:
+Backports vllm-project/vllm#58040 onto the stock v0.32.0 file:
 
 Upstream: https://github.com/vllm-project/vllm/pull/58040 (shaopeng-666,
 unmerged), Apache-2.0.
@@ -23,11 +23,12 @@ so this patcher accepts both input flavors — the stock triton builder head
 (local variable) or the fused-draft one (inline call arg plus the recorded
 QSAForwardMetadata.num_mapped_tokens field) — and clamps whichever it
 finds, failing closed if neither matches. engine/patches.sh feeds the
-qsa_cache_views output as this patcher's input and mounts the result.
+fused-draft output (QSA_FUSED_DRAFT=true) or the stock file as this
+patcher's input and mounts the result.
 
-Inputs:  patches/qsa_meta_clamp/orig/qsa_cache.py (the qsa_cache_views
-         overlay's output; the stock file works too — the clamped regions
-         are identical)
+Inputs:  patches/qsa_meta_clamp/orig/qsa_cache.py (the fused-draft
+         overlay's output, or the stock file — the clamped regions are
+         identical in both flavors)
 Outputs: patches/qsa_meta_clamp/qsa_cache_v030.py
 argv[0]/argv[1] override the orig/output directories (used by the test).
 """

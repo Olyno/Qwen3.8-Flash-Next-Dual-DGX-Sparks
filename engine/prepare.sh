@@ -70,7 +70,7 @@
     MODEL_OPT_PKG="$VLLM_PKG/model_executor/layers/quantization/modelopt.py"
 
     if [[ "$V030" == "true" ]]; then
-    info "=== Step 6b: MXFP8 kernel-fallback patch skipped (vLLM 0.30) ==="
+    info "=== Step 6b: MXFP8 kernel-fallback patch skipped (native since vLLM 0.30) ==="
     else
     info "=== Step 6b: Prepare MXFP8 kernel-fallback patch ==="
     if [[ ! -f "$MODELOPT_ORIG" ]]; then

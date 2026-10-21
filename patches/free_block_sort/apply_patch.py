@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 MiaAI Lab (https://x.com/MiaAI_lab)
-"""Free-list block-id sort for the vLLM 0.30.0 lane (opt-in, FREE_BLOCK_SORT).
+"""Free-list block-id sort for the vLLM v0.32.0 lane (opt-in, FREE_BLOCK_SORT).
 
 Proposed upstream as vllm-project/vllm#31371 (pegaflow, RFC), Apache-2.0.
 
@@ -29,20 +29,20 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 APPEND_N_OLD = """\
-        if len(blocks) == 0:
+        if not blocks:
             return
 
-        last_block = self.fake_free_list_tail.prev_free_block
+        tail = self.fake_free_list_tail
 """
 APPEND_N_NEW = """\
-        if len(blocks) == 0:
+        if not blocks:
             return
 
         # Address-sequential free list (vllm#31371): contiguous block ids
         # coalesce into larger DMA bursts on KV offload/prefetch.
         blocks.sort(key=lambda x: x.block_id)
 
-        last_block = self.fake_free_list_tail.prev_free_block
+        tail = self.fake_free_list_tail
 """
 
 PATCH_MARK = "Address-sequential free list (vllm#31371)"

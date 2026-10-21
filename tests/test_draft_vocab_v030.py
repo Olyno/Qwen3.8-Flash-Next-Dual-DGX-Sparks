@@ -39,7 +39,7 @@ class Fp8DraftHeadAnchors(unittest.TestCase):
         self.assertIn('logger.info(\n        "MTP FP8 draft head (draft vocab):', self.src)
 
 
-@unittest.skipUnless(ORIG.is_file(), "no extracted v0.30 mtp.py; boot the prod recipe once (RECIPE=prod ./start.sh)")
+@unittest.skipUnless(ORIG.is_file(), "no extracted v0.32 mtp.py; boot the prod recipe once (RECIPE=prod ./start.sh)")
 class DraftVocabV030(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

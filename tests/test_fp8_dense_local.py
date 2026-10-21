@@ -22,7 +22,7 @@ class TestFp8DenseLocal(unittest.TestCase):
         self.assertEqual(env["FP8_DENSE"], "true")
         self.assertEqual(env["FP8_DENSE_MODEL_ID"], "~/models/q38-lean-hyb")
         self.assertNotIn("MODEL_ID", env)  # no Hub id — local dir
-        self.assertEqual(env["V030"], "true")  # vLLM 0.30 lane
+        self.assertEqual(env["V030"], "true")  # v030 lane (vLLM v0.32.0)
         # no TP pin: config.sh derives tensor_parallel_size from NODES
         self.assertNotIn("TENSOR_PARALLEL_SIZE", env)
         # the reduced draft head assumes a BF16 draft lm_head; this
@@ -54,6 +54,30 @@ class TestFp8DenseLocal(unittest.TestCase):
         self.assertIn('cp "$FD/orig/$f.py" "$FD/$f.py"', sh)
         self.assertNotIn('cp "$HC/model_v030.py"', sh)
         self.assertNotIn('$HC/hyperconnection_v030.py', sh)
+
+    def test_diffs_apply_clean_to_extracted_stock(self):
+        # git apply --check against the stock extracts once the boot has
+        # pulled them (all four apply to plain v0.32.0 stock — the
+        # hc_down_silu pre-pass is no longer needed).
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        if not shutil.which("git"):
+            self.skipTest("git not available")
+        fd = REPO / "overlays" / "fp8dense_v030" / "orig"
+        missing = [n for n in ("modelopt", "model", "hyperconnection", "mtp")
+                   if not (fd / f"{n}.py").is_file()]
+        if missing:
+            self.skipTest(f"no stock extracts yet ({', '.join(missing)}); boot the fp8 recipe once")
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        for n in ("modelopt", "model", "hyperconnection", "mtp"):
+            (tmp / f"{n}.py").write_text((fd / f"{n}.py").read_text())
+            r = subprocess.run(["git", "apply", "-p2", "--check",
+                                str(REPO / "overlays" / "fp8dense_v030" / f"{n}.diff")],
+                               cwd=tmp, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, f"{n}: {r.stderr}")
 
     def test_v030_mtp_draft_head_combo_refused(self):
         sh = (REPO / "engine" / "patches.sh").read_text()

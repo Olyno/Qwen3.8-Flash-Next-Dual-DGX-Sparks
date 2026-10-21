@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 MiaAI Lab (https://x.com/MiaAI_lab)
-"""Patch v0.30 qwen4_exp/nvidia/mtp.py: skip the MTP drafter's discarded
+"""Patch the v030-lane qwen4_exp/nvidia/mtp.py: skip the MTP drafter's discarded
 prefill computation (opt-in: mtp_skip_prefix / VLLM_MTP_SKIP_PREFIX).
 
 Idea-level credit, no code copied: ds4-dfm-rs (MIT),
@@ -329,8 +329,8 @@ FWD_MIXER_NEW = """\
 # patch_mtp_draft_vocab_v030.py in either chain order.
 EDITS = [
     (
-        "class Qwen4ExpMTP(nn.Module, SupportsPP, Qwen4ExpMixtureOfExperts):\n",
-        HELPERS + "class Qwen4ExpMTP(nn.Module, SupportsPP, Qwen4ExpMixtureOfExperts):\n",
+        "class Qwen4ExpMTP(nn.Module, SupportsHCSP, SupportsPP, Qwen4ExpMixtureOfExperts):\n",
+        HELPERS + "class Qwen4ExpMTP(nn.Module, SupportsHCSP, SupportsPP, Qwen4ExpMixtureOfExperts):\n",
     ),
     (
         """\

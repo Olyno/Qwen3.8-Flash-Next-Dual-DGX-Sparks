@@ -11,7 +11,7 @@ SCRIPT = REPO / "patches" / "patch_load_drop_cache_v030.py"
 ORIG = REPO / "patches" / "v030_dropcache" / "orig" / "weight_utils.py"
 
 
-@unittest.skipUnless(ORIG.is_file(), "no extracted v0.30 weight_utils.py; boot the prod recipe once (RECIPE=prod ./start.sh)")
+@unittest.skipUnless(ORIG.is_file(), "no extracted v0.32 weight_utils.py; boot the prod recipe once (RECIPE=prod ./start.sh)")
 class LoadDropCacheV030(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

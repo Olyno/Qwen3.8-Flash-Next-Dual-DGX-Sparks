@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 MiaAI Lab (https://x.com/MiaAI_lab)
-"""Patch v0.30 qwen4_exp/nvidia/mtp.py: reduced-vocab drafting + FP8 draft head.
+"""Patch the v030-lane qwen4_exp/nvidia/mtp.py: reduced-vocab drafting + FP8 draft head.
 
 Without flags this applies the draft-vocab delta only (VLLM_MTP_DRAFT_VOCAB),
 exactly as before. With --fp8 it additionally applies the L1b' FP8 draft-head

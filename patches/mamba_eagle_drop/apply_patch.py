@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 MiaAI Lab (https://x.com/MiaAI_lab)
-"""MambaManager drop_eagle_block cache-hit fix for the vLLM 0.30.0 lane
+"""MambaManager drop_eagle_block cache-hit fix for the vLLM v0.32.0 lane
 (unconditional).
 
-Backports vllm-project/vllm#57128 onto the stock v0.30.0 files:
+Backports vllm-project/vllm#57128 onto the stock v0.32.0 files:
 
 Upstream: https://github.com/vllm-project/vllm/pull/57128 (limwand,
 unmerged), Apache-2.0.
@@ -20,7 +20,7 @@ unmerged), Apache-2.0.
       checkpoint actually found when drop_eagle_block is set, then keep
       scanning for the next, older, already-committed one. The PR's
       shared_prefix_checkpoint -> fine_grained_prefix_cache rename hunks
-      are already in v0.30.0 and are not re-applied.
+      are already in the target image and are not re-applied.
 
     vllm/v1/core/kv_cache_coordinator.py
     - Comment-only hunk: the coordinator already (correctly) skips the
