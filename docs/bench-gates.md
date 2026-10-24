@@ -25,6 +25,26 @@ regression. `--record` stores the current numbers as the comparison baseline
 later run gates against it. Exit 1 on any FAIL; a SKIP is never a pass — an
 offline host yields an all-SKIP matrix and exit 2, and the run does not count.
 
+## Measured arms
+
+Each opt-in path is measured alone against the committed default (adaptive
+verify width on) with the same matrix; a failing row keeps the key off, and the
+recipe comment next to the key carries the boot details. Baseline at the
+measured configuration: prefill `0.758 / 0.363 / 0.351` ms per 1k tokens and
+decode `76.28 / 76.83 / 77.35` ms/step at 1k / 32k / 65k.
+
+| key | decode Δ ms/step (1k / 32k / 64k) | prefill Δ (1k / 32k / 64k) | verdict |
+|-----|-----------------------------------|----------------------------|---------|
+| `verify_width_adaptive` | −3.1 to −4.1% in every bucket | neutral at 32k/64k | ON |
+| `mtp_skip_prefix` | +6.9 to +9.1% in every bucket | neutral/positive, noisy | OFF (parity also failed) |
+| `copy_proposer` | +0.3 to +4.1% in every bucket | +2.3% at 32k | OFF |
+| `gdn_direct_out` | +13.3 / +6.4 / +3.2% | +3.4 / +2.1 / −0.7% | OFF |
+| `ple_staged_lookup` | not gated | not gated | OFF (three boot failures) |
+| `spec_trace` | 0% (diagnostic) | 0% | OFF |
+
+`ple_staged_lookup` never reached a measurement: the staged forward collapsed
+the profiled KV memory, so the matrix does not exist and a SKIP is not a pass.
+
 ## Report ms/step, not tok/s (A/B under speculation)
 
 Under MTP/spec decode, `tok/s = steps/s × tok/step`, and `tok/step` moves with
