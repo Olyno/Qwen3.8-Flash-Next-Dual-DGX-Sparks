@@ -101,6 +101,11 @@ mtp_skip_prefix: false
 # host table out of the loop).
 # ple_staged_lookup (default off): gather each batch's PLE rows on the host
 # through a pinned staging buffer instead of letting the GPU read the mmap.
+# Boot-tested three times, three capture-path failures: pinned allocation
+# inside the CUDA device context; side-stream join under capture; and the
+# memory profiler reporting 0.1 GiB KV after the staged forward (the last one
+# is unresolved — likely capture-pool accounting). The unpinned-read hazard
+# analysis stands; do not enable without a dedicated profiling session.
 ple_staged_lookup: false
 qsa_profile: stock
 fp8_dense: false
