@@ -106,6 +106,10 @@ mtp_rejection_sample_method: block
 # stock. Gate A/B: decode +6.9..9.1% ms/step in every bucket (prefill 64k
 # neutral, 1k/32k noisy-positive) — the no-regression gate fails, stays OFF.
 mtp_skip_prefix: false
+# MTP padding mask: the drafter's only MoE layer already runs behind
+# sp_padding_mask (set once per step), and pad rows are cut before logits, so
+# there is no unmasked remainder to fix. The mask itself only arms under
+# DP>1 + EP + DeepEP-v2, which no recipe uses. Reopen only for that topology.
 # ple_offload: derived from NODES (true at 1 node — the n-gram table is
 # offloaded so the model fits; false at 2 — halved per-rank weights leave the
 # host table out of the loop).
