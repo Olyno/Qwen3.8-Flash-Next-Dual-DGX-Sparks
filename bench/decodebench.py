@@ -212,7 +212,8 @@ def main():
         used = None
         for t in temps:
             for name, task in tasks.items():
-                fit, ctx = fit_ctx(c, a.decode, task, limit, salt)
+                fit, ctx = fit_ctx(c, a.decode, task, limit,
+                                   f"{salt}{c}-{name}-{t:g}")
                 if fit != c and used != fit:
                     print(f"note: context {c} fitted to {fit} "
                           f"(max_model_len {limit}, decode {a.decode})",
