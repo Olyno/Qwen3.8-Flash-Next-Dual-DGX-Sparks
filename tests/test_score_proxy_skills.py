@@ -194,6 +194,27 @@ class SkillIndexTest(unittest.TestCase):
         self.assertEqual(len(calls[0]), 3)
         self.assertEqual([len(c) for c in calls[1:]], [1, 1])
 
+    def test_pinned_skill_bypasses_threshold_and_inlines_body(self):
+        with tempfile.TemporaryDirectory() as root:
+            write(root, os.path.join("ponytail", "SKILL.md"),
+                  "---\nname: ponytail\ndescription: Laziest fix.\n---\n\n"
+                  "# Ponytail\n\nAsk if it needs to exist.\n")
+
+            def embed(texts):
+                return [[0.0, 1.0] if t.startswith("ponytail:")
+                        else [1.0, 0.0] for t in texts]
+
+            index = sp.SkillIndex(root, embed, min_sim=0.999,
+                                  pin=("ponytail",), pin_chars=200)
+            req = user_req()
+            changed, _, count = index.apply(req)
+            self.assertTrue(changed)
+            self.assertEqual(count, 1)
+            content = req["messages"][0]["content"]
+            self.assertIn("## ponytail", content)
+            self.assertIn("Ask if it needs to exist.", content)
+            self.assertNotIn("SKILL.md", content)
+
 
 class SkillWiringTest(unittest.TestCase):
     def test_env_unset_feature_off(self):
@@ -208,11 +229,13 @@ class SkillWiringTest(unittest.TestCase):
             srv = sp.make_server(0, "http://127.0.0.1:1",
                                  router_url="http://127.0.0.1:1",
                                  skills_dir=root, skills_top_k=2,
-                                 skills_min_sim=0.4)
+                                 skills_min_sim=0.4,
+                                 skills_pin=("ponytail",))
             try:
                 self.assertIsInstance(srv.skill_index, sp.SkillIndex)
                 self.assertEqual(srv.skill_index.top_k, 2)
                 self.assertEqual(srv.skill_index.min_sim, 0.4)
+                self.assertEqual(srv.skill_index.pin, ("ponytail",))
             finally:
                 srv.server_close()
 

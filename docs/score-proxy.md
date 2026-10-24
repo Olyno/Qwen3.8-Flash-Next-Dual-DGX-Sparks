@@ -163,6 +163,24 @@ Each injection logs `skills: injected N (top sim X.XXX)` to stderr.
 loosely related skills still surface. Calibrate it from the logged
 similarities and lower it if relevant skills are being filtered out.
 
+### Pinned skills (`PROXY_SKILLS_PIN`)
+
+A skill named in `PROXY_SKILLS_PIN` (comma-separated) is always injected,
+regardless of similarity, and leads the block. Its body is inlined after a
+`## <name>` heading instead of the one-line pointer, so a harness that cannot
+read the path still gets the rules. The body is stripped of YAML frontmatter
+and capped at `PROXY_SKILLS_PIN_CHARS` (default **4000**), cut at a line
+boundary.
+
+```
+PROXY_SKILLS_DIR=skills PROXY_SKILLS_PIN=ponytail \
+  python3 proxy/score_proxy.py
+```
+
+Pinned skills are policy, not retrieval: use them sparingly, because their
+text is charged to every matching request. `skills/ponytail` ships in this
+repository (MIT, see NOTICE) as the reference pin.
+
 **Fail-open:** any scan or embedding error leaves the index empty and requests
 pass through unchanged. If the embedding service is down on the first request,
 the index stays empty until the proxy restarts.

@@ -161,3 +161,10 @@ Ideas and approaches (no code copied)
     warming the eager PLE lookup path in the same patcher. Causal+lagged
     draft depth selection remains an idea-level credit. No code copied;
     direct ports will carry modified-file notices per Apache-2.0 §4(b).
+
+Ponytail — https://github.com/DietrichGebert/ponytail
+License: MIT (licenses/PONYTAIL-MIT.LICENSE)
+
+  skills/ponytail/SKILL.md is vendored verbatim (fetched 2026-10-24) and is
+  injected by the proxy when pinned: PROXY_SKILLS_PIN=ponytail. The skill
+  text is the work of its author; no modifications.

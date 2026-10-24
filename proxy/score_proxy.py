@@ -366,11 +366,14 @@ class SkillIndex:
     empty and requests pass through unchanged. ponytail: one lazy scan cached
     forever — restart the proxy after editing the skills directory."""
 
-    def __init__(self, directory, embed_fn, top_k=3, min_sim=0.25):
+    def __init__(self, directory, embed_fn, top_k=3, min_sim=0.25,
+                 pin=(), pin_chars=4000):
         self.directory = directory
         self.embed_fn = embed_fn
         self.top_k = top_k
         self.min_sim = min_sim
+        self.pin = tuple(n.strip() for n in pin if n.strip())
+        self.pin_chars = pin_chars
         self._skills = None
         self._lock = threading.Lock()
 
@@ -421,9 +424,32 @@ class SkillIndex:
             return []
         ranked = [(cosine(query, vec), name, desc, path)
                   for name, desc, path, vec in skills]
-        ranked = [s for s in ranked if s[0] >= self.min_sim]
+        # Pinned skills bypass the similarity floor: they are policy, not a
+        # retrieval hit. They lead the block in declaration order.
+        ranked = [s for s in ranked
+                  if s[0] >= self.min_sim or s[1] in self.pin]
         ranked.sort(key=lambda s: (-s[0], s[1]))
-        return ranked[:self.top_k]
+        pinned = sorted((s for s in ranked if s[1] in self.pin),
+                        key=lambda s: self.pin.index(s[1]))
+        rest = [s for s in ranked if s[1] not in self.pin]
+        return (pinned + rest)[:max(self.top_k, len(pinned))]
+
+    def _body(self, path):
+        """Pinned skills ship their rules, not a path the caller may not be
+        able to read. Frontmatter is stripped and the body hard-capped."""
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError:
+            return ""
+        if text.startswith("---"):
+            end = text.find("\n---", 3)
+            if end != -1:
+                text = text[end + 4:]
+        trimmed = text.strip()[:self.pin_chars]
+        if len(trimmed) == self.pin_chars:
+            trimmed = trimmed.rsplit("\n", 1)[0]
+        return trimmed
 
     def apply(self, req):
         """Returns (changed, top_sim, count); mutates req in place. The
@@ -432,8 +458,15 @@ class SkillIndex:
         ranked = self.rank(last_user_text(messages)[:2000])
         if not ranked:
             return False, 0.0, 0
-        block = SKILLS_MARKER + "\n" + "\n".join(
-            f"- {name}: {desc} [{path}]" for _, name, desc, path in ranked)
+        lines = []
+        for _, name, desc, path in ranked:
+            if name in self.pin:
+                body = self._body(path)
+                if body:
+                    lines.append(f"## {name}\n{body}")
+                    continue
+            lines.append(f"- {name}: {desc} [{path}]")
+        block = SKILLS_MARKER + "\n" + "\n".join(lines)
         systems = [m for m in messages if isinstance(m, dict)
                    and m.get("role") == "system"]
         if any(isinstance(m.get("content"), str)
@@ -768,7 +801,8 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
                 router_threshold=0.10, router_max_tokens=1024,
                 router_timeout=2.0, tool_steer=False, tool_threshold=0.5,
                 tool_force=False, tool_top_k=8, tool_always=(),
-                skills_dir=None, skills_top_k=3, skills_min_sim=0.25):
+                skills_dir=None, skills_top_k=3, skills_min_sim=0.25,
+                skills_pin=(), skills_pin_chars=4000):
     u = urllib.parse.urlparse(upstream_url)
     srv = ThreadingHTTPServer(("", port), Handler)
     srv.upstream = (u.hostname, u.port or 80)
@@ -793,7 +827,8 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
     if skills_dir and srv.router is not None:
         srv.skill_index = SkillIndex(
             skills_dir, srv.router.embed, top_k=skills_top_k,
-            min_sim=skills_min_sim)
+            min_sim=skills_min_sim, pin=skills_pin,
+            pin_chars=skills_pin_chars)
     srv.keepalive = None
     if keepalive_s > 0:
         srv.keepalive = CacheKeepalive(srv, keepalive_s)
@@ -827,7 +862,10 @@ def main():
               if n.strip()),
         os.environ.get("PROXY_SKILLS_DIR") or None,
         int(os.environ.get("PROXY_SKILLS_TOP_K", 3)),
-        float(os.environ.get("PROXY_SKILLS_MIN_SIM", 0.25)))
+        float(os.environ.get("PROXY_SKILLS_MIN_SIM", 0.25)),
+        tuple(n for n in os.environ.get("PROXY_SKILLS_PIN", "").split(",")
+              if n.strip()),
+        int(os.environ.get("PROXY_SKILLS_PIN_CHARS", 4000)))
     print(f"score proxy on :{srv.server_port} -> "
           f"http://{srv.upstream[0]}:{srv.upstream[1]}")
     srv.serve_forever()
