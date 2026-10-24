@@ -30,8 +30,12 @@ offline host yields an all-SKIP matrix and exit 2, and the run does not count.
 Each opt-in path is measured alone against the committed default (adaptive
 verify width on) with the same matrix; a failing row keeps the key off, and the
 recipe comment next to the key carries the boot details. Baseline at the
-measured configuration: prefill `0.758 / 0.363 / 0.351` ms per 1k tokens and
-decode `76.28 / 76.83 / 77.35` ms/step at 1k / 32k / 65k.
+configuration the arms were measured on: prefill `0.758 / 0.363 / 0.351` ms per
+1k tokens and decode `76.28 / 76.83 / 77.35` ms/step at 1k / 32k / 65k. A clean
+re-record on the committed budget measured `0.743 / 0.383 / 0.352` and
+`80.34 / 78.47 / 75.79`; the 1k decode bucket drifts by several percent between
+boots, so the arm verdicts lean on the within-run A/B and on every bucket
+moving the same way, not on that one row.
 
 | key | decode Δ ms/step (1k / 32k / 64k) | prefill Δ (1k / 32k / 64k) | verdict |
 |-----|-----------------------------------|----------------------------|---------|
