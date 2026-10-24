@@ -97,5 +97,54 @@ class ToolRouterTest(unittest.TestCase):
         self.assertEqual(prob, 0.0)
 
 
+def tools(n):
+    return [{"type": "function", "function": {"name": f"t{i}",
+                                              "description": f"tool {i}"}}
+            for i in range(n)]
+
+
+def embed_ranked(texts):
+    # query = [1, 0]; tool i = [1, i] -> cosine falls with i
+    return [[1.0, 0.0]] + [[1.0, float(i)] for i in range(len(texts) - 1)]
+
+
+class ToolPruneTest(unittest.TestCase):
+    def test_prunes_to_top_k_and_keeps_always(self):
+        tr = sp.ToolRouter(FakeScorer(0.1, 0.1), embed_fn=embed_ranked,
+                           top_k=3, always=("t9",))
+        req = req_with()
+        req["tools"] = tools(10)
+        changed, _ = tr.apply(req, "m")
+        self.assertTrue(changed)
+        names = [t["function"]["name"] for t in req["tools"]]
+        self.assertEqual(names, ["t0", "t1", "t2", "t9"])
+
+    def test_no_prune_under_top_k(self):
+        tr = sp.ToolRouter(FakeScorer(0.1, 0.1), embed_fn=embed_ranked, top_k=8)
+        req = req_with()
+        req["tools"] = tools(5)
+        changed, _ = tr.apply(req, "m")
+        self.assertFalse(changed)
+        self.assertEqual(len(req["tools"]), 5)
+
+    def test_no_prune_without_embed_fn(self):
+        tr = sp.ToolRouter(FakeScorer(0.1, 0.1), top_k=3)
+        req = req_with()
+        req["tools"] = tools(10)
+        changed, _ = tr.apply(req, "m")
+        self.assertFalse(changed)
+        self.assertEqual(len(req["tools"]), 10)
+
+    def test_embed_failure_keeps_all_tools(self):
+        def boom(texts):
+            raise OSError("down")
+        tr = sp.ToolRouter(FakeScorer(0.1, 0.1), embed_fn=boom, top_k=3)
+        req = req_with()
+        req["tools"] = tools(10)
+        changed, _ = tr.apply(req, "m")
+        self.assertFalse(changed)
+        self.assertEqual(len(req["tools"]), 10)
+
+
 if __name__ == "__main__":
     unittest.main()

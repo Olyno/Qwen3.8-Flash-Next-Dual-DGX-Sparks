@@ -86,6 +86,15 @@ below threshold, or on any scoring failure the request is forwarded
 unchanged. Every firing logs `tool steer prob=... force=...` — calibrate the
 threshold from those lines against a labeled sample before trusting it.
 
+With an embedding endpoint configured (`PROXY_ROUTER_URL`), the same router
+also prunes oversized tool lists: when a request carries more than
+`PROXY_TOOL_TOP_K` tools (default **8**), the tools are ranked by cosine
+against the last user message and only the top-k survive (the client's tool
+order is preserved). `PROXY_TOOL_ALWAYS` names — comma-separated — are never
+pruned. Weak tool selection is often a choice-among-many problem, so a
+shorter, sharper list raises call rate and choice quality even when the
+model never sees the pruned tools. Any embedding failure keeps the full list.
+
 ## Middleware triage (2026-10-10)
 
 Research verdicts on the originally planned stage-2 items:

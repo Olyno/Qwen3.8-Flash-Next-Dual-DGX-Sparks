@@ -31,7 +31,9 @@ PROXY_ROUTER_URL (unset = off), PROXY_ROUTER_MODEL
 PROXY_ROUTER_TRIVIAL_MAX_TOKENS (1024), PROXY_ROUTER_TIMEOUT_S (2),
 PROXY_TOOL_ROUTER (unset = off; scores whether a request with tools needs
 one, then nudges), PROXY_TOOL_THRESHOLD (0.5), PROXY_TOOL_FORCE (1 = set
-tool_choice=required instead of the system nudge).
+tool_choice=required instead of the system nudge), PROXY_TOOL_TOP_K (8;
+prune larger tool lists by embedding similarity), PROXY_TOOL_ALWAYS
+(comma-separated tool names never pruned).
 Stdlib only.
 """
 import http.client
@@ -231,14 +233,43 @@ class ToolRouter:
     """Tool-use steering: score whether the last user turn needs a
     tool, then nudge or force before generation. The score is a two-option
     prefill (same pattern as /v1/score, both orders averaged); `force` sets
-    tool_choice='required' instead of appending a system nudge. Fail-open:
-    scoring trouble means passthrough. Calibrate the threshold on the logged
-    `tool steer` lines before trusting it."""
+    tool_choice='required' instead of appending a system nudge; with an
+    embedding function it also prunes an oversized tool list to the top-k by
+    cosine against the last user message (always-keep names survive).
+    Fail-open: scoring/embedding trouble means passthrough. Calibrate the
+    threshold on the logged `tool steer` lines before trusting it."""
 
-    def __init__(self, score_fn, threshold=0.5, force=False):
+    def __init__(self, score_fn, embed_fn=None, threshold=0.5, force=False,
+                 top_k=8, always=()):
         self.score_fn = score_fn        # (model, prefix, labels) -> probs
+        self.embed_fn = embed_fn        # (texts) -> vectors, or None
         self.threshold = threshold
         self.force = force
+        self.top_k = top_k
+        self.always = {n.lower() for n in always}
+
+    def _prune(self, req):
+        tools = req.get("tools") or []
+        if self.embed_fn is None or len(tools) <= self.top_k:
+            return False
+        text = last_user_text(req.get("messages") or [])[:2000]
+        if not text:
+            return False
+        names = [((t.get("function") or {}).get("name") or "") for t in tools]
+        descs = [f"{n}. {((t.get('function') or {}).get('description') or '')}"
+                 for n, t in zip(names, tools)]
+        try:
+            vecs = self.embed_fn([text] + descs)
+        except Exception:  # fail-open: keep the full tool list
+            return False
+        q = vecs[0]
+        order = sorted(range(len(tools)), key=lambda i: -cosine(q, vecs[i + 1]))
+        keep = set(order[:self.top_k])
+        keep |= {i for i, n in enumerate(names) if n.lower() in self.always}
+        if len(keep) == len(tools):
+            return False
+        req["tools"] = [t for i, t in enumerate(tools) if i in keep]
+        return True
 
     def needs_tool(self, messages, model):
         text = last_user_text(messages)[:2000]
@@ -261,12 +292,13 @@ class ToolRouter:
         """Returns (changed, prob). Mutates req in place."""
         if not req.get("tools"):
             return False, 0.0
+        pruned = self._prune(req)
         prob = self.needs_tool(req.get("messages") or [], model)
         if prob < self.threshold:
-            return False, prob
+            return pruned, prob
         if self.force:
             if req.get("tool_choice"):
-                return False, prob   # client already decided; respect it
+                return pruned, prob   # client already decided; respect it
             req["tool_choice"] = "required"
             return True, prob
         messages = req.get("messages") or []
@@ -275,7 +307,7 @@ class ToolRouter:
                       None)
         if system is not None:
             if TOOL_NUDGE in (system.get("content") or ""):
-                return False, prob
+                return pruned, prob
             system["content"] = (system.get("content") or "") + "\n\n" + TOOL_NUDGE
         else:
             messages.insert(0, {"role": "system", "content": TOOL_NUDGE})
@@ -302,6 +334,10 @@ class Router:
         self.max_tokens = max_tokens
         self.timeout = timeout
         self._centroids = None
+
+    def embed(self, texts):
+        """Public embedding call (also used by tool-list pruning)."""
+        return self._embed(texts)
 
     def _embed(self, texts):
         body = json.dumps({"model": self.model, "input": texts}).encode()
@@ -587,7 +623,7 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
                 router_model="google/embeddinggemma-2",
                 router_threshold=0.10, router_max_tokens=1024,
                 router_timeout=2.0, tool_steer=False, tool_threshold=0.5,
-                tool_force=False):
+                tool_force=False, tool_top_k=8, tool_always=()):
     u = urllib.parse.urlparse(upstream_url)
     srv = ThreadingHTTPServer(("", port), Handler)
     srv.upstream = (u.hostname, u.port or 80)
@@ -605,7 +641,9 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
         srv.tool_router = ToolRouter(
             lambda model, prefix, labels: score_order(
                 srv.upstream, model, prefix, labels),
-            threshold=tool_threshold, force=tool_force)
+            embed_fn=srv.router.embed if srv.router else None,
+            threshold=tool_threshold, force=tool_force,
+            top_k=tool_top_k, always=tool_always)
     srv.keepalive = None
     if keepalive_s > 0:
         srv.keepalive = CacheKeepalive(srv, keepalive_s)
@@ -633,7 +671,10 @@ def main():
         float(os.environ.get("PROXY_ROUTER_TIMEOUT_S", 2)),
         os.environ.get("PROXY_TOOL_ROUTER") == "1",
         float(os.environ.get("PROXY_TOOL_THRESHOLD", 0.5)),
-        os.environ.get("PROXY_TOOL_FORCE") == "1")
+        os.environ.get("PROXY_TOOL_FORCE") == "1",
+        int(os.environ.get("PROXY_TOOL_TOP_K", 8)),
+        tuple(n for n in os.environ.get("PROXY_TOOL_ALWAYS", "").split(",")
+              if n.strip()))
     print(f"score proxy on :{srv.server_port} -> "
           f"http://{srv.upstream[0]}:{srv.upstream[1]}")
     srv.serve_forever()
