@@ -46,7 +46,10 @@ yarn_factor: 4.0
 # 0.75 leaves the host ~7.5 GiB; under load the driver fails allocations
 # (NV_ERR_NO_MEMORY) and memwatch stops the container. 0.72 boots with the
 # default launch gate and yields a 270,209-token KV pool (4.12x at 65,536
-# tokens per request, covering the 4-sequence target with slack).
+# tokens per request, covering the 4-sequence target with slack). A foreign
+# job that starts after the server can still exhaust the pool: one such run
+# ended in the kernel OOM path (NV_ERR_NO_MEMORY, global_oom) and a reboot.
+# The launch check covers only start-up; keep the device exclusive end to end.
 gpu_memory_utilization: 0.72
 # max_num_seqs: derived from NODES (4 at 1 node, 8 at 2).
 max_num_batched_tokens: 8192
