@@ -23,6 +23,7 @@
     [[ -n "$ATTENTION_BLOCK_SIZE" ]] && VLLM_ARGS+=("--block-size" "$ATTENTION_BLOCK_SIZE")
     [[ -n "$MAMBA_SSM_CACHE_DTYPE" ]] && VLLM_ARGS+=("--mamba-ssm-cache-dtype" "$MAMBA_SSM_CACHE_DTYPE")
     [[ -n "$GDN_PREFILL_BACKEND" ]] && VLLM_ARGS+=("--gdn-prefill-backend" "$GDN_PREFILL_BACKEND")
+    [[ -n "$MAX_LOGPROBS" ]] && VLLM_ARGS+=("--max-logprobs" "$MAX_LOGPROBS")
     VLLM_ARGS+=("--load-format" "safetensors")
     VLLM_ARGS+=("--safetensors-load-strategy" "lazy")
     VLLM_ARGS+=("--enable-chunked-prefill")

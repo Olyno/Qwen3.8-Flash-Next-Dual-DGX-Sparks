@@ -55,6 +55,9 @@ long_prefill_token_threshold: 4800
 port: 8888
 master_port: 50000
 kv_cache_dtype: fp8
+# KL quality gate samples 64-way distributions (prompt_logprobs=64); the
+# engine default caps that at 20.
+max_logprobs: 64
 # STEPQuant (arXiv 2609.38169, INT6 GDN state) assessed and SKIPPED: bf16
 # already captures half the state saving; INT6 would free ~7.7 GiB of cache
 # pool we cannot fill at max_num_seqs 4/64K, force the decode path off the

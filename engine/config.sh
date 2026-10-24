@@ -91,6 +91,11 @@ KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8}"   # fp8: native on the v032 lane (vllm#5
 # the MTP guard validates ring-capacity legality before weight loading.
 ATTENTION_BLOCK_SIZE="${ATTENTION_BLOCK_SIZE:-}"
 [[ -z "$ATTENTION_BLOCK_SIZE" || "$ATTENTION_BLOCK_SIZE" =~ ^[1-9][0-9]*$ ]] || err "attention_block_size must be a positive integer (got: '$ATTENTION_BLOCK_SIZE')"
+# Optional --max-logprobs override. The engine default caps prompt_logprobs
+# at 20; the KL quality gate scores 64-way distributions, so a recipe that
+# runs the gate pins 64 here.
+MAX_LOGPROBS="${MAX_LOGPROBS:-}"
+[[ -z "$MAX_LOGPROBS" || "$MAX_LOGPROBS" =~ ^[1-9][0-9]*$ ]] || err "max_logprobs must be a positive integer (got: '$MAX_LOGPROBS')"
 # dtype of the GDN recurrent (SSM) state. The checkpoint asks for float32; the
 # fused GDN kernel also accepts bfloat16 (FUSED_GDN_STATE_DTYPES in
 # qwen_gdn_linear_attn.py). BF16 halves the ~0.23 GB per sequence the state
