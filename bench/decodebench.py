@@ -30,7 +30,7 @@ Findings that motivated the shape of this script:
   * the "entropy" task at temperature 0 degenerates into repetition, which
     MTP then predicts easily -- read it only at temp 0.8.
 """
-import json, os, time, argparse, urllib.request
+import json, os, sys, time, argparse, urllib.request
 
 import mtp_accept
 
@@ -110,6 +110,22 @@ def run(ctx, task, n, temp, tkwargs=None):
             acc = 100.0 * atok / dtok if dtok > 0 else float("nan")
     return ptok, ctok, ttft, dec, sps, tps, acc
 
+def max_served_len():
+    """max_model_len reported by /v1/models, or None when unavailable."""
+    try:
+        with urllib.request.urlopen(BASE + "/v1/models", timeout=10) as r:
+            data = json.load(r).get("data") or []
+        return int(data[0]["max_model_len"]) if data and data[0].get("max_model_len") else None
+    except Exception:
+        return None
+
+def clamp_ctx(ctx, decode, max_len, margin=64):
+    """Largest prompt that leaves room for `decode` tokens (and a margin) in
+    max_model_len; a request over the served limit is a 400, not a slow run."""
+    if not max_len:
+        return ctx
+    return min(ctx, max(1, max_len - decode - margin))
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--decode", type=int, default=600)
@@ -121,6 +137,13 @@ def main():
     a = ap.parse_args()
     myll = a.conditions == "myllmbox"
     contexts = [int(x) for x in (a.contexts or ("256" if myll else "1000,48000")).split(",")]
+    limit = max_served_len()
+    clamped = [clamp_ctx(c, a.decode, limit) for c in contexts]
+    for c, n in zip(contexts, clamped):
+        if n != c:
+            print(f"note: context {c} clamped to {n} "
+                  f"(max_model_len {limit}, decode {a.decode})", file=sys.stderr)
+    contexts = clamped
     temps = [float(x) for x in (a.temps or ("0.0" if myll else "0.0,0.8")).split(",")]
     tasks = MYLLMBOX if myll else TASKS
     tkwargs = {"enable_thinking": False} if myll else None
@@ -148,4 +171,5 @@ def main():
                                              "decode_tps": dec, "steps_ps": sps,
                                              "tok_per_step": tps, "accept_pct": acc}) + "\n")
 
-main()
+if __name__ == "__main__":
+    main()

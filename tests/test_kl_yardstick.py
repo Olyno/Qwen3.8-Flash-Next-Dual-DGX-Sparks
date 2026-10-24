@@ -159,6 +159,15 @@ class CompareEndToEndTest(unittest.TestCase):
         cls.flip_server = ThreadingHTTPServer(("127.0.0.1", 0), FlippedCompletions)
         threading.Thread(target=cls.flip_server.serve_forever, daemon=True).start()
         cls.flip_url = f"http://127.0.0.1:{cls.flip_server.server_port}"
+        # The repo pins carry token ids from a real tokenizer; the fake server
+        # tokenizes differently, so this class scores against an unpinned copy.
+        cls._tmp = tempfile.TemporaryDirectory()
+        src = Path(kl_yardstick.POSITIONS)
+        doc = json.loads(src.read_text())
+        for v in doc["texts"].values():
+            v["token_ids"] = None
+        cls.positions = str(Path(cls._tmp.name) / "positions.json")
+        Path(cls.positions).write_text(json.dumps(doc))
 
     @classmethod
     def tearDownClass(cls):
@@ -166,11 +175,13 @@ class CompareEndToEndTest(unittest.TestCase):
         cls.server.server_close()
         cls.flip_server.shutdown()
         cls.flip_server.server_close()
+        cls._tmp.cleanup()
 
     def _run(self, argv):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            code = kl_yardstick.main(["compare", "--url", self.url] + argv)
+            code = kl_yardstick.main(["compare", "--url", self.url,
+                                      "--positions", self.positions] + argv)
         return code, buf.getvalue()
 
     def test_identical_arm_with_floor_passes(self):
