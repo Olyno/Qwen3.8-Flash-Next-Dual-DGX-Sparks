@@ -428,6 +428,23 @@ if $DO_LAUNCH && [[ "$V030" == "true" && "$SPEC_TRACE" == "true" ]]; then
     OVERLAY_ENV+=("-e VLLM_SPEC_TRACE=${VLLM_SPEC_TRACE:-/tmp/vllm-spec-trace.jsonl}")
 fi
 
+if $DO_LAUNCH && [[ "$V030" == "true" && "$VERIFY_WIDTH_ADAPTIVE" == "true" ]]; then
+    info "=== Step 4c: adaptive speculative-verify width (vLLM 0.32) ==="
+    # patches/patch_verify_width.py: the scheduler publishes one verify width
+    # per step, picked from its rolling acceptance EMA (1 / 2 / config k,
+    # four-step dwell) and capped at config k. Only the number of verify rows
+    # changes; target verification is untouched. DP>1 and the stock
+    # per-batch-size table stand the policy down at scheduler construction.
+    VW="$SCRIPT_DIR/patches/verify_width"
+    mkdir -p "$VW/orig"
+    extract_from_image "$VLLM_PKG/v1/core/sched/scheduler.py" \
+                       "$VW/orig/scheduler.py"
+    python3 "$SCRIPT_DIR/patches/patch_verify_width.py" "$VW" \
+        || err "patch_verify_width.py failed"
+    add_overlay "$VW/scheduler_v030.py" "$VLLM_PKG/v1/core/sched/scheduler.py"
+    OVERLAY_ENV+=("-e VLLM_VERIFY_WIDTH_ADAPTIVE=1")
+fi
+
 # ---------------------------------------------------------------------------
 # 4e. FP8 KV cache. The stock QSA kernels hard-refuse anything but BF16 KV
 #     (supported_kv_cache_dtypes = ["auto","bfloat16"]); this teaches them to

@@ -193,6 +193,12 @@ CHUNK_EQUAL_SPLIT="${CHUNK_EQUAL_SPLIT:-false}"
 # draft/verify round (scheduled drafts, accepted, wall ms). Off = no file,
 # no timings, no syncs. VLLM_SPEC_TRACE sets the in-container output path.
 SPEC_TRACE="${SPEC_TRACE:-false}"
+# Adaptive speculative-verify width (v0.32 lane only,
+# patches/patch_verify_width.py): the scheduler picks the per-step draft
+# verify width (1 / 2 / config k) from a rolling acceptance EMA, with a
+# four-step dwell. Only the number of verify rows changes; target
+# verification is unchanged. Off = the stock scalar at every site.
+VERIFY_WIDTH_ADAPTIVE="${VERIFY_WIDTH_ADAPTIVE:-false}"
 [[ "$FP8_DRAFT_HEAD" != "true" || "$V030" == "true" ]] || err "fp8_draft_head is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$QSA_FUSED_DRAFT" != "true" || "$V030" == "true" ]] || err "qsa_fused_draft is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$QSA_ROPE_CLAMP" != "true" || "$V030" == "true" ]] || err "qsa_rope_clamp is only supported on the vLLM 0.32 lane (v030: true)."
@@ -202,6 +208,10 @@ SPEC_TRACE="${SPEC_TRACE:-false}"
 [[ "$CHUNK_EQUAL_SPLIT" != "true" || "$V030" == "true" ]] || err "chunk_equal_split is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$SPEC_TRACE" != "true" || "$V030" == "true" ]] || err "spec_trace is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$SPEC_TRACE" != "true" || "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]] || err "spec_trace needs speculative decoding (mtp_num_speculative_tokens > 0)."
+[[ "$VERIFY_WIDTH_ADAPTIVE" != "true" || "$V030" == "true" ]] || err "verify_width_adaptive is only supported on the vLLM 0.32 lane (v030: true)."
+[[ "$VERIFY_WIDTH_ADAPTIVE" != "true" || "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]] || err "verify_width_adaptive needs speculative decoding (mtp_num_speculative_tokens > 0)."
+[[ "$VERIFY_WIDTH_ADAPTIVE" != "true" || "$MTP_ADAPTIVE_DEPTH" != "true" ]] || err "verify_width_adaptive and mtp_adaptive_depth both target the speculative verify width; mtp_adaptive_depth is inert on this lane (its per-step truncation never reaches the scheduler's published width), so enable verify_width_adaptive instead."
+[[ "$VERIFY_WIDTH_ADAPTIVE" != "true" || "$CHUNK_EQUAL_SPLIT" != "true" ]] || err "verify_width_adaptive and chunk_equal_split both overlay v1/core/sched/scheduler.py - pick one."
 [[ "$MTP_ADAPTIVE_DEPTH" != "true" || "$V030" == "true" ]] || err "mtp_adaptive_depth is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$MTP_SKIP_PREFIX" != "true" || "$V030" == "true" ]] || err "mtp_skip_prefix is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$MTP_SKIP_PREFIX" != "true" || "${FP8_DENSE:-false}" != "true" ]] || err "mtp_skip_prefix and fp8_dense both overlay qwen4_exp/nvidia/mtp.py - pick one."
