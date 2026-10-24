@@ -90,6 +90,10 @@ def _degenerate_tail(text, repeat):
     if n >= 2 * PAIR_RUN and text.endswith(text[n - 2:] * PAIR_RUN):
         return True
     for p in range(MIN_PHRASE, n // repeat + 1):
+        # Necessary condition, and far cheaper than building the slice:
+        # a true repeat has the same character at p and 2p from the end.
+        if text[n - p] != text[n - 2 * p]:
+            continue
         if text.endswith(text[n - p:] * repeat):
             return True
     return False
