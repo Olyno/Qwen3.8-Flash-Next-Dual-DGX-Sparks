@@ -111,13 +111,59 @@ def run(ctx, task, n, temp, tkwargs=None):
     return ptok, ctok, ttft, dec, sps, tps, acc
 
 def max_served_len():
-    """max_model_len reported by /v1/models, or None when unavailable."""
+    """max_model_len from /tokenize (falls back to /v1/models), or None."""
+    try:
+        body = {"model": MODEL, "prompt": "x"}
+        req = urllib.request.Request(BASE + "/tokenize", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            got = json.load(r).get("max_model_len")
+        if got:
+            return int(got)
+    except Exception:
+        pass
     try:
         with urllib.request.urlopen(BASE + "/v1/models", timeout=10) as r:
             data = json.load(r).get("data") or []
         return int(data[0]["max_model_len"]) if data and data[0].get("max_model_len") else None
     except Exception:
         return None
+
+def count_tokens(text):
+    """Token count of `text` from the server, or None when /tokenize is absent."""
+    try:
+        body = {"model": MODEL, "prompt": text}
+        req = urllib.request.Request(BASE + "/tokenize", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return int(json.load(r)["count"])
+    except Exception:
+        return None
+
+def shrink_ctx(c, n_tokens, decode, max_len):
+    """New nominal context for a prompt that tokenized to `n_tokens`: the
+    builders emit ~1.07 tokens per nominal unit, so back off by the overshoot
+    with margin and retry."""
+    if not max_len or n_tokens + decode <= max_len:
+        return c
+    over = n_tokens + decode - max_len
+    return max(1, c - int(over * 1.1) - 16)
+
+def fit_ctx(c, decode, task, max_len):
+    """Build a context for nominal size `c` whose tokens fit `max_len`."""
+    if not max_len:
+        return c, build_ctx(c)
+    ctx = build_ctx(c)
+    for _ in range(4):
+        n = count_tokens(ctx + "\n\n" + task)
+        if n is None:
+            break
+        nxt = shrink_ctx(c, n, decode, max_len)
+        if nxt == c:
+            break
+        c = nxt
+        ctx = build_ctx(c)
+    return c, ctx
 
 def clamp_ctx(ctx, decode, max_len, margin=64):
     """Largest prompt that leaves room for `decode` tokens (and a margin) in
@@ -158,9 +204,15 @@ def main():
           f"{'dec tok/s':>10} {'steps/s':>8} {'tok/step':>8} {'acc%':>6}")
     print("-" * 89)
     for c in contexts:
-        ctx = build_ctx(c)
+        used = None
         for t in temps:
             for name, task in tasks.items():
+                fit, ctx = fit_ctx(c, a.decode, task, limit)
+                if fit != c and used != fit:
+                    print(f"note: context {c} fitted to {fit} "
+                          f"(max_model_len {limit}, decode {a.decode})",
+                          file=sys.stderr)
+                    used = fit
                 p, ct, tt, dec, sps, tps, acc = run(ctx, task, a.decode, t, tkwargs)
                 print(f"{c:>9,} {t:>5.1f} {name:<10} {p:>9,} {ct:>6,} {tt:>9.2f} {dec:>10.1f} "
                       f"{sps:>8.1f} {tps:>8.2f} {acc:>6.1f}", flush=True)

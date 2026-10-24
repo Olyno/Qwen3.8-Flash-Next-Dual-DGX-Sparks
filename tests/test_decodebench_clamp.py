@@ -28,5 +28,18 @@ class ClampCtxTest(unittest.TestCase):
         self.assertEqual(db.clamp_ctx(10000, 100, 5000, margin=0), 4900)
 
 
+class ShrinkCtxTest(unittest.TestCase):
+    def test_no_overshoot_keeps_context(self):
+        self.assertEqual(db.shrink_ctx(1000, 1100, 600, 65536), 1000)
+
+    def test_overshoot_backs_off_with_margin(self):
+        new = db.shrink_ctx(65000, 70000, 600, 65536)
+        self.assertLess(new, 65000)
+        self.assertGreater(new, 50000)
+
+    def test_never_below_one(self):
+        self.assertEqual(db.shrink_ctx(10, 99999, 600, 65536), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
