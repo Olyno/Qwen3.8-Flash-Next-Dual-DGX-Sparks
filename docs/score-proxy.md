@@ -73,6 +73,19 @@ the vLLM seat immediately) and the client gets a well-formed final SSE chunk
 with `finish_reason: "stop"` plus `"x_proxy": {"loop_guard": "cut"}`, then
 `data: [DONE]`. Set `PROXY_LOOP_GUARD=0` to disable.
 
+## Tool-use steering (`PROXY_TOOL_ROUTER=1`)
+
+Agentic nudge: on chat requests that carry a `tools` array, the proxy
+scores whether the last user turn needs a tool (`use_tool` vs `answer`, both
+option orders averaged — the same two-option prefill as `/v1/score`, ~0.5–1 s
+at 1K tokens). Above `PROXY_TOOL_THRESHOLD` (default **0.5**) it either
+appends a fixed system nudge ("call the tool before answering when one
+applies") or, with `PROXY_TOOL_FORCE=1`, sets `tool_choice: "required"`.
+A `tool_choice` the client already sent is never overridden. Without tools,
+below threshold, or on any scoring failure the request is forwarded
+unchanged. Every firing logs `tool steer prob=... force=...` — calibrate the
+threshold from those lines against a labeled sample before trusting it.
+
 ## Middleware triage (2026-10-10)
 
 Research verdicts on the originally planned stage-2 items:

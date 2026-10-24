@@ -28,7 +28,10 @@ PROXY_ESCALATE, PROXY_ESCALATE_THRESHOLD (-0.35),
 PROXY_LOOP_GUARD (1), PROXY_LOOP_GUARD_REPEAT (3),
 PROXY_ROUTER_URL (unset = off), PROXY_ROUTER_MODEL
 (google/embeddinggemma-2), PROXY_ROUTER_THRESHOLD (0.10),
-PROXY_ROUTER_TRIVIAL_MAX_TOKENS (1024), PROXY_ROUTER_TIMEOUT_S (2).
+PROXY_ROUTER_TRIVIAL_MAX_TOKENS (1024), PROXY_ROUTER_TIMEOUT_S (2),
+PROXY_TOOL_ROUTER (unset = off; scores whether a request with tools needs
+one, then nudges), PROXY_TOOL_THRESHOLD (0.5), PROXY_TOOL_FORCE (1 = set
+tool_choice=required instead of the system nudge).
 Stdlib only.
 """
 import http.client
@@ -209,6 +212,75 @@ def last_user_text(messages):
                 return " ".join(p.get("text", "") for p in content
                                 if isinstance(p, dict) and p.get("type") == "text")
     return ""
+
+
+TOOL_NEED_OPTIONS = [
+    {"label": "use_tool",
+     "use_when": "the request needs reading, searching, running, or changing "
+                 "anything outside this conversation"},
+    {"label": "answer",
+     "use_when": "the request can be answered from general knowledge or the "
+                 "conversation alone"},
+]
+TOOL_NUDGE = ("You have tools. When a request can be checked, read, or "
+              "changed with a tool, call the tool before answering. Answer "
+              "from memory only when no tool applies.")
+
+
+class ToolRouter:
+    """Tool-use steering: score whether the last user turn needs a
+    tool, then nudge or force before generation. The score is a two-option
+    prefill (same pattern as /v1/score, both orders averaged); `force` sets
+    tool_choice='required' instead of appending a system nudge. Fail-open:
+    scoring trouble means passthrough. Calibrate the threshold on the logged
+    `tool steer` lines before trusting it."""
+
+    def __init__(self, score_fn, threshold=0.5, force=False):
+        self.score_fn = score_fn        # (model, prefix, labels) -> probs
+        self.threshold = threshold
+        self.force = force
+
+    def needs_tool(self, messages, model):
+        text = last_user_text(messages)[:2000]
+        if not text:
+            return 0.0
+        labels = [o["label"] for o in TOOL_NEED_OPTIONS]
+        try:
+            probs = self.score_fn(model, build_prefix(text, TOOL_NEED_OPTIONS),
+                                  labels)
+            rev = self.score_fn(model, build_prefix(text, list(reversed(
+                TOOL_NEED_OPTIONS))), labels)
+        except Exception:  # fail-open: endpoint down/slow/garbage = passthrough
+            return 0.0
+        # position-bias mitigation (JEV): average the forward and reversed
+        # option orders.
+        probs = [(a + b) / 2 for a, b in zip(probs, rev)]
+        return dict(zip(labels, probs))["use_tool"]
+
+    def apply(self, req, model):
+        """Returns (changed, prob). Mutates req in place."""
+        if not req.get("tools"):
+            return False, 0.0
+        prob = self.needs_tool(req.get("messages") or [], model)
+        if prob < self.threshold:
+            return False, prob
+        if self.force:
+            if req.get("tool_choice"):
+                return False, prob   # client already decided; respect it
+            req["tool_choice"] = "required"
+            return True, prob
+        messages = req.get("messages") or []
+        system = next((m for m in messages
+                       if isinstance(m, dict) and m.get("role") == "system"),
+                      None)
+        if system is not None:
+            if TOOL_NUDGE in (system.get("content") or ""):
+                return False, prob
+            system["content"] = (system.get("content") or "") + "\n\n" + TOOL_NUDGE
+        else:
+            messages.insert(0, {"role": "system", "content": TOOL_NUDGE})
+            req["messages"] = messages
+        return True, prob
 
 
 class Router:
@@ -436,6 +508,14 @@ class Handler(BaseHTTPRequestHandler):
             self.server.keepalive.note_prefix(
                 self.client_address[0], req.get("model"),
                 req.get("messages") or [])
+        steer = self.server.tool_router
+        if steer is not None and req.get("tools"):
+            changed, prob = steer.apply(req, req.get("model"))
+            if changed:
+                body = json.dumps(req).encode()
+            if prob >= steer.threshold:
+                print(f"score proxy: tool steer prob={prob:.3f} "
+                      f"force={steer.force}", file=sys.stderr)
         router = self.server.router
         if router is not None and req.get("route") is not False:
             text = last_user_text(req.get("messages") or [])
@@ -506,7 +586,8 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
                 strip_jitter=False, keepalive_s=0, router_url=None,
                 router_model="google/embeddinggemma-2",
                 router_threshold=0.10, router_max_tokens=1024,
-                router_timeout=2.0):
+                router_timeout=2.0, tool_steer=False, tool_threshold=0.5,
+                tool_force=False):
     u = urllib.parse.urlparse(upstream_url)
     srv = ThreadingHTTPServer(("", port), Handler)
     srv.upstream = (u.hostname, u.port or 80)
@@ -519,6 +600,12 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
     srv.router = (Router(router_url, router_model, router_threshold,
                          router_max_tokens, router_timeout)
                   if router_url else None)
+    srv.tool_router = None
+    if tool_steer:
+        srv.tool_router = ToolRouter(
+            lambda model, prefix, labels: score_order(
+                srv.upstream, model, prefix, labels),
+            threshold=tool_threshold, force=tool_force)
     srv.keepalive = None
     if keepalive_s > 0:
         srv.keepalive = CacheKeepalive(srv, keepalive_s)
@@ -543,7 +630,10 @@ def main():
         os.environ.get("PROXY_ROUTER_MODEL", "google/embeddinggemma-2"),
         float(os.environ.get("PROXY_ROUTER_THRESHOLD", 0.10)),
         int(os.environ.get("PROXY_ROUTER_TRIVIAL_MAX_TOKENS", 1024)),
-        float(os.environ.get("PROXY_ROUTER_TIMEOUT_S", 2)))
+        float(os.environ.get("PROXY_ROUTER_TIMEOUT_S", 2)),
+        os.environ.get("PROXY_TOOL_ROUTER") == "1",
+        float(os.environ.get("PROXY_TOOL_THRESHOLD", 0.5)),
+        os.environ.get("PROXY_TOOL_FORCE") == "1")
     print(f"score proxy on :{srv.server_port} -> "
           f"http://{srv.upstream[0]}:{srv.upstream[1]}")
     srv.serve_forever()
