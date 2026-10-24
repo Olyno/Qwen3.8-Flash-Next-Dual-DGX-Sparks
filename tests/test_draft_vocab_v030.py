@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 REPO = Path(__file__).resolve().parent.parent
-FILES = REPO / "files"
+FILES = REPO / "patches"
 ORIG = FILES / "mtp_v030_patched.py.orig"
 SCRIPT = REPO / "patches" / "patch_mtp_draft_vocab_v030.py"
 

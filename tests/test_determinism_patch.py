@@ -10,7 +10,7 @@ import unittest
 import torch
 
 REPO = Path(__file__).resolve().parent.parent
-FILES = REPO / "files"
+FILES = REPO / "patches"
 PATCH = FILES / "patch_determinism.py"
 QSA_ORIG = FILES / "qsa_ops_patched.py.orig"
 MOE_ORIG = FILES / "determinism" / "orig" / "flashinfer_cutlass_moe.py"
