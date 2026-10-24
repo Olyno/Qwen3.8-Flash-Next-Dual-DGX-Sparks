@@ -27,6 +27,11 @@
 # needed. #58489's persistent-buffer fix shipped in v0.32.0, so the
 # breakable-cudagraph warn-guard came off with it. Remaining PLE pain:
 # prefill TTFT under concurrent decode (prefill-time gather is not hidden).
+# Bound: one blocking host pass per scheduled chunk (4800 tokens x 16 heads,
+# ~77k rows, one small pread each) between a full-stream D2H sync and the
+# first GPU work, so nothing is in flight to overlap; a 64k prefill spends an
+# estimated 1-3 s of its ~29 s TTFT there. Overlapping it needs the ids on the
+# host without that sync first; until then the chunk cap is the guard.
 name: prod
 image: vllm/vllm-openai:v0.32.0@sha256:befccf0e7e4089aa23926bb6f887a85c0d46c2a99e6de5c5ffdf5cb7957c5b34
 v030: true
