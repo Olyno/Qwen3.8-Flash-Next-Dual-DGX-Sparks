@@ -39,7 +39,7 @@ MODEL = os.environ.get("BENCH_MODEL", "Qwen3.8-Flash-Next-NVFP4")
 DRAFTS = "vllm:spec_decode_num_drafts_total"
 DRAFT_TOK = "vllm:spec_decode_num_draft_tokens_total"
 ACCEPTED = "vllm:spec_decode_num_accepted_tokens_total"
-FILLER = ("Entry {tag}{i:06d}: the quarterly logistics audit recorded a routine "
+FILLER = ("Entry {i:06d}: the quarterly logistics audit recorded a routine "
           "variance in the northbound depot inventory.\n")
 TASKS = {
  "prose":   "Write a flowing, continuous essay about the history of maritime "
@@ -66,8 +66,12 @@ def post(path, payload, timeout=3600):
     return urllib.request.urlopen(req, timeout=timeout)
 
 def build_ctx(t, salt=""):
-    tag = f"{salt}-" if salt else ""
-    return "".join(FILLER.format(tag=tag, i=i) for i in range(max(1, int(t / 25))))
+    """Unique first line (salt) + the shared filler body. The nonce changes
+    no more than a few tokens, so the nominal size keeps its meaning, while
+    every request still starts with a distinct token prefix (no APC hits)."""
+    head = f"Audit nonce {salt}.\n" if salt else ""
+    return head + "".join(FILLER.format(i=i)
+                          for i in range(max(1, int(t / 25))))
 
 def snapshot():
     try:
