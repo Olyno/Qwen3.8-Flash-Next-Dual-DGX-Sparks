@@ -40,6 +40,7 @@ moving the same way, not on that one row.
 | key | decode Δ ms/step (1k / 32k / 64k) | prefill Δ (1k / 32k / 64k) | verdict |
 |-----|-----------------------------------|----------------------------|---------|
 | `verify_width_adaptive` | −3.1 to −4.1% in every bucket | neutral at 32k/64k | ON |
+| `fp8_draft_head` | −9.3..−10.1 / −4.9..−9.3 / −3.1..−5.7% (vs the 0.72 record) | TTFT rows −30.8 / −7.5 / +0.4%, not attributable | ON (KV 223K, 3.40×) |
 | `mtp_skip_prefix` | +6.9 to +9.1% in every bucket | neutral/positive, noisy | OFF (parity also failed) |
 | `copy_proposer` | +0.3 to +4.1% in every bucket | +2.3% at 32k | OFF |
 | `gdn_direct_out` | +13.3 / +6.4 / +3.2% | +3.4 / +2.1 / −0.7% | OFF |

@@ -45,11 +45,12 @@ yarn_factor: 4.0
 # startup free-memory check on a desktop-equipped Spark).
 # 0.75 leaves the host ~7.5 GiB; under load the driver fails allocations
 # (NV_ERR_NO_MEMORY) and memwatch stops the container. 0.72 boots with the
-# default launch gate and yields a 270,209-token KV pool (4.12x at 65,536
-# tokens per request, covering the 4-sequence target with slack). A foreign
-# job that starts after the server can still exhaust the pool: one such run
-# ended in the kernel OOM path (NV_ERR_NO_MEMORY, global_oom) and a reboot.
-# The launch check covers only start-up; keep the device exclusive end to end.
+# default launch gate; the stock draft head yields 270K-333K KV tokens and
+# fp8_draft_head on yields 222,822 (3.40x at 65,536 per request), so one
+# full-length request queues at the smaller pool. A foreign job that starts
+# after the server can still exhaust the pool: one such run ended in the
+# kernel OOM path (NV_ERR_NO_MEMORY, global_oom) and a reboot. The launch
+# check covers only start-up; keep the device exclusive end to end.
 gpu_memory_utilization: 0.72
 # max_num_seqs: derived from NODES (4 at 1 node, 8 at 2).
 max_num_batched_tokens: 8192
@@ -117,21 +118,23 @@ fp8_dense: false
 # vllm#60027) ships in the image; the overlay was dropped with the v0.32
 # migration. A plan miss keeps the standard linear path.
 # fp8_draft_head: FP8 (E4M3/row-scale) copy of the drafter's lm_head rows
-# (~2x less draft-head bandwidth; composes with mtp_draft_vocab).
-# Disabled: on the GB10 bench host the attach itself is fully accounted
-# (147 MiB transient, 115.3 MiB persistent for the 47,149-row slice, torch
-# reserved unchanged), yet enabling it reproducibly crashes KV sizing with
-# -3.5..-4.5 GiB where identical stock boots on the same host draw
-# +4.7/+5.1/+5.3 GiB (0/4 vs 3/3 same night, same host, interleaved). The
-# ~9 GiB delta lands outside torch accounting, in the host-memory release at
-# end of weight load (stock boots free ~19 GiB of MemAvailable there, fp8
-# boots only ~3-6 GiB); mechanism unidentified. Keep off until root-caused.
+# (~2x less draft-head bandwidth; composes with mtp_draft_vocab). Lossless:
+# the target verifies every drafted token, so only drafting cost moves.
+# Boots healthy on the v0.32 lane with the w8a8 kernel (115.3 MiB persistent,
+# 147 MiB transient at attach). The boot still ends with roughly 1-2.5 GiB
+# more non-torch memory than a stock boot, so the KV pool shrinks to 222,822
+# tokens (3.40x at 65,536 per request) against 270K-333K stock; the fourth
+# full-length request queues rather than failing. Gate A/B, two runs, decode:
+# -9.3..-10.1% at 1k, -4.9..-9.3% at 32k, -3.1..-5.7% at 64k ms/step;
+# acceptance 61.9-63.5% vs 64.6% stock. TTFT-derived prefill rows also moved
+# (-30.8 / -7.5 / +0.4%) but prefill cannot use the draft head, so those are
+# recorded as observed, not attributed. The older -3.5..-4.5 GiB KV crash
+# does not reproduce on this lane.
 # An NVFP4 copy of the same head was assessed and is not implemented: its
 # block-scale layout would have to be synthesized at load, N needs a %32 pad,
 # and it saves only ~50 MiB per draft call over FP8 (at most ~1.4% of an
-# engine step, under the 2% floor). It is also downstream of the boot
-# regression above, since the FP8 sibling is the one that cannot ship yet.
-fp8_draft_head: false
+# engine step, under the 2% floor).
+fp8_draft_head: true
 # SketchSSM (arXiv 2609.33051) and SuffixReplay (arXiv 2609.33477) assessed,
 # both SKIPPED: approximate methods that fail the quality bar by design
 # (SketchSSM's own table shows −2.4 pts on LiveCodeBench at G=8; SuffixReplay
