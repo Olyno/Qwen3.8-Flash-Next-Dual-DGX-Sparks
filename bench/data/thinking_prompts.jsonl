@@ -1,0 +1,12 @@
+{"id": "bool_madrid", "kind": "boolean", "question": "Is Madrid the capital of Spain? Answer yes or no."}
+{"id": "bool_prime_91", "kind": "boolean", "question": "Is 91 a prime number? Answer yes or no."}
+{"id": "bool_whale", "kind": "boolean", "question": "Is a whale a mammal? Answer yes or no."}
+{"id": "bool_everest", "kind": "boolean", "question": "Is Mount Everest the highest mountain above sea level? Answer yes or no."}
+{"id": "mc_fastest_land", "kind": "multiple-choice", "question": "Which animal is the fastest on land? Candidates: (A) lion (B) cheetah (C) horse (D) greyhound. Answer with the letter."}
+{"id": "mc_gold_symbol", "kind": "multiple-choice", "question": "What is the chemical symbol for gold? Candidates: (A) Ag (B) Au (C) Gd (D) Go. Answer with the letter."}
+{"id": "mc_red_planet", "kind": "multiple-choice", "question": "Which planet is known as the Red Planet? Candidates: (A) Venus (B) Mars (C) Jupiter (D) Mercury. Answer with the letter."}
+{"id": "mc_romeo_author", "kind": "multiple-choice", "question": "Who wrote the play Romeo and Juliet? Candidates: (A) Charles Dickens (B) William Shakespeare (C) Jane Austen (D) Mark Twain. Answer with the letter."}
+{"id": "open_sky_blue", "kind": "open-ended", "question": "Why does the sky appear blue during the day?"}
+{"id": "open_boil_altitude", "kind": "open-ended", "question": "Why does water boil at a lower temperature at high altitude?"}
+{"id": "open_photosynthesis", "kind": "open-ended", "question": "Explain in two sentences how photosynthesis converts light into chemical energy."}
+{"id": "open_https_load", "kind": "open-ended", "question": "What happens, step by step, when a browser loads a web page over HTTPS?"}
