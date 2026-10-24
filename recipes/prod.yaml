@@ -44,8 +44,9 @@ yarn_factor: 4.0
 # and the budget must cover ~76 GiB on-GPU weights + KV + MTP (0.80 fails the
 # startup free-memory check on a desktop-equipped Spark).
 # 0.75 leaves the host ~7.5 GiB; under load the driver fails allocations
-# (NV_ERR_NO_MEMORY) and memwatch stops the container. 0.72 keeps ~370K
-# tokens of KV (prod needs 262K) and ~11 GiB of host headroom.
+# (NV_ERR_NO_MEMORY) and memwatch stops the container. 0.72 boots with the
+# default launch gate and yields a 270,209-token KV pool (4.12x at 65,536
+# tokens per request, covering the 4-sequence target with slack).
 gpu_memory_utilization: 0.72
 # max_num_seqs: derived from NODES (4 at 1 node, 8 at 2).
 max_num_batched_tokens: 8192
