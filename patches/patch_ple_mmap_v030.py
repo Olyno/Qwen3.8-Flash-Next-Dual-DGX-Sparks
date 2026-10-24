@@ -721,6 +721,23 @@ EDITS_COMMON = [
         "            _lookup_ple_embedding_from_pinned_kernel[(flat_ids.numel(),)](\n"
         "                self._uva_weight,\n",
     ),
+    (
+        "        prefetch_stream = self._prefetch_stream\n"
+        "        if prefetch_stream is None:\n"
+        "            raise RuntimeError(\"pinned PLE finalize requires a prior "
+        "start_prefetch\")\n"
+        "        torch.cuda.current_stream().wait_stream(prefetch_stream)\n",
+        "        prefetch_stream = self._prefetch_stream\n"
+        "        if prefetch_stream is None:\n"
+        "            raise RuntimeError(\"pinned PLE finalize requires a prior "
+        "start_prefetch\")\n"
+        "        if not (self._staged_lookup\n"
+        "                and torch.cuda.is_current_stream_capturing()):\n"
+        "            # Under capture nothing was enqueued on the side stream (the\n"
+        "            # staged path returns early); waiting there would bind the\n"
+        "            # graph to an uncaptured stream and invalidate the capture.\n"
+        "            torch.cuda.current_stream().wait_stream(prefetch_stream)\n",
+    ),
 ]
 
 STAGED_NVIDIA_HOOK = '''_STAGED_LAYERS: list = []
