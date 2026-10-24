@@ -166,6 +166,9 @@ chunk_equal_split: false
 # spec_trace: measurement-only JSONL of per-round draft alloc/accepted/ms
 # (patches/patch_spec_trace.py). Off by default; path via VLLM_SPEC_TRACE.
 spec_trace: false
+# copy_proposer: reuse the request's own suffix match as the draft chain
+# (patches/patch_copy_proposer.py). Lossless: target verification is exact.
+copy_proposer: false
 # Adaptive speculative-verify width: per-step draft width (1/2/config k) from the acceptance EMA.
 # Lossless: fewer/extra verify rows only; target verification unchanged.
 verify_width_adaptive: false

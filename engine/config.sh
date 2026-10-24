@@ -193,6 +193,14 @@ CHUNK_EQUAL_SPLIT="${CHUNK_EQUAL_SPLIT:-false}"
 # draft/verify round (scheduled drafts, accepted, wall ms). Off = no file,
 # no timings, no syncs. VLLM_SPEC_TRACE sets the in-container output path.
 SPEC_TRACE="${SPEC_TRACE:-false}"
+# Copy-based draft proposer (v0.32 lane only,
+# patches/patch_copy_proposer.py): each draft step scans the request's own
+# committed tokens for the rightmost longest suffix match (8..32 tokens) and
+# proposes that match's continuation in place of the MTP draft chain when a
+# match exists. Lossless: target verification is exact, so arbitrary drafts
+# only change the acceptance rate. Uses the stock n-gram kernels; host-side
+# dispatch only, no device syncs.
+COPY_PROPOSER="${COPY_PROPOSER:-false}"
 # Adaptive speculative-verify width (v0.32 lane only,
 # patches/patch_verify_width.py): the scheduler picks the per-step draft
 # verify width (1 / 2 / config k) from a rolling acceptance EMA, with a
@@ -208,6 +216,9 @@ VERIFY_WIDTH_ADAPTIVE="${VERIFY_WIDTH_ADAPTIVE:-false}"
 [[ "$CHUNK_EQUAL_SPLIT" != "true" || "$V030" == "true" ]] || err "chunk_equal_split is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$SPEC_TRACE" != "true" || "$V030" == "true" ]] || err "spec_trace is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$SPEC_TRACE" != "true" || "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]] || err "spec_trace needs speculative decoding (mtp_num_speculative_tokens > 0)."
+[[ "$COPY_PROPOSER" != "true" || "$V030" == "true" ]] || err "copy_proposer is only supported on the vLLM 0.32 lane (v030: true)."
+[[ "$COPY_PROPOSER" != "true" || "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]] || err "copy_proposer needs speculative decoding (mtp_num_speculative_tokens > 0)."
+[[ "$COPY_PROPOSER" != "true" || "$MTP_ADAPTIVE_DEPTH" != "true" ]] || err "copy_proposer and mtp_adaptive_depth both overlay v1/worker/gpu/model_runner.py - pick one."
 [[ "$VERIFY_WIDTH_ADAPTIVE" != "true" || "$V030" == "true" ]] || err "verify_width_adaptive is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$VERIFY_WIDTH_ADAPTIVE" != "true" || "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]] || err "verify_width_adaptive needs speculative decoding (mtp_num_speculative_tokens > 0)."
 [[ "$VERIFY_WIDTH_ADAPTIVE" != "true" || "$MTP_ADAPTIVE_DEPTH" != "true" ]] || err "verify_width_adaptive and mtp_adaptive_depth both target the speculative verify width; mtp_adaptive_depth is inert on this lane (its per-step truncation never reaches the scheduler's published width), so enable verify_width_adaptive instead."

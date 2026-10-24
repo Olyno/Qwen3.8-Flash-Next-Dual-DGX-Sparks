@@ -423,9 +423,43 @@ if $DO_LAUNCH && [[ "$V030" == "true" && "$SPEC_TRACE" == "true" ]]; then
                        "$ST/orig/model_runner.py"
     python3 "$SCRIPT_DIR/patches/patch_spec_trace.py" "$ST" \
         || err "patch_spec_trace.py failed"
-    add_overlay "$ST/model_runner_v030.py" \
-                "$VLLM_PKG/v1/worker/gpu/model_runner.py"
+    # With COPY_PROPOSER the copy patch chains off this output and mounts the
+    # chained file itself (two overlays on one container path trip
+    # add_overlay's conflict guard).
+    if [[ "$COPY_PROPOSER" != "true" ]]; then
+        add_overlay "$ST/model_runner_v030.py" \
+                    "$VLLM_PKG/v1/worker/gpu/model_runner.py"
+    fi
     OVERLAY_ENV+=("-e VLLM_SPEC_TRACE=${VLLM_SPEC_TRACE:-/tmp/vllm-spec-trace.jsonl}")
+fi
+
+if $DO_LAUNCH && [[ "$V030" == "true" && "$COPY_PROPOSER" == "true" ]]; then
+    info "=== Step 4e: copy-based draft proposer (vLLM 0.32) ==="
+    # patches/patch_copy_proposer.py: the stock n-gram scan/finalize kernels
+    # (imported from the ngram_gpu speculator module, not overlaid) turn each
+    # request's rightmost longest suffix match into its next draft chain when
+    # one exists; otherwise the MTP drafts stay. Host-side dispatch, eager,
+    # no device syncs. Target verification is exact, so outputs are unchanged.
+    [[ "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]] \
+        || err "copy_proposer needs speculative decoding (mtp_num_speculative_tokens > 0)."
+    [[ "$MTP_ADAPTIVE_DEPTH" != "true" ]] \
+        || err "copy_proposer and mtp_adaptive_depth both overlay v1/worker/gpu/model_runner.py - pick one."
+    CP="$SCRIPT_DIR/patches/copy_proposer"
+    mkdir -p "$CP/orig"
+    if [[ "$SPEC_TRACE" == "true" ]]; then
+        # Chain the trace overlay: its output is this patch's input. Drop any
+        # stamp so a later run without spec_trace re-extracts stock.
+        cp "$ST/model_runner_v030.py" "$CP/orig/model_runner.py"
+        rm -f "$CP/orig/model_runner.py.image-id"
+    else
+        extract_from_image "$VLLM_PKG/v1/worker/gpu/model_runner.py" \
+                           "$CP/orig/model_runner.py"
+    fi
+    python3 "$SCRIPT_DIR/patches/patch_copy_proposer.py" "$CP" \
+        || err "patch_copy_proposer.py failed"
+    add_overlay "$CP/model_runner_v030.py" \
+                "$VLLM_PKG/v1/worker/gpu/model_runner.py"
+    OVERLAY_ENV+=("-e VLLM_COPY_PROPOSER=1")
 fi
 
 if $DO_LAUNCH && [[ "$V030" == "true" && "$VERIFY_WIDTH_ADAPTIVE" == "true" ]]; then
