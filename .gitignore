@@ -85,6 +85,7 @@ patches/copy_proposer/
 patches/verify_width/
 patches/free_block_sort/orig/
 patches/chunk_equal_split/
+patches/gdn_direct_out/
 patches/mtp_prefix_skip/orig/
 patches/mtp_prefix_skip/*_v030.py
 bench/data/gate_perf.json

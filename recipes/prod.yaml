@@ -172,6 +172,9 @@ spec_trace: false
 # copy_proposer: reuse the request's own suffix match as the draft chain
 # (patches/patch_copy_proposer.py). Lossless: target verification is exact.
 copy_proposer: false
+# GDN prefill direct output: pass the destination buffer as the flashinfer
+# kernel's output= instead of allocating + copying (same kernel, bit-parity, prefill only).
+gdn_direct_out: false
 # Adaptive speculative-verify width: per-step draft width (1/2/config k) from the acceptance EMA.
 # Lossless: fewer/extra verify rows only; target verification unchanged.
 verify_width_adaptive: false

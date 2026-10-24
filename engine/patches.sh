@@ -277,6 +277,25 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         add_overlay "$CES/scheduler_v032.py" "$VLLM_PKG/v1/core/sched/scheduler.py"
         OVERLAY_ENV+=("-e VLLM_CHUNK_EQUAL_SPLIT=1")
     fi
+    if [[ "$GDN_DIRECT_OUT" == "true" ]]; then
+        info "=== Step 4c: GDN prefill direct output (vLLM 0.32) ==="
+        # patches/patch_gdn_direct_out.py: the stock flashinfer GDN prefill
+        # call omits its output= parameter, so the kernel allocates a
+        # [tokens, v_heads, head_dim] tensor that is then copied into the
+        # layer's preallocated core_attn_out. On prefill-only steps the
+        # overlay passes that destination slice as output= and skips both
+        # copies. Same kernel and inputs, different destination -> bit
+        # parity expected; ineligible buffers keep the stock path.
+        GD="$SCRIPT_DIR/patches/gdn_direct_out"
+        mkdir -p "$GD/orig"
+        extract_from_image "$VLLM_PKG/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py" \
+                           "$GD/orig/qwen_gdn_linear_attn.py"
+        python3 "$SCRIPT_DIR/patches/patch_gdn_direct_out.py" "$GD" \
+            || err "patch_gdn_direct_out.py failed"
+        add_overlay "$GD/qwen_gdn_linear_attn_v030.py" \
+                    "$VLLM_PKG/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py"
+        OVERLAY_ENV+=("-e VLLM_GDN_DIRECT_OUT=1")
+    fi
     if [[ "$NVFP4_ACT_HOOKS" == "true" ]]; then
         info "=== Step 4c: NVFP4 activation channel-stat hooks (debug) ==="
         # Debug overlay (patches/patch_nvfp4_act_hooks.py): per-channel absmax

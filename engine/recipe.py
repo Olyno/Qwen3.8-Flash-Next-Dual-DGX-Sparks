@@ -13,7 +13,8 @@ BOOL_KEYS = {"YARN_ENABLE","ENABLE_EXPERT_PARALLEL","FP8_DENSE","PLE_OFFLOAD",
              "QSA_FUSED_DRAFT","QSA_ROPE_CLAMP","LOAD_DROP_CACHE",
              "MTP_ADAPTIVE_DEPTH", "MTP_ADAPTIVE_DEBUG", "FREE_BLOCK_SORT",
              "MTP_SKIP_PREFIX", "CHUNK_EQUAL_SPLIT", "SPEC_TRACE",
-             "COPY_PROPOSER", "VERIFY_WIDTH_ADAPTIVE", "PLE_STAGED_LOOKUP"}
+             "COPY_PROPOSER", "VERIFY_WIDTH_ADAPTIVE", "PLE_STAGED_LOOKUP",
+             "GDN_DIRECT_OUT"}
 
 def die(msg): print(f"recipe error: {msg}", file=sys.stderr); sys.exit(2)
 

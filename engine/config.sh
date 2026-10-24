@@ -213,6 +213,12 @@ VERIFY_WIDTH_ADAPTIVE="${VERIFY_WIDTH_ADAPTIVE:-false}"
 # file-backed mmap (UVM faulting, and wrong bytes under reclaim pressure).
 # Off = the device kernel reads the mapping over ATS, byte-identical stock.
 PLE_STAGED_LOOKUP="${PLE_STAGED_LOOKUP:-false}"
+# Direct GDN prefill output (v0.32 lane only,
+# patches/patch_gdn_direct_out.py): pass core_attn_out[:num_actual_tokens]
+# to the same flashinfer prefill kernel as its output= buffer and skip the
+# stock allocate+copy. Prefill only; same kernel and inputs, so bit parity is
+# expected. Ineligible destinations fall back to the stock path.
+GDN_DIRECT_OUT="${GDN_DIRECT_OUT:-false}"
 [[ "$FP8_DRAFT_HEAD" != "true" || "$V030" == "true" ]] || err "fp8_draft_head is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$QSA_FUSED_DRAFT" != "true" || "$V030" == "true" ]] || err "qsa_fused_draft is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$QSA_ROPE_CLAMP" != "true" || "$V030" == "true" ]] || err "qsa_rope_clamp is only supported on the vLLM 0.32 lane (v030: true)."
@@ -220,6 +226,7 @@ PLE_STAGED_LOOKUP="${PLE_STAGED_LOOKUP:-false}"
 [[ "$NVFP4_ACT_HOOKS" != "true" || "$V030" == "true" ]] || err "nvfp4_act_hooks is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$FREE_BLOCK_SORT" != "true" || "$V030" == "true" ]] || err "free_block_sort is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$CHUNK_EQUAL_SPLIT" != "true" || "$V030" == "true" ]] || err "chunk_equal_split is only supported on the vLLM 0.32 lane (v030: true)."
+[[ "$GDN_DIRECT_OUT" != "true" || "$V030" == "true" ]] || err "gdn_direct_out is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$SPEC_TRACE" != "true" || "$V030" == "true" ]] || err "spec_trace is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$SPEC_TRACE" != "true" || "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]] || err "spec_trace needs speculative decoding (mtp_num_speculative_tokens > 0)."
 [[ "$COPY_PROPOSER" != "true" || "$V030" == "true" ]] || err "copy_proposer is only supported on the vLLM 0.32 lane (v030: true)."
