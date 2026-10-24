@@ -39,6 +39,7 @@ patches/hf_quant_config_patched.json
 # Both sides are regenerated on every launch; the generators in patches/patch_*.py
 # are the source of truth.
 *.orig
+*.image-id
 patches/mtp_patched.py
 patches/modelopt_patched.py
 patches/qsa_ops_patched.py

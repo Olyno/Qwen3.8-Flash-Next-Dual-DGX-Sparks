@@ -25,12 +25,19 @@ add_overlay() {          # add_overlay <host file> <container path>
     OVERLAY_FILES+=("$1|$2")
 }
 extract_from_image() {   # extract_from_image <container path> <host dest>
-    [[ -f "$2" ]] && return 0
+    # The cache is keyed by image id: a stale extraction from a previous image
+    # must never be patched and mounted over the new one.
+    local stamp="$2.image-id" img_id=""
+    img_id=$(docker image inspect "$IMAGE" --format '{{.Id}}' 2>/dev/null || true)
+    if [[ -f "$2" && -n "$img_id" && "$(cat "$stamp" 2>/dev/null)" == "$img_id" ]]; then
+        return 0
+    fi
     info "  Extracting $(basename "$1") from image..."
     local c; c=$(docker create "$IMAGE" /bin/true)
     docker cp "$c:$1" "$2" >/dev/null
     docker rm "$c" >/dev/null 2>&1
     [[ -f "$2" ]] || err "Failed to extract $1 from image."
+    [[ -n "$img_id" ]] && printf '%s' "$img_id" > "$stamp"
 }
 if $DO_LAUNCH && [[ "$FP8_DENSE" == "true" && "$V030" != "true" ]]; then
     info "=== Step 4c: FP8-dense overlay ==="
