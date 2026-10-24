@@ -188,6 +188,11 @@ FREE_BLOCK_SORT="${FREE_BLOCK_SORT:-false}"
 # 2500+2500, not 4800+200. Same cap and same step count; the tail step is no
 # longer near-empty. Idea credit: Niko1221/Strata (MIT), chunk policy #41.
 CHUNK_EQUAL_SPLIT="${CHUNK_EQUAL_SPLIT:-false}"
+# Speculative-decode round trace (v0.32 lane only,
+# patches/patch_spec_trace.py): measurement-only JSONL, one line per
+# draft/verify round (scheduled drafts, accepted, wall ms). Off = no file,
+# no timings, no syncs. VLLM_SPEC_TRACE sets the in-container output path.
+SPEC_TRACE="${SPEC_TRACE:-false}"
 [[ "$FP8_DRAFT_HEAD" != "true" || "$V030" == "true" ]] || err "fp8_draft_head is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$QSA_FUSED_DRAFT" != "true" || "$V030" == "true" ]] || err "qsa_fused_draft is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$QSA_ROPE_CLAMP" != "true" || "$V030" == "true" ]] || err "qsa_rope_clamp is only supported on the vLLM 0.32 lane (v030: true)."
@@ -195,6 +200,8 @@ CHUNK_EQUAL_SPLIT="${CHUNK_EQUAL_SPLIT:-false}"
 [[ "$NVFP4_ACT_HOOKS" != "true" || "$V030" == "true" ]] || err "nvfp4_act_hooks is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$FREE_BLOCK_SORT" != "true" || "$V030" == "true" ]] || err "free_block_sort is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$CHUNK_EQUAL_SPLIT" != "true" || "$V030" == "true" ]] || err "chunk_equal_split is only supported on the vLLM 0.32 lane (v030: true)."
+[[ "$SPEC_TRACE" != "true" || "$V030" == "true" ]] || err "spec_trace is only supported on the vLLM 0.32 lane (v030: true)."
+[[ "$SPEC_TRACE" != "true" || "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]] || err "spec_trace needs speculative decoding (mtp_num_speculative_tokens > 0)."
 [[ "$MTP_ADAPTIVE_DEPTH" != "true" || "$V030" == "true" ]] || err "mtp_adaptive_depth is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$MTP_SKIP_PREFIX" != "true" || "$V030" == "true" ]] || err "mtp_skip_prefix is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$MTP_SKIP_PREFIX" != "true" || "${FP8_DENSE:-false}" != "true" ]] || err "mtp_skip_prefix and fp8_dense both overlay qwen4_exp/nvidia/mtp.py - pick one."

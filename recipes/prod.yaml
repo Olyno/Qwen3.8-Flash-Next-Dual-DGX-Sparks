@@ -163,6 +163,9 @@ free_block_sort: true
 # verification pending (bench/longctx.py TTFT at 2+ concurrent prompts, plus a
 # scheduler log check that no chunk lands near the 200-row stub size).
 chunk_equal_split: false
+# spec_trace: measurement-only JSONL of per-round draft alloc/accepted/ms
+# (patches/patch_spec_trace.py). Off by default; path via VLLM_SPEC_TRACE.
+spec_trace: false
 require_idle_gpu: true
 evict_page_cache: true
 nfs_share: false

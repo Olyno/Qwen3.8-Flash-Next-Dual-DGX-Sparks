@@ -406,6 +406,28 @@ if $DO_LAUNCH && [[ "$V030" == "true" && "$MTP_ADAPTIVE_DEPTH" == "true" ]]; the
     [[ "$MTP_ADAPTIVE_DEBUG" == "true" ]] && OVERLAY_ENV+=("-e VLLM_MTP_ADAPTIVE_DEBUG=1")
 fi
 
+if $DO_LAUNCH && [[ "$V030" == "true" && "$SPEC_TRACE" == "true" ]]; then
+    info "=== Step 4e: speculative-decode round trace (vLLM 0.32) ==="
+    # Measurement-only overlay (patches/patch_spec_trace.py): appends one
+    # JSONL line per draft/verify round (scheduled draft positions, accepted,
+    # wall ms) host-side at the end of GPUModelRunner.sample_tokens. Off = no
+    # file, no timings, no syncs. The container writes to VLLM_SPEC_TRACE
+    # (default /tmp/vllm-spec-trace.jsonl); docker cp it out afterwards.
+    [[ "$MTP_NUM_SPECULATIVE_TOKENS" -gt 0 ]] \
+        || err "spec_trace needs speculative decoding (mtp_num_speculative_tokens > 0)."
+    [[ "$MTP_ADAPTIVE_DEPTH" != "true" ]] \
+        || err "spec_trace and mtp_adaptive_depth both overlay v1/worker/gpu/model_runner.py - pick one."
+    ST="$SCRIPT_DIR/patches/spec_trace"
+    mkdir -p "$ST/orig"
+    extract_from_image "$VLLM_PKG/v1/worker/gpu/model_runner.py" \
+                       "$ST/orig/model_runner.py"
+    python3 "$SCRIPT_DIR/patches/patch_spec_trace.py" "$ST" \
+        || err "patch_spec_trace.py failed"
+    add_overlay "$ST/model_runner_v030.py" \
+                "$VLLM_PKG/v1/worker/gpu/model_runner.py"
+    OVERLAY_ENV+=("-e VLLM_SPEC_TRACE=${VLLM_SPEC_TRACE:-/tmp/vllm-spec-trace.jsonl}")
+fi
+
 # ---------------------------------------------------------------------------
 # 4e. FP8 KV cache. The stock QSA kernels hard-refuse anything but BF16 KV
 #     (supported_kv_cache_dtypes = ["auto","bfloat16"]); this teaches them to
