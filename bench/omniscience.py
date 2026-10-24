@@ -18,6 +18,7 @@ Resumable: question_ids already present in --out are skipped on both passes.
 import argparse
 import csv
 import json
+import re
 import sys
 import time
 import urllib.request
@@ -65,8 +66,11 @@ def chat(url, model, messages, max_tokens, seed=None):
 
 
 def classify(text):
+    # Word boundaries: a bare substring test grades "INCORRECT" as CORRECT,
+    # which made the judge unable to emit the label it most needs to emit.
+    upper = text.upper()
     for label in LABELS:
-        if label in text.upper():
+        if re.search(rf"\b{label}\b", upper):
             return label
     return "NOT_ATTEMPTED"  # ponytail: unparseable judge output ≈ no grade; ~0 in practice, revisit if it skews
 
