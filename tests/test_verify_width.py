@@ -379,13 +379,14 @@ class PatcherSource(unittest.TestCase):
         )
         self.assertIn("patches/verify_width/", (REPO / ".gitignore").read_text())
 
-    def test_recipe_key_defaults_off(self):
+    def test_recipe_key_matches_the_measured_default(self):
         out = subprocess.run(
             [sys.executable, str(REPO / "engine" / "recipe.py"),
              str(REPO / "recipes"), "prod"],
             capture_output=True, text=True, check=True,
         ).stdout
-        self.assertIn("export VERIFY_WIDTH_ADAPTIVE='false'", out)
+        # enabled after the gate A/B (decode -3.1..-4.1% ms/step)
+        self.assertIn("export VERIFY_WIDTH_ADAPTIVE='true'", out)
         yaml = (REPO / "recipes" / "prod.yaml").read_text()
         self.assertIn("verify_width_adaptive: false", yaml)
         self.assertIn("Lossless:", yaml)
