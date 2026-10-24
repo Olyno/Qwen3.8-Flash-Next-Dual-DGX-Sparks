@@ -122,6 +122,11 @@ fp8_dense: false
 # ~9 GiB delta lands outside torch accounting, in the host-memory release at
 # end of weight load (stock boots free ~19 GiB of MemAvailable there, fp8
 # boots only ~3-6 GiB); mechanism unidentified. Keep off until root-caused.
+# An NVFP4 copy of the same head was assessed and is not implemented: its
+# block-scale layout would have to be synthesized at load, N needs a %32 pad,
+# and it saves only ~50 MiB per draft call over FP8 (at most ~1.4% of an
+# engine step, under the 2% floor). It is also downstream of the boot
+# regression above, since the FP8 sibling is the one that cannot ship yet.
 fp8_draft_head: false
 # SketchSSM (arXiv 2609.33051) and SuffixReplay (arXiv 2609.33477) assessed,
 # both SKIPPED: approximate methods that fail the quality bar by design
