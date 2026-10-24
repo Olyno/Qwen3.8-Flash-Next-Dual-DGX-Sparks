@@ -23,10 +23,12 @@ patches/v030_ple.
 
 VLLM_PLE_MMAP_DIR  directory for the persistent tables (unset = pinned host)
 VLLM_PLE_MMAP_ADVICE madvise advice for the mapping (default 1 = MADV_RANDOM).
-    Nonzero also arms the unified-memory page-cache hygiene set: POSIX_FADV_RANDOM
-    on a dedicated read fd for the table, taken before any gather read, and a
-    MADV_POPULATE_READ pre-fault of an already-complete (ready) mapping so the
-    first serve starts deterministic. 0 disables the whole set (kill-switch).
+    Nonzero also arms the read-side hygiene set: POSIX_FADV_RANDOM on a
+    dedicated read fd for the table, taken before any gather read. 0 disables
+    the whole set (kill-switch). A reused table is NOT pre-faulted at boot:
+    with the page cache evicted, a full-table populate re-reads ~48 GiB from
+    disk and stalls the boot for tens of minutes, which defeats the reuse
+    path; rows fault in on demand instead (decode measured not fault-bound).
     Idea credit: NVIDIA/flare-local-inference (Apache-2.0), commit 5dd6769
     ignition/preparation/host_memory.py (readahead probe: a 256 MiB read under
     default advice retained 8 MiB, under RANDOM 0); idea-level, own implementation.
@@ -225,8 +227,6 @@ def _lookup_ple_rows_from_host_addr_kernel(
 
 _PLE_MMAP_FORMAT = "ple-mmap-v1"
 
-_MADV_POPULATE_READ = 23  # linux; EINVAL on <5.14 kernels is logged, not fatal
-
 
 def _ple_advice_value() -> int:
     """VLLM_PLE_MMAP_ADVICE: madvise advice number; 0 disables all hygiene."""
@@ -329,16 +329,6 @@ def _ple_mmap_open(
         length = raw.data_ptr() + nbytes - start
         rc = libc.madvise(ctypes.c_void_p(start), ctypes.c_size_t(length), advice)
         logger.info("PLE mmap %s: madvise(%d) rc=%d", path, advice, rc)
-        if ready:
-            # Deterministic first touch: pre-fault a reused table now.
-            # Decode measured not fault-bound, so this is predictability,
-            # not throughput. Skipped on a fresh table -- the loader writes
-            # every page shortly after anyway.
-            rc = libc.madvise(
-                ctypes.c_void_p(start), ctypes.c_size_t(length),
-                _MADV_POPULATE_READ,
-            )
-            logger.info("PLE mmap %s: MADV_POPULATE_READ rc=%d", path, rc)
     return raw.view(dtype).view(*shape), ready, read_fd
 
 

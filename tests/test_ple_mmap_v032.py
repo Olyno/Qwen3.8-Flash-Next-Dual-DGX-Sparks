@@ -47,9 +47,11 @@ class PleMmapV032(unittest.TestCase):
         self.assertIn("def commit_mmap_table", common)
         self.assertIn("_lookup_ple_rows_from_host_addr_kernel", common)
         self.assertIn("file-backed table", common)
-        # unified-memory hygiene set on the VLLM_PLE_MMAP_ADVICE switch
+        # unified-memory hygiene set on the VLLM_PLE_MMAP_ADVICE switch; a
+        # reused table is deliberately NOT pre-faulted at boot (a full-table
+        # populate re-reads ~48 GiB and stalls restarts)
         self.assertIn("os.POSIX_FADV_RANDOM", common)
-        self.assertIn("MADV_POPULATE_READ", common)
+        self.assertNotIn("MADV_POPULATE_READ", common)
         self.assertIn("self._mmap_fd: int | None = None", common)
         self.assertIn("weight, self._mmap_ready, self._mmap_fd = _ple_mmap_open(",
                       common)
