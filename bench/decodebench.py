@@ -39,7 +39,7 @@ MODEL = os.environ.get("BENCH_MODEL", "Qwen3.8-Flash-Next-NVFP4")
 DRAFTS = "vllm:spec_decode_num_drafts_total"
 DRAFT_TOK = "vllm:spec_decode_num_draft_tokens_total"
 ACCEPTED = "vllm:spec_decode_num_accepted_tokens_total"
-FILLER = ("Entry {i:06d}: the quarterly logistics audit recorded a routine "
+FILLER = ("Entry {tag}{i:06d}: the quarterly logistics audit recorded a routine "
           "variance in the northbound depot inventory.\n")
 TASKS = {
  "prose":   "Write a flowing, continuous essay about the history of maritime "
@@ -65,8 +65,9 @@ def post(path, payload, timeout=3600):
                                  headers={"Content-Type": "application/json"})
     return urllib.request.urlopen(req, timeout=timeout)
 
-def build_ctx(t):
-    return "".join(FILLER.format(i=i) for i in range(max(1, int(t / 25))))
+def build_ctx(t, salt=""):
+    tag = f"{salt}-" if salt else ""
+    return "".join(FILLER.format(tag=tag, i=i) for i in range(max(1, int(t / 25))))
 
 def snapshot():
     try:
@@ -150,11 +151,11 @@ def shrink_ctx(c, n_tokens, decode, max_len, reserve=512):
     over = n_tokens + decode + reserve - max_len
     return max(1, c - int(over * 1.1) - 16)
 
-def fit_ctx(c, decode, task, max_len):
+def fit_ctx(c, decode, task, max_len, salt=""):
     """Build a context for nominal size `c` whose tokens fit `max_len`."""
     if not max_len:
-        return c, build_ctx(c)
-    ctx = build_ctx(c)
+        return c, build_ctx(c, salt)
+    ctx = build_ctx(c, salt)
     for _ in range(4):
         n = count_tokens(ctx + "\n\n" + task)
         if n is None:
@@ -163,7 +164,7 @@ def fit_ctx(c, decode, task, max_len):
         if nxt == c:
             break
         c = nxt
-        ctx = build_ctx(c)
+        ctx = build_ctx(c, salt)
     return c, ctx
 
 def clamp_ctx(ctx, decode, max_len, margin=64):
@@ -180,9 +181,12 @@ def main():
     ap.add_argument("--temps")
     ap.add_argument("--conditions", choices=["default", "myllmbox"], default="default")
     ap.add_argument("--jsonl", help="append each row as a JSON line (for bench/gate_report.sh)")
+    ap.add_argument("--salt", help="context nonce so prefill rows are not cache "
+                    "hits (default random per run; empty string disables)")
     ap.add_argument("--dry-run", action="store_true", help="print the run plan and exit")
     a = ap.parse_args()
     myll = a.conditions == "myllmbox"
+    salt = "" if myll else (a.salt if a.salt is not None else os.urandom(3).hex())
     contexts = [int(x) for x in (a.contexts or ("256" if myll else "1000,48000")).split(",")]
     limit = max_served_len()
     clamped = [clamp_ctx(c, a.decode, limit) for c in contexts]
@@ -195,7 +199,7 @@ def main():
     tasks = MYLLMBOX if myll else TASKS
     tkwargs = {"enable_thinking": False} if myll else None
     if a.dry_run:
-        print(f"conditions={a.conditions} decode={a.decode} chat_template_kwargs={tkwargs}")
+        print(f"conditions={a.conditions} decode={a.decode} salt={salt or chr(45)} chat_template_kwargs={tkwargs}")
         for c in contexts:
             for t in temps:
                 for name in tasks:
@@ -208,7 +212,7 @@ def main():
         used = None
         for t in temps:
             for name, task in tasks.items():
-                fit, ctx = fit_ctx(c, a.decode, task, limit)
+                fit, ctx = fit_ctx(c, a.decode, task, limit, salt)
                 if fit != c and used != fit:
                     print(f"note: context {c} fitted to {fit} "
                           f"(max_model_len {limit}, decode {a.decode})",
