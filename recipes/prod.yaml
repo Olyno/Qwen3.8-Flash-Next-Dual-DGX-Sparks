@@ -91,9 +91,10 @@ mtp_rejection_sample_method: block
 # mtp_skip_prefix: draft-prefill tail-window skip of the drafter's MoE block
 # and final HC mixer (patches/patch_mtp_prefix_skip.py; attention stays full
 # width for the drafter's KV cache; a first-prefill parity self-check pins
-# each stage to stock unless the tail rows are bit-identical). Default OFF —
-# boot verification pending (bench/longctx.py TTFT + the parity lines in the
-# boot log).
+# each stage to stock unless the tail rows are bit-identical). Boot-verified:
+# MoE parity bit-identical; final mixer parity FAILED and that stage stays
+# stock. Gate A/B: decode +6.9..9.1% ms/step in every bucket (prefill 64k
+# neutral, 1k/32k noisy-positive) — the no-regression gate fails, stays OFF.
 mtp_skip_prefix: false
 # ple_offload: derived from NODES (true at 1 node — the n-gram table is
 # offloaded so the model fits; false at 2 — halved per-rank weights leave the
