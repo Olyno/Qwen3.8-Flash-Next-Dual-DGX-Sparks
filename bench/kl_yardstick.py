@@ -21,6 +21,13 @@ never produces inf): top-1 agreement, KL(baseline||candidate), and each arm's
 logprob of the actual token (perplexities). Reported: top-1 agreement, mean KL,
 **p99 KL** (nearest-rank), perplexity delta — per text and pooled.
 
+Optional extras, all off by default: `--decision-ids` adds a diagnostic row for
+stop-decision token ids (n, mean KL, geometric-mean probability ratio, ppl per
+arm) without moving the verdict; `--batch` sends requests concurrently and
+`--shape-floor` folds the resulting batch-composition noise into the floor; and
+a corpus item's `"scored_token_spans"` restricts pooling to its generated
+spans while the full text is still scored.
+
 The floor comes first, always (flashrt discipline): the baseline is measured
 twice and scored against itself, and the candidate is only judged relative to
 that self-noise. A delta inside your own floor is not a difference. Default
@@ -48,6 +55,7 @@ import os
 import sys
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 CORPUS = os.path.join(DATA, "kl_corpus.jsonl")
@@ -107,31 +115,78 @@ def norm_dist(elem):
     return out or None
 
 
-def score_pair(tp, tc, ids_p, ids_c):
+def span_mask(n, spans):
+    """Boolean mask of length n, True inside any of `spans`; each span is
+    [start, end) in token indices and is clamped to [0, n). Overlaps union."""
+    mask = [False] * n
+    for start, end in spans or ():
+        for i in range(max(0, start), min(n, end)):
+            mask[i] = True
+    return mask
+
+
+def decision_stats(rows):
+    """Pool decision-position samples across texts: position count, mean KL,
+    geometric-mean probability ratio of the actual stop token (candidate over
+    baseline; below 1 means the candidate is less likely to stop), and each
+    arm's perplexity over just those positions."""
+    kl = [v for r in rows for v in r["decision"]["kl"]]
+    lp_p = [v for r in rows for v in r["decision"]["lp_p"]]
+    lp_c = [v for r in rows for v in r["decision"]["lp_c"]]
+    n = len(kl)
+    if not n:
+        return {"n": 0, "mean_kl": float("nan"), "geo_ratio": float("nan"),
+                "ppl_p": float("nan"), "ppl_c": float("nan")}
+    mp, mc = sum(lp_p) / n, sum(lp_c) / n
+    return {"n": n, "mean_kl": sum(kl) / n, "geo_ratio": math.exp(mp - mc),
+            "ppl_p": math.exp(-mp), "ppl_c": math.exp(-mc)}
+
+
+def effective_floor(floor, shape_floor):
+    """Conservative verdict floor: the larger p99 KL of the measured passes."""
+    vals = [f["p99_kl"] for f in (floor, shape_floor) if f]
+    return max(vals) if vals else None
+
+
+def score_pair(tp, tc, ids_p, ids_c, spans=None, decision_ids=()):
     """Score one text, baseline dists tp vs candidate dists tc (index i is the
     distribution over token i; position 0 is None on both). Returns per-text
-    stats; raises if the two arms' tokenizations differ."""
+    stats; raises if the two arms' tokenizations differ. `spans` limits pooled
+    positions to those [start, end) token ranges; `decision_ids` additionally
+    tracks stop-decision positions for the diagnostic row."""
     if ids_p != ids_c:
         raise SystemExit(
             f"tokenization differs between arms ({len(ids_p)} vs {len(ids_c)} "
             f"tokens or id mismatch) — positions are not identical, refusing "
             f"to score; run `freeze` against a healthy endpoint to pin them")
+    mask = span_mask(len(ids_p), spans) if spans else None
     kls, hits, nll_p, nll_c, flips = [], 0, [], [], []
+    dkl, dlp_p, dlp_c = [], [], []
     for i in range(1, len(ids_p)):
+        if mask is not None and not mask[i]:
+            continue
         dp, dc = norm_dist(tp[i]), norm_dist(tc[i])
         if not dp or not dc:
             continue
         kls.append(kl_renorm(dp, dc))
+        lp_p = dp.get(ids_p[i], min(dp.values()) - MISS_MARGIN)
+        lp_c = dc.get(ids_c[i], min(dc.values()) - MISS_MARGIN)
         hits += top1(dp) == top1(dc)
-        nll_p.append(-dp.get(ids_p[i], min(dp.values()) - MISS_MARGIN))
-        nll_c.append(-dc.get(ids_c[i], min(dc.values()) - MISS_MARGIN))
+        nll_p.append(-lp_p)
+        nll_c.append(-lp_c)
         flips.append((i, ids_p[i], top1(dp), top1(dc)))
+        if decision_ids and ids_p[i] in decision_ids:
+            dkl.append(kls[-1])
+            dlp_p.append(lp_p)
+            dlp_c.append(lp_c)
     n = len(kls)
     if not n:
-        raise SystemExit("no scorable positions (server returned no prompt_logprobs?)")
+        raise SystemExit("no scorable positions (server returned no prompt_logprobs, "
+                         "or scored_token_spans excludes every position?)")
     return {"n": n, "kl": kls, "top1": hits / n,
             "mean_kl": sum(kls) / n, "p99_kl": percentile_nearest(kls, 0.99),
             "ppl_p": math.exp(sum(nll_p) / n), "ppl_c": math.exp(sum(nll_c) / n),
+            "decision": {"kl": dkl, "lp_p": dlp_p, "lp_c": dlp_c},
             "flips": [f for f in flips if f[2] != f[3]]}
 
 
@@ -173,9 +228,17 @@ def completions_logprobs(url, model, text, k, gen_tokens, timeout):
     raise last
 
 
-def run_pass(url, model, texts, a):
-    return [completions_logprobs(url, model, t["text"], a.topk,
-                                 a.gen_tokens, a.timeout) for t in texts]
+def run_pass(url, model, texts, a, batch=None):
+    """Score every text, up to `batch` requests in flight (default a.batch);
+    results stay in input order regardless of completion order."""
+    def one(t):
+        return completions_logprobs(url, model, t["text"], a.topk,
+                                    a.gen_tokens, a.timeout)
+    workers = max(1, a.batch if batch is None else batch)
+    if workers == 1:
+        return [one(t) for t in texts]
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        return list(ex.map(one, texts))
 
 
 # ---------- corpus spine ----------
@@ -226,7 +289,8 @@ def load_corpus(path=CORPUS):
         for line in f:
             if line.strip():
                 r = json.loads(line)
-                texts.append({"id": r["id"], "text": r["text"]})
+                texts.append({"id": r["id"], "text": r["text"],
+                              "spans": r.get("scored_token_spans")})
     return texts
 
 
@@ -252,6 +316,22 @@ def print_header(title):
     print("-" * 82)
 
 
+def fmt_decision(st):
+    name = "decision positions"
+    if not st["n"]:
+        return f"{name:<26}{0:>7,}{'-':>10}{'-':>13}{'-':>10}{'-':>10}"
+    return (f"{name:<26}{st['n']:>7,}{st['mean_kl']:>10.5f}"
+            f"{st['geo_ratio']:>13.4f}{st['ppl_p']:>10.2f}{st['ppl_c']:>10.2f}")
+
+
+def score_all(texts, a, left, right):
+    """Score one pass against another, text by text, order preserved."""
+    return [score_pair(left[i][1], right[i][1], left[i][0], right[i][0],
+                       spans=texts[i].get("spans"),
+                       decision_ids=a.decision_ids)
+            for i in range(len(texts))]
+
+
 def cmd_compare(a):
     texts = load_corpus(a.corpus)
     pos = load_positions(a.positions) if os.path.isfile(a.positions) else None
@@ -272,39 +352,60 @@ def cmd_compare(a):
                 raise SystemExit(f"tokenization of {t['id']} differs from the frozen "
                                  f"pin in {a.positions} — positions moved; do not judge "
                                  f"this delta, re-freeze on a verified host")
-    floor = None
+    floor = shape_floor = None
     if not a.no_floor:
         base2 = run_pass(a.url, a.model, texts, a)
         print("  [pass 2/3 baseline re-run] done", flush=True)
-        floor = pool([score_pair(base1[i][1], base2[i][1], base1[i][0], base2[i][0])
-                      for i in range(len(texts))])
+        floor_rows = score_all(texts, a, base1, base2)
+        floor = pool(floor_rows)
         print_header("SELF-NOISE FLOOR (baseline vs itself) — judge nothing inside this")
-        for i, t in enumerate(texts):
-            st = score_pair(base1[i][1], base2[i][1], base1[i][0], base2[i][0])
+        for t, st in zip(texts, floor_rows):
             print(fmt_row(f"floor {t['id']}", st))
         print(fmt_row("floor POOLED", floor))
+        if a.shape_floor > 0:
+            base3 = run_pass(a.url, a.model, texts, a, batch=a.shape_floor)
+            print(f"  [pass 2b baseline re-run at batch={a.shape_floor}] done",
+                  flush=True)
+            shape_rows = score_all(texts, a, base1, base3)
+            shape_floor = pool(shape_rows)
+            print_header(f"BATCH-SHAPE FLOOR (baseline vs itself, "
+                         f"batch={a.shape_floor}) — folded into the gate floor")
+            for t, st in zip(texts, shape_rows):
+                print(fmt_row(f"floor(shape) {t['id']}", st))
+            print(fmt_row("floor(shape) POOLED", shape_floor))
 
     rows = None
     if a.candidate:
         cand = run_pass(a.candidate, a.model, texts, a)
         print("  [pass 3/3 candidate] done", flush=True)
-        rows = [score_pair(base1[i][1], cand[i][1], base1[i][0], cand[i][0])
-                for i in range(len(texts))]
+        rows = score_all(texts, a, base1, cand)
         print_header("BASELINE vs CANDIDATE")
         for t, st in zip(texts, rows):
             print(fmt_row(t["id"], st))
         cand_st = pool(rows)
         print(fmt_row("POOLED", cand_st))
+        if a.decision_ids is not None:
+            ids = ",".join(str(i) for i in sorted(a.decision_ids)) or "(none)"
+            print(f"\nDECISION POSITIONS  ids={ids}")
+            print(f"{'comparison':<26}{'pos':>7}{'mean KL':>10}{'geo ratio':>13}"
+                  f"{'ppl base':>10}{'ppl cand':>10}")
+            print(fmt_decision(decision_stats(rows)))
     else:
         cand_st = None
 
     # machine-readable lines, floor first (docs/bench-gates.md)
     ok = True
+    eff = effective_floor(floor, shape_floor)
     if floor:
         print(f"kl metric=floor_p99_kl value={floor['p99_kl']:.6f} threshold=- INFO")
         print(f"kl metric=floor_top1 value={floor['top1']:.6f} threshold=- INFO")
+    if shape_floor:
+        print(f"kl metric=floor_shape_p99_kl value={shape_floor['p99_kl']:.6f} "
+              f"threshold=- INFO")
+        print(f"kl metric=floor_shape_top1 value={shape_floor['top1']:.6f} "
+              f"threshold=- INFO")
     if cand_st:
-        p99_thr = a.mult * floor["p99_kl"] if floor else a.max_p99
+        p99_thr = a.mult * eff if eff is not None else a.max_p99
         p99_ok = p99_thr is not None and cand_st["p99_kl"] <= p99_thr
         if p99_thr is None:
             print(f"kl metric=p99_kl value={cand_st['p99_kl']:.6f} "
@@ -390,6 +491,11 @@ def _self_check():
     return 0
 
 
+def parse_id_set(s):
+    """Comma-separated token ids -> set of ints; an empty string stays empty."""
+    return {int(x) for x in s.split(",") if x.strip()}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -411,8 +517,20 @@ def main(argv=None):
                     help="min top-1 agreement (fraction)")
     ap.add_argument("--max-p99", type=float, default=None,
                     help="absolute p99 KL ceiling (used when no floor run)")
+    ap.add_argument("--batch", type=int, default=1, metavar="N",
+                    help="max concurrent completion requests per pass (default 1)")
+    ap.add_argument("--shape-floor", type=int, default=0, metavar="N",
+                    help="re-run the baseline with N concurrent requests and fold "
+                         "that p99 KL into the floor (0 = off)")
+    ap.add_argument("--decision-ids", type=parse_id_set, default=None, metavar="IDS",
+                    help="comma-separated token ids scored as stop decisions; adds "
+                         "a diagnostic row, never changes the verdict")
     ap.add_argument("--self-check", action="store_true")
     a = ap.parse_args(argv)
+    if a.batch < 1:
+        ap.error("--batch must be >= 1")
+    if a.shape_floor < 0:
+        ap.error("--shape-floor must be >= 0")
     if a.self_check:
         return _self_check()
     if a.mode == "spine":

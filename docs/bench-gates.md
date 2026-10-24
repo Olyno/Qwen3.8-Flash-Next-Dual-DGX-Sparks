@@ -83,6 +83,16 @@ refuses to score if the live tokenization moved. Generation gates
 (`output_gate.py`, `quality_gate.py`) stay as breakage detectors; the yardstick
 is the measure for subtle quality calls they cannot resolve.
 
+A corpus item may also carry `"scored_token_spans": [[start, end], ...]` —
+inclusive-start, exclusive-end token indices that restrict which positions are
+pooled into KL, top-1 and perplexity (the full text is still scored). The spans
+are token indices pinned by whoever builds the corpus, since they follow that
+item's tokenizer, and items without the field score every position.
+`--decision-ids` adds a diagnostic row for stop-decision token ids without
+moving the verdict, while `--batch N` / `--shape-floor N` fold the server's
+batch-composition noise into the floor: the verdict uses the larger of the two
+p99 floors, and both are printed.
+
 ## Running it
 
 ```
