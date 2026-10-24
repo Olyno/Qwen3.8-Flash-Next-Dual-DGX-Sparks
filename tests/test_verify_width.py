@@ -388,7 +388,7 @@ class PatcherSource(unittest.TestCase):
         # enabled after the gate A/B (decode -3.1..-4.1% ms/step)
         self.assertIn("export VERIFY_WIDTH_ADAPTIVE='true'", out)
         yaml = (REPO / "recipes" / "prod.yaml").read_text()
-        self.assertIn("verify_width_adaptive: false", yaml)
+        self.assertIn("verify_width_adaptive: true", yaml)
         self.assertIn("Lossless:", yaml)
         self.assertIn("target verification unchanged", yaml)
 

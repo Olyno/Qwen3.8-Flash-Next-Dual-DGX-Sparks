@@ -175,6 +175,9 @@ chunk_equal_split: false
 spec_trace: false
 # copy_proposer: reuse the request's own suffix match as the draft chain
 # (patches/patch_copy_proposer.py). Lossless: target verification is exact.
+# Gate A/B vs the width-on baseline: decode +0.3..+4.1% ms/step (no gain),
+# prefill 32k +2.3%, and per-task acceptance degrades on code (64k 62.2 ->
+# 55.3, 32k 65.1 -> 61.7); prose/entropy flat. Stays OFF.
 copy_proposer: false
 # GDN prefill direct output: pass the destination buffer as the flashinfer
 # kernel's output= instead of allocating + copying (same kernel, bit-parity, prefill only).
