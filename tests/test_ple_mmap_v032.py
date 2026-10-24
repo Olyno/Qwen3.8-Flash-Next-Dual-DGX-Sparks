@@ -59,9 +59,10 @@ class PleMmapV032(unittest.TestCase):
         self.assertIn("def _ple_mmap_warm(self, ids: torch.Tensor) -> None:",
                       common)
         self.assertIn("self._ple_mmap_warm(gathered_ids)", common)
-        # native prefetch machinery kept; its lazy stream/buffer now bind to
-        # the mmap-safe device selector instead of the (None) UVA view
-        self.assertEqual(common.count("device=self._lookup_device"), 2)
+        # native prefetch machinery kept; its lazy stream/buffer bind to the
+        # mmap-safe device selector instead of the (None) UVA view, and the
+        # staged path allocates its own pair up front (4 total)
+        self.assertEqual(common.count("device=self._lookup_device"), 4)
         self.assertIn("supports_prefetch", common)
         self.assertIn("_mmap_expected_shards", nvidia)
 

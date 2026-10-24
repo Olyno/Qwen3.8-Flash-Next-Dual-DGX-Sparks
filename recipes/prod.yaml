@@ -95,6 +95,9 @@ mtp_skip_prefix: false
 # ple_offload: derived from NODES (true at 1 node — the n-gram table is
 # offloaded so the model fits; false at 2 — halved per-rank weights leave the
 # host table out of the loop).
+# ple_staged_lookup (default off): gather each batch's PLE rows on the host
+# through a pinned staging buffer instead of letting the GPU read the mmap.
+ple_staged_lookup: false
 qsa_profile: stock
 fp8_dense: false
 # The SM12x skinny-GEMM plan table (vllm#59632/#59753, strided-A fix

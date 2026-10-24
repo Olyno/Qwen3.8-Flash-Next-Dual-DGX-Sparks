@@ -162,6 +162,12 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         # eager PLE batch's row pages with coalesced preads; 0 disables the
         # whole set. See patches/patch_ple_mmap_v030.py's docstring.
         OVERLAY_ENV+=("-e VLLM_PLE_MMAP_ADVICE=1")
+        if [[ "$PLE_STAGED_LOOKUP" == "true" ]]; then
+            # Host gather through a pinned staging buffer, H2D before each
+            # graph replay, so the GPU never reads the file-backed mapping.
+            # The staged path also installs the per-replay run_fullgraph hook.
+            OVERLAY_ENV+=("-e VLLM_PLE_STAGED_LOOKUP=1")
+        fi
     fi
     if [[ "$QSA_FUSED_DRAFT" == "true" ]]; then
         info "=== Step 4c: QSA fused multi-step draft metadata (vLLM 0.32) ==="
