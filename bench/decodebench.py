@@ -140,13 +140,14 @@ def count_tokens(text):
     except Exception:
         return None
 
-def shrink_ctx(c, n_tokens, decode, max_len):
+def shrink_ctx(c, n_tokens, decode, max_len, reserve=512):
     """New nominal context for a prompt that tokenized to `n_tokens`: the
     builders emit ~1.07 tokens per nominal unit, so back off by the overshoot
-    with margin and retry."""
-    if not max_len or n_tokens + decode <= max_len:
+    with margin and retry. `reserve` covers chat-template wrapping and special
+    tokens that the raw text count does not include."""
+    if not max_len or n_tokens + decode + reserve <= max_len:
         return c
-    over = n_tokens + decode - max_len
+    over = n_tokens + decode + reserve - max_len
     return max(1, c - int(over * 1.1) - 16)
 
 def fit_ctx(c, decode, task, max_len):
