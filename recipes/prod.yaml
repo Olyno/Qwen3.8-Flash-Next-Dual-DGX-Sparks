@@ -185,7 +185,12 @@ spec_trace: false
 # 55.3, 32k 65.1 -> 61.7); prose/entropy flat. Stays OFF.
 copy_proposer: false
 # GDN prefill direct output: pass the destination buffer as the flashinfer
-# kernel's output= instead of allocating + copying (same kernel, bit-parity, prefill only).
+# kernel's output= instead of allocating + copying (same kernel, prefill only;
+# patches/patch_gdn_direct_out.py). The wrapper it replaces also serves decode,
+# so the arm pays the per-layer eligibility check on every decode step. Gate
+# A/B vs the width-on baseline: decode +13.3 / +6.4 / +3.2% ms/step at 1k / 32k
+# / 64k, prefill -0.7% at 64k but +2.1% at 32k and +3.4% at 1k — the
+# no-regression gate fails, stays OFF.
 gdn_direct_out: false
 # Adaptive speculative-verify width: per-step draft width (1/2/config k) from
 # the acceptance EMA. Lossless (target verification unchanged): fewer/extra
