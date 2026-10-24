@@ -183,8 +183,8 @@ copy_proposer: false
 # kernel's output= instead of allocating + copying (same kernel, bit-parity, prefill only).
 gdn_direct_out: false
 # Adaptive speculative-verify width: per-step draft width (1/2/config k) from
-# the acceptance EMA. Lossless: fewer/extra verify rows only; target
-# verification unchanged. Gate A/B (two runs): decode -3.1..-4.1% ms/step in
+# the acceptance EMA. Lossless (target verification unchanged): fewer/extra
+# verify rows only. Gate A/B (two runs): decode -3.1..-4.1% ms/step in
 # every bucket; prefill 32k/64k neutral (-0.4/-0.95%), 1k sub-second bucket
 # varies with warmup (the policy cannot touch the prefill path).
 verify_width_adaptive: true

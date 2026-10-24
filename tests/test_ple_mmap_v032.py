@@ -52,6 +52,12 @@ class PleMmapV032(unittest.TestCase):
         # populate re-reads ~48 GiB and stalls restarts)
         self.assertIn("os.POSIX_FADV_RANDOM", common)
         self.assertNotIn("MADV_POPULATE_READ", common)
+        # staged buffers are pinned CPU tensors even though construction runs
+        # inside a CUDA device context (pin_memory on a CUDA tensor raises)
+        self.assertGreaterEqual(common.count("pin_memory=True"), 2)
+        for alloc in re.finditer(
+                r"torch\.empty\([^)]*pin_memory=True[^)]*\)", common, re.S):
+            self.assertIn('device="cpu"', alloc.group(0))
         self.assertIn("self._mmap_fd: int | None = None", common)
         self.assertIn("weight, self._mmap_ready, self._mmap_fd = _ple_mmap_open(",
                       common)

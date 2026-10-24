@@ -396,10 +396,12 @@ STAGED_INIT_TAIL = '''        self._num_ngram_heads = num_ngram_heads
                 self._prefetch_rows * self._num_ngram_heads,
                 self._row_bytes,
                 dtype=torch.uint8,
+                device="cpu",
                 pin_memory=True,
             )
             self._stage_scratch = torch.empty(
-                _PLE_STAGE_READ_MAX, dtype=torch.uint8, pin_memory=True
+                _PLE_STAGE_READ_MAX, dtype=torch.uint8, device="cpu",
+                pin_memory=True
             )
             self._prefetch_stream = torch.cuda.Stream(device=self._lookup_device)
             # Zeros, not empty: the capture-time forward reads this buffer
