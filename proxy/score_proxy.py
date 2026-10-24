@@ -21,7 +21,10 @@ decision features — see docs/score-proxy.md:
                               embedding router: the last user message is
                               classified trivial/hard against prototype
                               centroids and 'trivial' requests are rewritten
-                              pre-hoc (thinking off, max_tokens capped).
+                              pre-hoc (thinking off, max_tokens capped);
+                              PROXY_SKILLS_DIR=path surfaces the top-k skills
+                              relevant to the last user message in a system
+                              block before generation.
 
 Env: PROXY_UPSTREAM (default http://localhost:8888), PROXY_PORT (8889),
 PROXY_ESCALATE, PROXY_ESCALATE_THRESHOLD (-0.35),
@@ -33,7 +36,9 @@ PROXY_TOOL_ROUTER (unset = off; scores whether a request with tools needs
 one, then nudges), PROXY_TOOL_THRESHOLD (0.5), PROXY_TOOL_FORCE (1 = set
 tool_choice=required instead of the system nudge), PROXY_TOOL_TOP_K (8;
 prune larger tool lists by embedding similarity), PROXY_TOOL_ALWAYS
-(comma-separated tool names never pruned).
+(comma-separated tool names never pruned), PROXY_SKILLS_DIR (unset = off;
+directory of <name>/SKILL.md or *.md skills), PROXY_SKILLS_TOP_K (3),
+PROXY_SKILLS_MIN_SIM (0.25, heuristic — calibrate per workload).
 Stdlib only.
 """
 import http.client
@@ -315,6 +320,135 @@ class ToolRouter:
         return True, prob
 
 
+SKILLS_MARKER = "Relevant skills (read the file before acting when it applies):"
+SKILL_DESC_MAX = 200
+
+
+def skill_description(text):
+    """Skill description from YAML frontmatter (`description:` between
+    leading `---` markers), else the first non-heading paragraph, truncated.
+    A missing frontmatter description falls through to the body so a bare
+    SKILL.md still gets a usable line."""
+    lines = text.splitlines()
+    start = 0
+    if lines and lines[0].strip() == "---":
+        for end in range(1, len(lines)):
+            if lines[end].strip() == "---":
+                for line in lines[1:end]:
+                    key, sep, value = line.partition(":")
+                    if sep and key.strip() == "description":
+                        desc = value.strip().strip("'\"")
+                        if desc:
+                            return desc
+                start = end + 1
+                break
+    para = []
+    for line in lines[start:]:
+        stripped = line.strip()
+        if not stripped:
+            if para:
+                break
+            continue
+        if stripped.startswith("#"):
+            if para:
+                break
+            continue
+        para.append(stripped)
+    return " ".join(para)[:SKILL_DESC_MAX]
+
+
+class SkillIndex:
+    """Preemptive skill surfacing: scan a skills directory once, embed each
+    skill's name + description through the embedding endpoint, and append the
+    top-k skills matching the last user message to the system prompt. The
+    block is deterministic for a given skill set, so repeated requests keep a
+    stable prompt prefix. Fail-open: any scan/embedding error leaves the index
+    empty and requests pass through unchanged. ponytail: one lazy scan cached
+    forever — restart the proxy after editing the skills directory."""
+
+    def __init__(self, directory, embed_fn, top_k=3, min_sim=0.25):
+        self.directory = directory
+        self.embed_fn = embed_fn
+        self.top_k = top_k
+        self.min_sim = min_sim
+        self._skills = None
+        self._lock = threading.Lock()
+
+    def _scan(self):
+        found = []
+        for entry in sorted(os.listdir(self.directory)):
+            path = os.path.join(self.directory, entry)
+            if os.path.isdir(path):
+                skill = os.path.join(path, "SKILL.md")
+                if os.path.isfile(skill):
+                    found.append((entry, skill))
+            elif entry.endswith(".md") and os.path.isfile(path):
+                found.append((os.path.splitext(entry)[0], path))
+        skills = []
+        for name, path in found:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                skills.append((name, skill_description(f.read()), path))
+        return skills
+
+    def _load(self):
+        if self._skills is not None:
+            return self._skills
+        with self._lock:
+            if self._skills is None:
+                try:
+                    skills = self._scan()
+                    if skills:
+                        vectors = self.embed_fn(
+                            [f"{name}: {desc}" for name, desc, _ in skills])
+                        if len(vectors) != len(skills):
+                            raise ValueError("embedding count mismatch")
+                        skills = [(*skill, vec)
+                                  for skill, vec in zip(skills, vectors)]
+                    self._skills = skills
+                except Exception:  # fail-open: no skills beats a broken request
+                    self._skills = []
+        return self._skills
+
+    def rank(self, text):
+        """[(similarity, name, description, path)] best first, filtered by
+        min_sim and capped at top_k; [] on any embedding trouble."""
+        skills = self._load()
+        if not skills or not text:
+            return []
+        try:
+            query = self.embed_fn([text[:2000]])[0]
+        except Exception:  # fail-open: endpoint down/slow/garbage = no injection
+            return []
+        ranked = [(cosine(query, vec), name, desc, path)
+                  for name, desc, path, vec in skills]
+        ranked = [s for s in ranked if s[0] >= self.min_sim]
+        ranked.sort(key=lambda s: (-s[0], s[1]))
+        return ranked[:self.top_k]
+
+    def apply(self, req):
+        """Returns (changed, top_sim, count); mutates req in place. The
+        marker check makes injection idempotent per request."""
+        messages = req.get("messages") or []
+        ranked = self.rank(last_user_text(messages)[:2000])
+        if not ranked:
+            return False, 0.0, 0
+        block = SKILLS_MARKER + "\n" + "\n".join(
+            f"- {name}: {desc} [{path}]" for _, name, desc, path in ranked)
+        systems = [m for m in messages if isinstance(m, dict)
+                   and m.get("role") == "system"]
+        if any(isinstance(m.get("content"), str)
+               and SKILLS_MARKER in m["content"] for m in systems):
+            return False, ranked[0][0], len(ranked)
+        system = next((m for m in systems
+                       if isinstance(m.get("content"), str)), None)
+        if system is not None:
+            system["content"] += "\n\n" + block
+        else:
+            messages.insert(0, {"role": "system", "content": block})
+            req["messages"] = messages
+        return True, ranked[0][0], len(ranked)
+
+
 class Router:
     """Pre-hoc request router (embeddinggemma-style): embed the last user
     message, cosine-compare against trivial/hard prototype centroids; a
@@ -540,6 +674,16 @@ class Handler(BaseHTTPRequestHandler):
                       f"({len(messages)} messages)", file=sys.stderr)
                 req["messages"] = messages
                 body = json.dumps(req).encode()
+        skills = self.server.skill_index
+        if skills is not None:
+            changed, sim, count = skills.apply(req)
+            # Injected before tool steering so tool necessity/pruning see the
+            # final messages, and before keepalive snapshots the prefix that
+            # is actually sent upstream.
+            if changed:
+                body = json.dumps(req).encode()
+                print(f"score proxy: skills: injected {count} "
+                      f"(top sim {sim:.3f})", file=sys.stderr)
         if self.server.keepalive is not None:
             self.server.keepalive.note_prefix(
                 self.client_address[0], req.get("model"),
@@ -623,7 +767,8 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
                 router_model="google/embeddinggemma-2",
                 router_threshold=0.10, router_max_tokens=1024,
                 router_timeout=2.0, tool_steer=False, tool_threshold=0.5,
-                tool_force=False, tool_top_k=8, tool_always=()):
+                tool_force=False, tool_top_k=8, tool_always=(),
+                skills_dir=None, skills_top_k=3, skills_min_sim=0.25):
     u = urllib.parse.urlparse(upstream_url)
     srv = ThreadingHTTPServer(("", port), Handler)
     srv.upstream = (u.hostname, u.port or 80)
@@ -644,6 +789,11 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
             embed_fn=srv.router.embed if srv.router else None,
             threshold=tool_threshold, force=tool_force,
             top_k=tool_top_k, always=tool_always)
+    srv.skill_index = None
+    if skills_dir and srv.router is not None:
+        srv.skill_index = SkillIndex(
+            skills_dir, srv.router.embed, top_k=skills_top_k,
+            min_sim=skills_min_sim)
     srv.keepalive = None
     if keepalive_s > 0:
         srv.keepalive = CacheKeepalive(srv, keepalive_s)
@@ -674,7 +824,10 @@ def main():
         os.environ.get("PROXY_TOOL_FORCE") == "1",
         int(os.environ.get("PROXY_TOOL_TOP_K", 8)),
         tuple(n for n in os.environ.get("PROXY_TOOL_ALWAYS", "").split(",")
-              if n.strip()))
+              if n.strip()),
+        os.environ.get("PROXY_SKILLS_DIR") or None,
+        int(os.environ.get("PROXY_SKILLS_TOP_K", 3)),
+        float(os.environ.get("PROXY_SKILLS_MIN_SIM", 0.25)))
     print(f"score proxy on :{srv.server_port} -> "
           f"http://{srv.upstream[0]}:{srv.upstream[1]}")
     srv.serve_forever()

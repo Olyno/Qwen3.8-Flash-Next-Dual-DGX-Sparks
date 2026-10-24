@@ -130,6 +130,48 @@ Then point the proxy at it with `PROXY_ROUTER_URL=http://127.0.0.1:8890`.
 If the service is down the router's fail-open path already returns
 passthrough, so chat traffic is unaffected.
 
+## Skill index injection (`PROXY_SKILLS_DIR`)
+
+When `PROXY_SKILLS_DIR` points at a directory of skills, the proxy stops
+waiting for the model to discover them: it embeds each skill once, ranks them
+by cosine against the last user message on every chat request, and appends the
+best matches to the system prompt. This needs the embedding service
+(`PROXY_ROUTER_URL`); without it the feature stays off.
+
+Layouts: `<dir>/<name>/SKILL.md` (primary) or `<dir>/*.md` (flat). The skill
+name is the directory name or file stem. The description comes from a
+`description:` line in YAML frontmatter between leading `---` markers; when
+absent, the first non-heading paragraph is used, truncated to 200 characters.
+The directory is scanned once (lazily on the first chat request) and the
+vectors are cached until restart.
+
+The top `PROXY_SKILLS_TOP_K` (default **3**) skills whose cosine similarity is
+at least `PROXY_SKILLS_MIN_SIM` (default **0.25**) are appended as one fixed
+system block after the existing system message (or as a new first system
+message when none exists):
+
+```
+Relevant skills (read the file before acting when it applies):
+- <name>: <description> [<path>]
+```
+
+The block is only added when skills qualify, never twice in one request, and
+ranks deterministically, so the same skill set produces byte-identical text.
+Each injection logs `skills: injected N (top sim X.XXX)` to stderr.
+
+**Threshold note:** 0.25 is a heuristic default for embeddinggemma, chosen so
+loosely related skills still surface. Calibrate it from the logged
+similarities and lower it if relevant skills are being filtered out.
+
+**Fail-open:** any scan or embedding error leaves the index empty and requests
+pass through unchanged. If the embedding service is down on the first request,
+the index stays empty until the proxy restarts.
+
+**Prefix-cache caveat:** the injected block varies by request, so it can split
+what would otherwise be a shared prompt prefix and reduce prefix-cache hits.
+Enable this only when skill discovery is actually the failure mode; for a
+large static skill set, pre-filtering in the client is cheaper.
+
 ## Credits
 
 - [autotrust/GEV-26B-Decide](https://huggingface.co/autotrust/GEV-26B-Decide)
