@@ -24,6 +24,7 @@ import argparse
 import json
 import sys
 import time
+import urllib.error
 import urllib.request
 
 
@@ -31,8 +32,42 @@ def ascii(s):
     return s.encode("ascii", "replace").decode("ascii") if isinstance(s, str) else s
 
 
+def _text(parts):
+    if isinstance(parts, str):
+        return parts
+    out = []
+    for part in parts or []:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "text":
+            out.append(part.get("text") or "")
+        elif part.get("type") == "thinking":
+            continue  # the agent harness's internal thinking parts are not valid input
+    return "\n".join(t for t in out if t)
+
+
+def _tool_calls(parts):
+    calls = []
+    for part in parts or []:
+        if isinstance(part, dict) and part.get("type") == "toolCall":
+            args = part.get("partialArgs")
+            if not args:
+                args = json.dumps(part.get("arguments") or {})
+            calls.append({"id": part.get("id") or "",
+                          "type": "function",
+                          "function": {"name": part.get("name") or "",
+                                       "arguments": args}})
+    return calls
+
+
 def extract(path):
-    """One request per recorded assistant turn: the messages that preceded it."""
+    """One request per recorded assistant turn, in OpenAI message shape.
+
+    the agent harness stores content as parts (thinking / text / toolCall) and tool results as
+    their own records; the endpoint wants plain assistant messages plus
+    tool_calls and tool_call_id. Thinking parts are dropped: they are not valid
+    input, and the point is to measure how much the model *chooses* to think.
+    """
     lines = [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
     history, out = [], []
     for rec in lines:
@@ -44,24 +79,19 @@ def extract(path):
             if history:
                 out.append({"turn": len(out) + 1,
                             "messages": json.loads(json.dumps(history))})
-            history.append({"role": "assistant",
-                            "content": msg.get("content") or "",
-                            **({"tool_calls": msg["tool_calls"]}
-                               if msg.get("tool_calls") else {})})
+            entry = {"role": "assistant", "content": _text(msg.get("content"))}
+            calls = _tool_calls(msg.get("content"))
+            if calls:
+                entry["tool_calls"] = calls
+            history.append(entry)
         elif role in ("user", "system"):
-            content = msg.get("content")
-            if isinstance(content, list):
-                content = " ".join(p.get("text", "") for p in content
-                                   if isinstance(p, dict))
-            history.append({"role": role, "content": content or ""})
+            history.append({"role": role,
+                            "content": _text(msg.get("content"))})
         elif role == "toolResult":
-            content = msg.get("content")
-            if isinstance(content, list):
-                content = " ".join(p.get("text", "") for p in content
-                                   if isinstance(p, dict))
-            history.append({"role": "tool",
-                            "tool_call_id": msg.get("toolCallId") or "",
-                            "content": content or ""})
+            history.append({
+                "role": "tool",
+                "tool_call_id": msg.get("toolCallId") or msg.get("tool_call_id") or "",
+                "content": _text(msg.get("content")) or "(no output)"})
     return out
 
 
@@ -90,6 +120,11 @@ def trim(messages, budget_chars):
         kept = group + kept
         used += cost
         i -= 1
+    if not any(m.get("role") == "user" for m in kept):
+        for m in messages:  # the task itself must survive any window
+            if m.get("role") == "user":
+                kept = [m] + kept
+                break
     return kept
 
 
@@ -130,8 +165,12 @@ def post(url, payload, timeout):
         headers={"Content-Type": "application/json"})
     started = time.time()
     first = None
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = json.load(resp)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.load(resp)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:400]
+        raise RuntimeError(f"HTTP {exc.code}: {detail}") from None
     elapsed = time.time() - started
     return body, elapsed, first
 
@@ -221,12 +260,18 @@ def cmd_turns(args):
 def selftest():
     import tempfile
     session = [
-        {"type": "message", "message": {"role": "user", "content": "do it"}},
-        {"type": "message", "message": {"role": "assistant", "content": "ok",
-                                        "tool_calls": [{"id": "c1"}]}},
+        {"type": "message", "message": {"role": "user", "content": [
+            {"type": "text", "text": "do it"}]}},
+        {"type": "message", "message": {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "hmm"},
+            {"type": "text", "text": "ok"},
+            {"type": "toolCall", "id": "c1", "name": "bash",
+             "arguments": {"cmd": "ls"}}]}},
         {"type": "message", "message": {"role": "toolResult", "toolCallId": "c1",
-                                        "content": "result text"}},
-        {"type": "message", "message": {"role": "assistant", "content": "done"}},
+                                        "content": [{"type": "text",
+                                                     "text": "result text"}]}},
+        {"type": "message", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "done"}]}},
     ]
     with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
         for rec in session:
@@ -235,9 +280,10 @@ def selftest():
     reqs = extract(path)
     assert len(reqs) == 2, reqs
     assert reqs[0]["messages"] == [{"role": "user", "content": "do it"}], reqs[0]
-    assert reqs[1]["messages"][1] == {"role": "assistant", "content": "ok",
-                                      "tool_calls": [{"id": "c1"}]}, reqs[1]
-    assert reqs[1]["messages"][2]["role"] == "tool"
+    second = reqs[1]["messages"]
+    assert second[1]["role"] == "assistant" and second[1]["content"] == "ok", second[1]
+    assert second[1]["tool_calls"][0]["function"]["name"] == "bash", second[1]
+    assert second[2]["role"] == "tool" and second[2]["tool_call_id"] == "c1", second[2]
     print("SELFTEST PASS")
     return 0
 
