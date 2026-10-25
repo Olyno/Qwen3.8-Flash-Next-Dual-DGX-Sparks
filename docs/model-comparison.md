@@ -23,18 +23,25 @@ Both models reach the acceptance criteria in all three. The local model is **lea
 
 ## What the diagnosis trace shows
 
-Both models found both defects. They differ in **when they verify a replacement**:
+Clean runs, one per arm, both reaching `VERIFY-OK`:
 
-- Reference: times the heavy pass (11.4 s) against the budget (1.0 s) at turn 6, replaces it with a closed form at turn 8, and proves the closed form reproduces the original output at turn 10 — one replacement, one proof.
-- Local model: reads the failure, rewrites at turn 8, rewrites again at 9, breaks its own file at 10, spends 11–12 restoring the function header it clobbered, rewrites a third time at 13, verifies at 14, rewrites a fourth time at 16, and only then passes.
+| arm | turns | tool calls | edits | reasoning | wall |
+|---|---|---|---|---|---|
+| reference | 19 | 24 | 2 (one per file) | 11,124 | 117 s |
+| local model | 19 | 20 | 2 (one per file) | 19,588 | 751 s |
 
-Four attempts instead of one, plus a self-inflicted regression. Nothing is missing in knowledge or correctness; the missing discipline is **measure the failing operation before editing it, and prove equivalence in the same turn you replace an implementation**.
+Turns and edit counts are identical. The local model spends **1.76x the reasoning
+tokens** and **6.4x the wall time**, and the wall difference is decode speed:
+its 751 s is 19 turns on one GB10, the reference's 117 s is 19 turns on a hosted
+endpoint.
 
-## What this buys
-
-- A measurement that survives model changes: any future checkpoint can be dropped into the local arm and scored on the same three tasks, with turns-to-diagnosis as the headline number.
-- A named target for an improvement, instead of "make it better": the four-rewrite pattern is visible in the trace and countable from a transcript, so a fix can be shown to reduce it.
-- A warning about where improvement cannot come from: the local model is already leaner in turns and tokens than the reference on coding work. A change that only shortens answers or prunes tools cannot help; the target is verification placement on diagnosis, and the 95-turn session's habit of probing before acting.
+An earlier version of this section claimed the local model rewrote the same file
+four times, breaking it once. That was an artefact: the task template still held
+an output file from validating the bed, every arm started with a partial answer
+in the workspace, and the stale file changed the sequence of failures. With a
+clean template the pattern does not appear. The claim is withdrawn, and the
+method section now requires checking the template before each arm — which is
+how this was caught.
 
 ## Limit of this instrument
 
