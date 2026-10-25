@@ -329,14 +329,12 @@ TAIL_FRAME = "Context for the request above, not a new request:\n\n"
 
 
 # ── edit-loop guard ─────────────────────────────────────────────────────
-# Repeated rewrites of one file usually mean the change is not being tested:
-# the model replaces an implementation, checks afterwards and replaces again.
-
-# Noticing that and saying it once is cheap;
-# it changes no evidence and runs only when opted in.
+# A file rewritten repeatedly in one conversation usually means the change is
+# not being tested: the model replaces an implementation, checks afterwards,
+# and replaces again. Noticing that and saying it once is cheap; it changes no
+# evidence and runs only when opted in.
 
 EDIT_TOOLS = ("write", "edit", "multiedit", "patch", "apply_patch", "str_replace")
-OBSERVE_TOOLS = ("read", "grep", "glob", "find", "bash", "ls", "list", "webfetch")
 
 EDIT_GUARD_TEMPLATE = (
     "{path} has been rewritten {n} times. State the hypothesis the next rewrite "
@@ -349,8 +347,8 @@ REWRITE_THRESHOLD = 3
 def rewrite_counts(messages):
     """How many times each path has been written in this conversation.
 
-    Cumulative on purpose: the measured pattern was four rewrites of one file
-    with a check between each, so a rule that resets on observation misses it.
+    Cumulative on purpose: rewrites separated by checks are the common shape,
+    so a counter that resets on an observation would miss the pattern.
     """
     counts = {}
     for message in messages or []:

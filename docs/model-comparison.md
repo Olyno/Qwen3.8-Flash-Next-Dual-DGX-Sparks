@@ -4,9 +4,9 @@ A repeatable way to find where this checkpoint loses time, as opposed to guessin
 
 ## Method
 
-- **Same harness.** Both arms run through the agent harness with the same prompt, the same `--auto-approve`, and the same wall-clock cap. One arm is `gx10/Qwen3.8-Flash-Next-NVFP4` (the local box), the other `a hosted reference model` (cloud, stronger per token, used as the reference).
+- **Same harness.** Both arms run through the same client, with the same prompt, the same auto-approval, and the same wall-clock cap. One arm is the checkpoint this repository serves; the other is a stronger hosted model, used only as a reference point.
 - **Same copy.** Each arm gets a byte-identical copy of the task directory, a neutral `AGENTS.md`, and no prior transcript.
-- **No artefacts from validation.** Verifying a task bed means running it, which leaves `out.jsonl`, `__pycache__` and `.pytest_cache` in the *template*. Copied into an arm, those are free hints — a stale output file is a partial answer. Clean the template after every validation run and check the copy before starting an arm. This was violated once here: the diagnosis arms were first run with `out.jsonl` from the buggy converter already present, and the runs were repeated clean.
+- **No artefacts from validation.** Verifying a task bed means running it, which leaves build outputs, `__pycache__` and `.pytest_cache` in the *template*. Copied into an arm those are free hints — a stale output file is a partial answer. Clean the template after every validation run, and check the copy before starting an arm.
 - **Mechanical acceptance.** `pytest`, exit codes, or a required stdout line. No model judges another model.
 - **Fresh tasks only.** A task whose tooling was built in an earlier session is not an instrument: on the Kimi-import bed, both models "solved" it by running the session importer, so the run measured the tool, not the model.
 - **One variable.** The third task below has two failures in sequence, so the trace shows *how* each model narrows the cause rather than whether it can type.
@@ -36,14 +36,9 @@ Four attempts instead of one, plus a self-inflicted regression. Nothing is missi
 - A named target for an improvement, instead of "make it better": the four-rewrite pattern is visible in the trace and countable from a transcript, so a fix can be shown to reduce it.
 - A warning about where improvement cannot come from: the local model is already leaner in turns and tokens than the reference on coding work. A change that only shortens answers or prunes tools cannot help; the target is verification placement on diagnosis, and the 95-turn session's habit of probing before acting.
 
-## Making it a model change, and the gate it needs
+## Limit of this instrument
 
-The cheapest delivery is a harness counter (refuse to let an edit land in the same turn as the first failure it is meant to fix). That changes behaviour without touching weights, and it is verifiable tonight.
-
-A model-level version — the one worth sharing as a checkpoint — is a steering vector over the diagnosis phase, fitted from paired traces (same task, four-rewrite path versus one-rewrite path). Its gate is the same instrument above, plus:
-
-- the 18-task ruler must not lose a task,
-- the KL yardstick must stay inside the measured floor,
-- no regression on the small bug-fix task, where the local model is currently *better* than the reference.
-
-A trace fine-tune is explicitly not the first move: it needs data this box has not collected, and the published results on self-inspection and self-evolution both regress unseen tasks. The steering route changes activation, not weights, and can be withdrawn without re-downloading a checkpoint.
+Three tasks, one run each per arm. It shows where turns go, not a ranking: a
+model can be leaner here and still lose on longer work, and one of the three
+tasks was too small to separate the arms at all. Treat it as a way to aim a
+change and re-measure, not as a scoreboard.

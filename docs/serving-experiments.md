@@ -198,14 +198,14 @@ The conclusion the four arms support: this is not a prompting problem that a pro
 
 ## The turn contract is inert on short tasks
 
-A short behavioural block (a short behavioural preamble) was measured on two scratch tasks, one run per arm, identical inputs, the only difference being whether the block was in the project's `AGENTS.md`:
+A short behavioural preamble about call batching, re-reading evidence, re-running passed checks and scripting deterministic transforms was measured on two scratch tasks, one run per arm, identical inputs, the only difference being whether the preamble was present in the project's `AGENTS.md`:
 
 | bed | arm off | arm on |
 |---|---|---|
 | task states "write convert.py" | 7 turns, 6 calls, 30 s, pass | 6 turns, 6 calls, 26 s, pass |
 | task states only the goal | 5 turns, 4 calls, 17 s, pass | 5 turns, 4 calls, 16 s, pass |
 
-Nothing to gain: on a five-turn task the model already writes one script and never revisits a passed check, with or without being told. The first bed was also malformed as an experiment — its wording prescribed the one-script method, which is the behaviour the block asks for.
+Nothing to gain: on a five-turn task the model already writes one script and never revisits a passed check, with or without being told. The first bed was also malformed as an experiment — its wording prescribed the single-script method, which is the behaviour the preamble asks for.
 
 So the block is not refuted, it is unaddressed: the session that motivated it ran 95 turns with 45 of them reconnaissance or re-verification, and nothing at five turns can distinguish. The long-horizon bed has since run; it also shows no effect:
 
