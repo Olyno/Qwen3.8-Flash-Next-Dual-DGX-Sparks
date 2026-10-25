@@ -47,6 +47,29 @@ What the table says:
 - **TTFT is linear.** 0.53 s, 11.3 s, 22.9 s for 1k, 32k, 65k, i.e. about 0.35 ms per 1k tokens.
 - **Speed is acceptance, not step time.** Steps/s is stable at 13-14; tokens/step ranges from 1.99 (prose) to 4.55 (copy). The acceptance column is the lever.
 
+## After the loader change
+
+The same matrix on the boot that uses `runai_streamer` (see `docs/load-time.md`;
+271 s load, 368,009 KV tokens against 180-240k before). TTFT and step rate are
+unchanged — 0.56 / 11.4 / 23.0 s at 1k / 32k / 65k, about 13 steps/s — so the
+loader moved bytes, not the decode loop.
+
+| content | 1k temp 0 | 32k temp 0 | 65k temp 0 |
+|---|---|---|---|
+| prose | 27.1 | 25.5 | 27.9 |
+| code | 37.3 | 39.2 | 35.7 |
+| copy | 65.4 | 59.8 | 64.7 |
+
+Those are inside the spread of the earlier boot, so the loader did not change
+decode throughput.
+
+**The `entropy` row is not a comparable measurement.** Its content is regenerated
+per run, and three runs on one boot gave 30.0, 44.1 and 38.6 tok/s at 1k
+(acceptance 47.1%, 66.2%, 57.1%). A single sample differs from another by more
+than any change worth measuring, so entropy rows from single runs — including
+the ones in the table above it — should not be used to compare configurations.
+Prose, code and copy are stable across runs and are the rows to use.
+
 ## Comparison with the published single-node reference
 
 The upstream single-node project reports, on the same class of hardware: **48.7 tok/s, 61.5 ms per engine step, 3.00 tokens/step** for prose at one stream, with MTP 3, `MAX_NUM_SEQS=8`, BF16 recurrent state and a FULL decode graph.
