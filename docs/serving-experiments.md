@@ -179,6 +179,18 @@ The engine sets its attention block size to **1,680** tokens on this configurati
 
 The first two rows are the measurements from the cache section above and they match the arithmetic exactly. The third is the one that matters: **a prompt shorter than one block is never cached at all**, even when the same 792-token system message is sent three times in a row.
 
+How much that costs depends entirely on the prompt size, because the loss is at most the last partial block:
+
+| prompt tokens | cached | share |
+|---|---|---|
+| 1,024 | 0 | 0% |
+| 4,096 | 3,360 | 82% |
+| 16,384 | 15,120 | 92% |
+| 32,768 | 31,920 | 97% |
+| 65,536 | 65,520 | 99.98% |
+
+So block quantisation is a **short-prompt problem only**. At the context sizes a real agent session reaches, the cache absorbs everything except the last fraction of a block, and the earlier five-turn measurement (80% at 15k tokens) sits exactly where this table says it should. Any statement about "the cache does not work" is wrong above about 4k tokens.
+
 Three consequences:
 
 - **Short requests pay full price every time.** A system prompt, a skill block or a policy preamble only becomes free once the conversation is longer than one block. Below that it is a straight cost, repeated per request.
@@ -198,6 +210,8 @@ This build accepts `thinking_token_budget` on the chat request and enforces it i
 | 1024 | 12/12 | 2,191 | 1,572 |
 
 The arms are indistinguishable because nothing reaches the cap: the mean trace is **138 tokens** and the longest is **241** (`negation`), so a 512 budget is never hit. That is the prior baked into the checkpoint doing its job.
+
+**This measurement covers one-shot tasks only.** Every task here asks a self-contained question whose answer fits in a sentence, which is not what an agent turn looks like. A planning or debugging turn over a large tool result can plausibly run a trace many times longer, and this set cannot show it. The tool-use harness reports `reasoning_tokens` per task for exactly that reason; until an agent-shaped trace is measured above the budget, the trace-budget question stays open rather than settled in either direction.
 
 The ceiling is small anyway. Generated tokens are **3% of the tokens a session spends** — 2,407 against 77,522 prompt tokens in this run, and 320 against 47,168 across the five-turn session above. Removing the trace entirely would move the total by about 3%, while the marginal prefill of one tool result moves it by 2,000.
 
