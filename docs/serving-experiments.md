@@ -147,6 +147,26 @@ Two numbers matter downstream:
 - **Prompt tokens outnumber generated tokens 147 to 1** over the session. Any work on the prompt side moves more than any work on the decode side, and unlike decode it behaves the same on one rank or two.
 - **The marginal prefill is 2.7-3.7k tokens per turn**, and about 2k of that is the new tool output. That is the target: a tool result is paid for once when it arrives and again in every later turn's prompt, so shrinking or de-duplicating it attacks the only part of the prompt the cache cannot absorb.
 
+## Running the open question on the pair
+
+The depth question is the only entry here that needs the two-rank deployment. It is a sequential A/B, one recipe change, no code:
+
+1. Boot the committed recipe and run the reference arm. Snapshot the counters, run the workload, then diff them, so the acceptance is a delta and not the server's lifetime average:
+
+   ```
+   python3 bench/mtp_accept.py --save /tmp/acc_before.json
+   BENCH_BASE=http://localhost:8888 BENCH_MODEL=Qwen3.8-Flash-Next-NVFP4 \
+     python3 bench/decodebench.py --decode 200 --contexts 1000,32000,65000 --temps 0.0
+   python3 bench/mtp_accept.py --since /tmp/acc_before.json
+   ```
+
+2. Pin `mtp_num_speculative_tokens: 3` in the recipe, boot, repeat step 1 into a second file.
+3. Boot the committed recipe again and repeat within the hour. Per `docs/bench-gates.md`, a delta under 2% is not a win until the baseline has been re-run next to it.
+
+Compare **ms/step and tokens/step**, not tok/s: acceptance moves with the text, so tok/s compares texts rather than configurations. The decision rule that matters is the same one this file used on one rank — does the fourth row buy more tokens per step than the step time it costs. On the pair the row also costs an all-reduce per layer, so the bar it has to clear is higher.
+
+The before/after matrix runs on the same deployment for the same reason, and its commands are unchanged from the ones above; only the deployment is different.
+
 ## Already settled by configuration
 
 - **BF16 recurrent state.** `mamba_ssm_cache_dtype: bfloat16` is in the committed recipe and visible in the live container arguments, so the reference's +8.5% is already in the baseline above. No A/B left to run.
