@@ -2,6 +2,15 @@
 
 A running log of changes to the serving path: what was measured, what was kept, and what was rejected. Negative results are kept on purpose so the same experiment is not repeated.
 
+## Scope of these numbers
+
+Every row in this file was measured on one box with `tensor_parallel_size = 1`. Production runs across two boxes with tensor parallelism, so the numbers divide into two kinds and only one of them transfers:
+
+- **Transfers.** Anything counted in tokens: acceptance per draft position, tokens per verify step, prompt tokens, completion tokens, thinking tokens, turns per task. These are properties of the model, the draft head, the prompt and the proxy; splitting the model across two ranks does not change which tokens the model would have produced.
+- **Does not transfer.** Anything counted in seconds: decode tok/s, engine step time, TTFT, the cost of one extra verify row, concurrency scaling. A step at two ranks pays an all-reduce per layer per row, so a row that costs 4% of a single-box step can cost more on the pair, and the KV pool is per-rank instead of unified.
+
+So a single-box measurement can accept a token-count change and reject a *performance* change, but it cannot set production performance expectations. Where a verdict below depends on step time, it is a single-box verdict and is labelled as one.
+
 ## Method
 
 - `bench/decodebench.py`, 200 generated tokens per run, contexts 1k / 32k / 65k, temperatures 0 and 0.8, four content types (prose, code, entropy, copy).
@@ -88,7 +97,9 @@ What it shows:
 - **But the cap binds on predictable content.** Copy loses 13-15% at every context and entropy loses 22% at 1k, because those tasks were spending the fourth row well (copy ran 4.42 tokens/step on the baseline).
 - Prose gains at long context (+7.6% at 32k, +6.0% at 65k) and is flat at 1k (−1.4%); code is mixed (−5.5% at 32k, +5.7% at 1k, +3.1% at 65k), which is the shape most agent traffic has.
 
-Mean over the twelve cells: **40.5 tok/s against 42.8 on the baseline**, so the change is a net loss. Rejected; `mtp_num_speculative_tokens` stays at 4. The comparison with the reference stays unexplained by depth, which points the remaining gap at the draft head and the prompt content rather than the chain length.
+Mean over the twelve cells: **40.5 tok/s against 42.8 on the baseline**, so the change loses on one box. `mtp_num_speculative_tokens` stays at 4.
+
+Read this verdict with the scope note above in mind. What transfers is the token count: the fourth draft is accepted often enough to add 0.23 tokens per step on prose and 0.83 on copy, and no topology changes that. What does not transfer is what the extra row costs. One more verify row is one more all-reduce per layer on a two-rank deployment, so the row is relatively more expensive there and the trade could flip. This is the one experiment in this file that deserves a repeat on the dual-node deployment before the question is closed.
 
 ## Already settled by configuration
 
