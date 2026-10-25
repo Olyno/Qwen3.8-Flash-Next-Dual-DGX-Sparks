@@ -193,6 +193,10 @@ qsa_rope_clamp: true
 # fadvise(DONTNEED) each checkpoint shard as the loader finishes it, keeping
 # the page cache one shard deep during the load.
 load_drop_cache: true
+# Loader for the weight files. fastsafetensors copies shards on the device and
+# runai_streamer parallelises host reads; both are unmeasured here, so the
+# default stays the one every number below was taken with.
+load_format: safetensors
 # Free-list block-id sort (vllm#31371 RFC port, patches/free_block_sort/):
 # freed KV blocks go back onto the free list sorted by block_id, so pops hand
 # out address-sequential blocks — contiguous ids coalesce into larger DMA

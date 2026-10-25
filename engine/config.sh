@@ -183,6 +183,14 @@ MTP_SKIP_PREFIX="${MTP_SKIP_PREFIX:-false}"
 # consumes it (v0.30 lane only, patches/patch_load_drop_cache_v030.py): keeps
 # the page cache one shard deep during the load on unified memory.
 LOAD_DROP_CACHE="${LOAD_DROP_CACHE:-false}"
+
+# Weight loader. This checkpoint holds ~300k tensors (weight + weight_scale +
+# weight_scale_2 + input_scale per expert per layer), so the per-tensor path
+# costs ~2.4 ms each: 727 s of a 12-minute boot, against a disk that reads at
+# 3.4 GB/s. fastsafetensors copies whole shards on the device; runai_streamer
+# parallelises the host reads. Both ship in the image.
+LOAD_FORMAT="${LOAD_FORMAT:-safetensors}"
+[[ "$LOAD_FORMAT" =~ ^(safetensors|fastsafetensors|runai_streamer)$ ]] || err "load_format must be safetensors, fastsafetensors or runai_streamer (got '$LOAD_FORMAT')"
 # NVFP4 per-channel activation hooks (v0.30 lane only, debug tooling,
 # patches/patch_nvfp4_act_hooks.py): captures per-channel absmax of every
 # MoE layer's gate_up/down_proj inputs. Only fires with moe_backend:

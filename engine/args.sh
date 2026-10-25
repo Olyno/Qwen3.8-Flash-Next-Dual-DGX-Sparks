@@ -24,8 +24,10 @@
     [[ -n "$MAMBA_SSM_CACHE_DTYPE" ]] && VLLM_ARGS+=("--mamba-ssm-cache-dtype" "$MAMBA_SSM_CACHE_DTYPE")
     [[ -n "$GDN_PREFILL_BACKEND" ]] && VLLM_ARGS+=("--gdn-prefill-backend" "$GDN_PREFILL_BACKEND")
     [[ -n "$MAX_LOGPROBS" ]] && VLLM_ARGS+=("--max-logprobs" "$MAX_LOGPROBS")
-    VLLM_ARGS+=("--load-format" "safetensors")
-    VLLM_ARGS+=("--safetensors-load-strategy" "lazy")
+    VLLM_ARGS+=("--load-format" "$LOAD_FORMAT")
+    # lazy maps each tensor instead of reading it eagerly; it only applies to
+    # the safetensors loader.
+    [[ "$LOAD_FORMAT" == "safetensors" ]] && VLLM_ARGS+=("--safetensors-load-strategy" "lazy")
     VLLM_ARGS+=("--enable-chunked-prefill")
     VLLM_ARGS+=("--reasoning-parser" "qwen3")
     VLLM_ARGS+=("--enable-auto-tool-choice")
