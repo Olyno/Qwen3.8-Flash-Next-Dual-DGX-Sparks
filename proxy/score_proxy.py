@@ -328,6 +328,47 @@ def last_user_text(messages):
 TAIL_FRAME = "Context for the request above, not a new request:\n\n"
 
 
+# ── edit-loop guard ─────────────────────────────────────────────────────
+# Repeated rewrites of one file usually mean the change is not being tested:
+# the model replaces an implementation, checks afterwards and replaces again.
+
+# Noticing that and saying it once is cheap;
+# it changes no evidence and runs only when opted in.
+
+EDIT_TOOLS = ("write", "edit", "multiedit", "patch", "apply_patch", "str_replace")
+OBSERVE_TOOLS = ("read", "grep", "glob", "find", "bash", "ls", "list", "webfetch")
+
+EDIT_GUARD = (
+    "Before the next rewrite: no check ran between the previous edits of the "
+    "same file. Measure the failing operation (run it, time it), then make one "
+    "change and prove it does what the old code did."
+)
+
+
+def edit_loop_paths(messages):
+    """Paths written at least twice since the last observation call."""
+    counts = {}
+    for message in messages or []:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            fn = (call or {}).get("function") or {}
+            name = (fn.get("name") or "").lower()
+            if name in OBSERVE_TOOLS:
+                counts.clear()
+                continue
+            if name not in EDIT_TOOLS:
+                continue
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except (TypeError, ValueError):
+                continue
+            path = args.get("path") or args.get("file_path") or args.get("file")
+            if isinstance(path, str) and path:
+                counts[path] = counts.get(path, 0) + 1
+    return {path: n for path, n in counts.items() if n >= 2}
+
+
 def _append_user_tail(messages, block):
     """Volatile proxy context goes after the conversation. Prefix caching
     matches from the start of the prompt, so text that can change between
@@ -1519,6 +1560,19 @@ class Handler(BaseHTTPRequestHandler):
             if prob >= steer.threshold:
                 print(f"score proxy: tool steer prob={prob:.3f} "
                       f"force={steer.force}", file=sys.stderr)
+        if self.server.edit_guard:
+            messages = req.get("messages") or []
+            loops = edit_loop_paths(messages)
+            if loops and not any(isinstance(m, dict) and m.get("role") == "user"
+                                 and EDIT_GUARD[:40] in (m.get("content") or "")
+                                 for m in messages):
+                busiest = max(loops, key=loops.get)
+                _append_user_tail(messages, f"{EDIT_GUARD} ({busiest}: "
+                                            f"{loops[busiest]} rewrites)")
+                req["messages"] = messages
+                body = json.dumps(req).encode()
+                print(f"score proxy: edit-loop guard fired on {busiest} "
+                      f"({loops[busiest]} rewrites)", file=sys.stderr)
         if self.server.dedupe_tool_output or self.server.diff_tool_output:
             # Off by default: this changes what the model reads, so it runs
             # only when an operator opted in. Positions in the marker are
@@ -1675,7 +1729,7 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
                 skills_dir=None, skills_top_k=3, skills_min_sim=0.25,
                 skills_pin=(), skills_pin_chars=4000, context_tokens=0,
                 dedupe_tool_output=False, diff_tool_output=False,
-                reasoning_effort=None):
+                reasoning_effort=None, edit_guard=False):
     if reasoning_effort not in (None, "", "xhigh", "medium", "low"):
         raise SystemExit(
             f"PROXY_REASONING_EFFORT={reasoning_effort!r}: use low, medium or xhigh")
@@ -1712,6 +1766,7 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
             min_sim=skills_min_sim, pin=skills_pin,
             pin_chars=skills_pin_chars)
     srv.reasoning_effort = reasoning_effort or None
+    srv.edit_guard = edit_guard
     srv.keepalive = None
     if keepalive_s > 0:
         srv.keepalive = CacheKeepalive(srv, keepalive_s)
@@ -1752,7 +1807,8 @@ def main():
         int(os.environ.get("PROXY_CONTEXT_TOKENS", 0) or 0),
         os.environ.get("PROXY_DEDUPE_TOOL_OUTPUT") == "1",
         os.environ.get("PROXY_DIFF_TOOL_OUTPUT") == "1",
-        reasoning_effort=os.environ.get("PROXY_REASONING_EFFORT") or None)
+        reasoning_effort=os.environ.get("PROXY_REASONING_EFFORT") or None,
+        edit_guard=os.environ.get("PROXY_EDIT_GUARD") == "1")
     print(f"score proxy on :{srv.server_port} -> "
           f"http://{srv.upstream[0]}:{srv.upstream[1]}")
     srv.serve_forever()
