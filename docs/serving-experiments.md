@@ -207,7 +207,14 @@ A short behavioural block (a short behavioural preamble) was measured on two scr
 
 Nothing to gain: on a five-turn task the model already writes one script and never revisits a passed check, with or without being told. The first bed was also malformed as an experiment — its wording prescribed the one-script method, which is the behaviour the block asks for.
 
-So the block is not refuted, it is unaddressed: the session that motivated it ran 95 turns with 45 of them reconnaissance or re-verification, and nothing at five turns can distinguish. The bed that can is a long-horizon task with a real converter-and-verify loop; until that runs, no claim is made in either direction.
+So the block is not refuted, it is unaddressed: the session that motivated it ran 95 turns with 45 of them reconnaissance or re-verification, and nothing at five turns can distinguish. The long-horizon bed has since run; it also shows no effect:
+
+| arm | turns (3 runs) | reasoning |
+|---|---|---|
+| without the block | 21, 35, 21 | 5,904 / 16,497 / 9,371 |
+| with the block | 23, 30, 22 | 11,489 / 31,532 / 9,503 |
+
+The converter-and-resume task produces 21–35 turns either way, and the spread is larger than the difference. Verdict: the block does not reduce turns, and should not be shipped as a token saving. What the trace comparison did find is a narrower target — verification placement on diagnosis — recorded in `docs/model-comparison.md`.
 
 ## Prefix caching is quantised to 1,680 tokens
 
