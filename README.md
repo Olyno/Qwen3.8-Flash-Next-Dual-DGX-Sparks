@@ -39,8 +39,8 @@ Config is split in two, on purpose:
 
 | Recipe | Model | Image | Use |
 |---|---|---|---|
-| `prod` (default) | local checkpoint (`model_path`, no download) | `vllm/vllm-openai:v0.32.0` | Olyno/Qwen-3.8-Flash-Next (prod) |
-| `mia` | `nvidia/Qwen3.8-Flash-Next-NVFP4` (HF cache) | `vllm/vllm-openai:qwen38-flash-next` | vendor reference, day-0 defaults |
+| `prod` (default) | local `~/models/Qwen3.8-Flash-Next-NVFP4-lean`, published as [Olyno/Qwen3.8-Flash-Next-NVFP4-lean](https://huggingface.co/Olyno/Qwen3.8-Flash-Next-NVFP4-lean) | `vllm/vllm-openai:v0.32.0` | our serving config |
+| `mia` | `nvidia/Qwen3.8-Flash-Next-NVFP4` (HF cache, stock weights) | `vllm/vllm-openai:qwen38-flash-next` | vendor reference, day-0 defaults |
 
 All new optimizations land in `prod.yaml`.
 
