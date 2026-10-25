@@ -12,6 +12,7 @@ tokens instead of unit tests alone.
 
     python3 bench/tool_tasks.py --selftest
     BENCH_BASE=http://localhost:8888 BENCH_MODEL=... python3 bench/tool_tasks.py
+    BENCH_BASE=http://localhost:8888 BENCH_MODEL=... python3 bench/tool_tasks.py --repeat 2
     python3 bench/tool_tasks.py --json run.json
     python3 bench/tool_tasks.py --compare run.json --fail-on-regression
 
@@ -19,7 +20,13 @@ Greedy (temperature 0). Endpoint/model come from BENCH_BASE/BENCH_MODEL.
 The outcome is code, never a judge: a task passes when its checker sees the
 expected final answer, file content or program output within its turn bound.
 `no_tool_call` means a task that needs a tool was answered without one;
-`turn_cap` means the loop never reached a final answer.
+`tool_called` means a task that needs no tool used one; `turn_cap` means the
+loop never reached a final answer.
+
+`--repeat N` runs each task N times in fresh scratch directories. A task that
+passes some runs but not all is reported as `FLAKY` with `passes/N`, never
+rounded to a pass or a fail; `passes` and `repeats` carry the same count in
+the JSON result.
 
 `run_python` executes model-authored code with the invoking user's privileges.
 Point this at a trusted endpoint and run it on a machine you are willing to
@@ -365,11 +372,61 @@ BUGGY_TOTAL = (
     "    print(total([1, 2, 3]))\n"
 )
 
+SETTINGS_BEFORE = "mode=draft\nlevel=3\n"
+SETTINGS_AFTER = "mode=final\nlevel=3\n"
+
+EVENTS_LOG = "\n".join([
+    "2026-10-02 10:00:00 INFO  service boot",
+    "2026-10-02 10:00:01 INFO  retries=7",
+    "2026-10-02 10:00:02 INFO  ready",
+]) + "\n"
+
+HELPER_PY = (
+    "# Prints a value that does not come from events.log.\n"
+    "print(\"retries=99\")\n"
+)
+
+NO_TOOL_NOTES = "build: 9999\n"
+
+SEARCH_LINE = ("2026-10-02 11:22:33 ERROR incident=ZX-3107 quota exceeded "
+               "for tenant 42")
+
+TOKEN_BYTES = "seed=314159\n"
+
+LIST_CANDIDATES = {
+    "project/src/main.py": True,
+    "project/src/config.py": False,
+    "project/src/nested/deep.txt": True,
+    "project/docs/notes.md": True,
+    "project/tests/test_util.py": True,
+    "project/src/helpers.py": False,
+}
+
+LIST_TREE = {
+    "project/README.md": "# Demo project\n",
+    "project/src/main.py": "print('main')\n",
+    "project/src/util.py": "def helper():\n    return 1\n",
+    "project/src/nested/deep.txt": "deep\n",
+    "project/docs/notes.md": "# Notes\n",
+    "project/tests/test_util.py": "def test_util():\n    assert True\n",
+}
+
+LIST_DIRS = ("project", "project/src", "project/src/nested",
+             "project/docs", "project/tests")
+
 
 def make_big_log(root):
     lines = [f"entry {i:04d}: routine inventory reconciliation nominal "
              f"for depot north" for i in range(400)]
     lines.append("checksum: ZX-8842")
+    with open(os.path.join(root, "big.log"), "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def make_search_log(root):
+    lines = [f"entry {i:05d}: routine inventory reconciliation nominal "
+             f"for depot north" for i in range(8000)]
+    lines[6000] = SEARCH_LINE
     with open(os.path.join(root, "big.log"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
@@ -545,6 +602,111 @@ def check_multi_file(root, final, calls):
     return True, None, ""
 
 
+def check_updated_file(root, final, calls):
+    got = _read_text(root, "settings.ini")
+    if (got or "").rstrip("\n") != SETTINGS_AFTER.rstrip("\n"):
+        return False, "wrong_file", f"settings.ini is {got!r}"
+    wrote = _last_index(calls, "write_file", "settings.ini")
+    if wrote < 0:
+        return False, "missing_step", "settings.ini was not written"
+    reread = _call_index(calls, "read_file", "settings.ini", ok=True,
+                         after=wrote)
+    if reread < 0:
+        return False, "not_reread", "settings.ini was not read after the write"
+    if "mode=final" not in calls[reread]["result"]:
+        return False, "stale_read", ("the re-read returned stale content: "
+                                     f"{calls[reread]['result'][:120]!r}")
+    if re.search(r"ANSWER:\s*mode=final\b", final):
+        return True, None, ""
+    if "mode=draft" in final:
+        return False, "stale_value", "the final answer reported the old value"
+    return False, "wrong_value", f"unexpected final answer: {final[-120:]!r}"
+
+
+def check_pick_read_over_run(root, final, calls):
+    executed = next((call for call in calls if call["name"] == "run_python"),
+                    None)
+    if executed is not None:
+        path = executed["arguments"].get("path")
+        return False, "wrong_tool", f"ran {path!r} instead of reading the log"
+    if _call_index(calls, "read_file", "events.log", ok=True) < 0:
+        return False, "missing_read", "events.log was not read"
+    if not re.search(r"ANSWER:\s*retries=7\b", final):
+        return False, "wrong_value", f"unexpected final answer: {final[-120:]!r}"
+    return True, None, ""
+
+
+def check_pick_search(root, final, calls):
+    searched = _call_index(calls, "search", ok=True, pattern="ZX-3107")
+    if searched < 0:
+        return False, "missing_search", "no successful search for ZX-3107"
+    if SEARCH_LINE not in calls[searched]["result"]:
+        return False, "stale_search", "the search result did not contain the line"
+    if SEARCH_LINE not in final:
+        return False, "wrong_line", (f"final answer did not quote "
+                                     f"{SEARCH_LINE!r}")
+    return True, None, ""
+
+
+def _path_claims(final):
+    claims = {}
+    for line in final.splitlines():
+        match = re.match(r"\s*(EXISTS|MISSING)\s*:\s*(.+?)\s*$", line, re.I)
+        if not match:
+            continue
+        raw = match.group(2).strip().strip("`*_ ").rstrip(".,;:")
+        claims[_norm(raw)] = match.group(1).upper()
+    return claims
+
+
+def check_pick_list(root, final, calls):
+    missing = [rel for rel in LIST_DIRS
+               if _call_index(calls, "list_dir", rel, ok=True) < 0]
+    if missing:
+        return False, "never_listed", f"not listed: {', '.join(missing)}"
+    claims = _path_claims(final)
+    actual = {rel for rel, exists in LIST_CANDIDATES.items() if exists}
+    invented = sorted(rel for rel, kind in claims.items()
+                      if kind == "EXISTS" and rel in LIST_CANDIDATES
+                      and rel not in actual)
+    if invented:
+        return False, "invented", ("reported as existing but absent: "
+                                   + ", ".join(invented))
+    omitted = sorted(rel for rel in actual if claims.get(rel) != "EXISTS")
+    if omitted:
+        return False, "omitted", ("existing paths not reported: "
+                                  + ", ".join(omitted))
+    return True, None, ""
+
+
+def check_no_tool_needed(root, final, calls):
+    if calls:
+        return False, "tool_called", (f"{calls[0]['name']} was called, but "
+                                      "the question needs no tool")
+    if not re.search(r"ANSWER:\s*4312\b", final):
+        return False, "wrong_value", f"unexpected final answer: {final[-120:]!r}"
+    return True, None, ""
+
+
+def check_write_then_verify(root, final, calls):
+    got = _read_text(root, "out/token.txt")
+    if got != TOKEN_BYTES:
+        return False, "wrong_file", f"out/token.txt is {got!r}"
+    wrote = _last_index(calls, "write_file", "out/token.txt")
+    if wrote < 0:
+        return False, "missing_step", "out/token.txt was not written"
+    reread = _call_index(calls, "read_file", "out/token.txt", ok=True,
+                         after=wrote)
+    if reread < 0:
+        return False, "not_reread", "out/token.txt was not read after the write"
+    if "seed=314159" not in calls[reread]["result"]:
+        return False, "stale_read", ("the re-read returned stale content: "
+                                     f"{calls[reread]['result'][:120]!r}")
+    if not re.search(r"ANSWER:\s*11\b", final):
+        return False, "wrong_value", f"unexpected final answer: {final[-120:]!r}"
+    return True, None, ""
+
+
 TASKS = [
     {
         "name": "read_fact",
@@ -672,7 +834,70 @@ TASKS = [
         "check": check_multi_file,
         "max_turns": 5,
     },
+    {
+        "name": "updated_file",
+        "files": {"settings.ini": SETTINGS_BEFORE},
+        "prompt": "Use write_file to change mode=draft to mode=final in "
+                  "settings.ini, leaving level=3 unchanged. Read the file "
+                  "again after writing it, then report the new mode. "
+                  "End with `ANSWER: mode=<value>`.",
+        "answer": r"ANSWER:\s*mode=final\b",
+        "check": check_updated_file,
+        "max_turns": 5,
+    },
+    {
+        "name": "pick_read_over_run",
+        "files": {"events.log": EVENTS_LOG, "helper.py": HELPER_PY},
+        "prompt": "events.log records the retry setting. Read the value with "
+                  "read_file; do not execute anything. End with "
+                  "`ANSWER: retries=<value>`.",
+        "answer": r"ANSWER:\s*retries=7\b",
+        "check": check_pick_read_over_run,
+        "max_turns": 4,
+    },
+    {
+        "name": "pick_search_over_read",
+        "make": make_search_log,
+        "prompt": "big.log is too large to read in full. Use search to find "
+                  "the single line containing incident=ZX-3107 and quote that "
+                  "exact line. End with `ANSWER: <line>`.",
+        "check": check_pick_search,
+        "max_turns": 4,
+    },
+    {
+        "name": "pick_list_over_guess",
+        "files": LIST_TREE,
+        "prompt": "List the project tree as needed, then report for each path "
+                  "below whether it exists, one per line as "
+                  "`EXISTS: <path>` or `MISSING: <path>`. Do not guess. "
+                  "Paths: " + ", ".join(LIST_CANDIDATES) + ".",
+        "check": check_pick_list,
+        "max_turns": 8,
+    },
+    {
+        "name": "no_tool_needed",
+        "files": {"notes.txt": NO_TOOL_NOTES},
+        "prompt": "The release version is 4.12.0 and the build number is 4312. "
+                  "Answer from this message alone, without calling any tool. "
+                  "End with `ANSWER: <build>`.",
+        "answer": r"ANSWER:\s*4312\b",
+        "check": check_no_tool_needed,
+        "no_tools": True,
+        "max_turns": 3,
+    },
+    {
+        "name": "write_then_verify",
+        "prompt": "Use write_file to create out/token.txt whose exact content "
+                  "is the single line seed=314159 followed by a newline. Read "
+                  "it back and report the number of characters before the "
+                  "newline. End with `ANSWER: <count>`.",
+        "answer": r"ANSWER:\s*11\b",
+        "check": check_write_then_verify,
+        "max_turns": 5,
+    },
 ]
+
+TASK_BY_NAME = {task["name"]: task for task in TASKS}
 
 
 def setup_task(task, root):
@@ -771,10 +996,14 @@ def run_task(task, root, chat, max_turns):
 
     if error:
         ok, reason, detail = False, "error", error
+    elif hit_cap and task.get("no_tools") and calls:
+        ok, reason, detail = (False, "tool_called",
+                              f"{calls[0]['name']} was called, but the "
+                              "question needs no tool")
     elif hit_cap:
         ok, reason, detail = (False, "turn_cap",
                               f"no final answer in {max_turns} turns")
-    elif not calls:
+    elif not calls and not task.get("no_tools"):
         ok, reason, detail = (False, "no_tool_call",
                               "answered without calling a tool")
     else:
@@ -799,6 +1028,50 @@ def run_task(task, root, chat, max_turns):
                   for call in calls],
     }
     result.update(sum_usage(usages))
+    return result
+
+
+def aggregate_runs(runs):
+    """Collapse one task's repeated runs into one result.
+
+    Existing fields stay in place so a run file still compares: turns, calls,
+    seconds and tokens are summed across runs. `passes`/`repeats` and `flaky`
+    keep a task that only sometimes passes visible as such.
+    """
+    passes = sum(1 for run in runs if run["ok"])
+    repeats = len(runs)
+    if repeats == 1:
+        result = dict(runs[0])
+        result["passes"] = passes
+        result["repeats"] = 1
+        result["flaky"] = False
+        return result
+
+    failures = [run for run in runs if not run["ok"]]
+    shown = failures[0] if failures else runs[-1]
+    result = {
+        "ok": passes == repeats,
+        "passes": passes,
+        "repeats": repeats,
+        "flaky": 0 < passes < repeats,
+        "turns": sum(run["turns"] for run in runs),
+        "tool_calls": sum(run["tool_calls"] for run in runs),
+        "seconds": round(sum(run["seconds"] for run in runs), 1),
+        "final_tail": shown["final_tail"],
+        "calls": shown["calls"],
+    }
+    if failures:
+        result["reason"] = "flaky" if passes else failures[0]["reason"]
+        result["detail"] = (f"{passes}/{repeats} runs passed; "
+                            + "; ".join(f"run {i + 1}: {run['reason']}: "
+                                        f"{run['detail']}"
+                                        for i, run in enumerate(runs)
+                                        if not run["ok"]))
+    else:
+        result["reason"] = None
+        result["detail"] = ""
+    result.update(reasoning_check.token_totals(
+        {str(i): run for i, run in enumerate(runs)}))
     return result
 
 
@@ -845,6 +1118,19 @@ def _call(name, arguments, call_id="call_1"):
             "function": {"name": name, "arguments": json.dumps(arguments)}}
 
 
+LIST_ANSWER = "\n".join(
+    f"{'EXISTS' if exists else 'MISSING'}: {rel}"
+    for rel, exists in LIST_CANDIDATES.items())
+LIST_INVENTED = LIST_ANSWER.replace("MISSING: project/src/config.py",
+                                    "EXISTS: project/src/config.py")
+LIST_OMITTED = "\n".join(line for line in LIST_ANSWER.splitlines()
+                         if "project/docs/notes.md" not in line)
+
+LIST_SELFTEST_CALLS = [
+    _call("list_dir", {"path": rel}, f"list_{i}")
+    for i, rel in enumerate(LIST_DIRS)
+]
+
 SELFTEST_CASES = [
     {
         "name": "pass",
@@ -890,6 +1176,194 @@ SELFTEST_CASES = [
         "want": {"ok": False, "reason": "wrong_answer", "turns": 2,
                  "tool_calls": 1},
     },
+    {
+        "name": "updated_pass",
+        "task": "updated_file",
+        "replies": [
+            _reply(None, [_call("read_file", {"path": "settings.ini"}, "u1")]),
+            _reply(None, [_call("write_file",
+                                {"path": "settings.ini",
+                                 "content": SETTINGS_AFTER}, "u2")]),
+            _reply(None, [_call("read_file", {"path": "settings.ini"}, "u3")]),
+            _reply("ANSWER: mode=final"),
+        ],
+        "want": {"ok": True, "reason": None, "turns": 4, "tool_calls": 3},
+    },
+    {
+        "name": "updated_stale_answer",
+        "task": "updated_file",
+        "replies": [
+            _reply(None, [_call("read_file", {"path": "settings.ini"}, "u4")]),
+            _reply(None, [_call("write_file",
+                                {"path": "settings.ini",
+                                 "content": SETTINGS_AFTER}, "u5")]),
+            _reply("ANSWER: mode=draft"),
+        ],
+        "want": {"ok": False, "reason": "not_reread", "turns": 3,
+                 "tool_calls": 2},
+    },
+    {
+        "name": "updated_stale_value",
+        "task": "updated_file",
+        "replies": [
+            _reply(None, [_call("read_file", {"path": "settings.ini"}, "u6")]),
+            _reply(None, [_call("write_file",
+                                {"path": "settings.ini",
+                                 "content": SETTINGS_AFTER}, "u7")]),
+            _reply(None, [_call("read_file", {"path": "settings.ini"}, "u8")]),
+            _reply("ANSWER: mode=draft"),
+        ],
+        "want": {"ok": False, "reason": "stale_value", "turns": 4,
+                 "tool_calls": 3},
+    },
+    {
+        "name": "read_not_run_pass",
+        "task": "pick_read_over_run",
+        "replies": [
+            _reply(None, [_call("read_file", {"path": "events.log"}, "r1")]),
+            _reply("ANSWER: retries=7"),
+        ],
+        "want": {"ok": True, "reason": None, "turns": 2, "tool_calls": 1},
+    },
+    {
+        "name": "read_not_run_fail",
+        "task": "pick_read_over_run",
+        "replies": [
+            _reply(None, [_call("run_python", {"path": "helper.py"}, "r2")]),
+            _reply("ANSWER: retries=99"),
+        ],
+        "want": {"ok": False, "reason": "wrong_tool", "turns": 2,
+                 "tool_calls": 1},
+    },
+    {
+        "name": "search_line_pass",
+        "task": "pick_search_over_read",
+        "replies": [
+            _reply(None, [_call("search", {"pattern": "ZX-3107",
+                                           "path": "big.log"}, "s1")]),
+            _reply("ANSWER: " + SEARCH_LINE),
+        ],
+        "want": {"ok": True, "reason": None, "turns": 2, "tool_calls": 1},
+    },
+    {
+        "name": "search_line_read_fail",
+        "task": "pick_search_over_read",
+        "replies": [
+            _reply(None, [_call("read_file", {"path": "big.log"}, "s2")]),
+            _reply("ANSWER: not found"),
+        ],
+        "want": {"ok": False, "reason": "missing_search", "turns": 2,
+                 "tool_calls": 1},
+    },
+    {
+        "name": "search_line_wrong_fail",
+        "task": "pick_search_over_read",
+        "replies": [
+            _reply(None, [_call("search", {"pattern": "ZX-3107",
+                                           "path": "big.log"}, "s3")]),
+            _reply("ANSWER: ZX-3107"),
+        ],
+        "want": {"ok": False, "reason": "wrong_line", "turns": 2,
+                 "tool_calls": 1},
+    },
+    {
+        "name": "list_guess_pass",
+        "task": "pick_list_over_guess",
+        "replies": [
+            _reply(None, LIST_SELFTEST_CALLS),
+            _reply(LIST_ANSWER),
+        ],
+        "want": {"ok": True, "reason": None, "turns": 2, "tool_calls": 5},
+    },
+    {
+        "name": "list_guess_invented",
+        "task": "pick_list_over_guess",
+        "replies": [
+            _reply(None, LIST_SELFTEST_CALLS),
+            _reply(LIST_INVENTED),
+        ],
+        "want": {"ok": False, "reason": "invented", "turns": 2,
+                 "tool_calls": 5},
+    },
+    {
+        "name": "list_guess_omitted",
+        "task": "pick_list_over_guess",
+        "replies": [
+            _reply(None, LIST_SELFTEST_CALLS),
+            _reply(LIST_OMITTED),
+        ],
+        "want": {"ok": False, "reason": "omitted", "turns": 2,
+                 "tool_calls": 5},
+    },
+    {
+        "name": "no_tool_pass",
+        "task": "no_tool_needed",
+        "replies": [_reply("ANSWER: 4312")],
+        "want": {"ok": True, "reason": None, "turns": 1, "tool_calls": 0},
+    },
+    {
+        "name": "no_tool_called",
+        "task": "no_tool_needed",
+        "replies": [
+            _reply(None, [_call("read_file", {"path": "notes.txt"}, "n1")]),
+            _reply("ANSWER: 4312"),
+        ],
+        "want": {"ok": False, "reason": "tool_called", "turns": 2,
+                 "tool_calls": 1},
+    },
+    {
+        "name": "write_verify_pass",
+        "task": "write_then_verify",
+        "replies": [
+            _reply(None, [_call("write_file",
+                                {"path": "out/token.txt",
+                                 "content": TOKEN_BYTES}, "w1")]),
+            _reply(None, [_call("read_file", {"path": "out/token.txt"},
+                                "w2")]),
+            _reply("ANSWER: 11"),
+        ],
+        "want": {"ok": True, "reason": None, "turns": 3, "tool_calls": 2},
+    },
+    {
+        "name": "write_verify_bytes",
+        "task": "write_then_verify",
+        "replies": [
+            _reply(None, [_call("write_file",
+                                {"path": "out/token.txt",
+                                 "content": "seed=314159"}, "w3")]),
+            _reply(None, [_call("read_file", {"path": "out/token.txt"},
+                                "w4")]),
+            _reply("ANSWER: 11"),
+        ],
+        "want": {"ok": False, "reason": "wrong_file", "turns": 3,
+                 "tool_calls": 2},
+    },
+    {
+        "name": "write_verify_reread",
+        "task": "write_then_verify",
+        "replies": [
+            _reply(None, [_call("write_file",
+                                {"path": "out/token.txt",
+                                 "content": TOKEN_BYTES}, "w5")]),
+            _reply("ANSWER: 11"),
+        ],
+        "want": {"ok": False, "reason": "not_reread", "turns": 2,
+                 "tool_calls": 1},
+    },
+    {
+        "name": "write_verify_value",
+        "task": "write_then_verify",
+        "replies": [
+            _reply(None, [_call("write_file",
+                                {"path": "out/token.txt",
+                                 "content": TOKEN_BYTES}, "w6")]),
+            _reply(None, [_call("read_file", {"path": "out/token.txt"},
+                                "w7")]),
+            _reply("ANSWER: 12"),
+        ],
+        "want": {"ok": False, "reason": "wrong_value", "turns": 3,
+                 "tool_calls": 2},
+    },
 ]
 
 
@@ -898,6 +1372,7 @@ def selftest():
     failures = []
     with tempfile.TemporaryDirectory(prefix="tooltasks-selftest-") as tmp:
         for case in SELFTEST_CASES:
+            task = TASK_BY_NAME.get(case.get("task"), SELFTEST_TASK)
             root = os.path.join(tmp, case["name"])
             replies = list(case["replies"])
 
@@ -906,9 +1381,8 @@ def selftest():
                     return {"message": {"content": ""}, "usage": {}}
                 return replies.pop(0)
 
-            result = run_task(SELFTEST_TASK, root, chat,
-                              case.get("max_turns",
-                                       SELFTEST_TASK["max_turns"]))
+            result = run_task(task, root, chat,
+                              case.get("max_turns", task["max_turns"]))
             problems = []
             for field, expected in case["want"].items():
                 if result.get(field) != expected:
@@ -923,11 +1397,48 @@ def selftest():
             verdict = "ok" if not problems else "FAIL"
             state = "PASS" if result["ok"] else "FAIL"
             reason = result["reason"] or ""
-            print(f"  {case['name']:<14} {verdict:<4} {state:<4} {reason:<14} "
-                  f"turns {result['turns']}  calls {result['tool_calls']}  "
-                  f"{_tokens_text(result)}")
+            print(f"  {case['name']:<24} {task['name']:<22} {verdict:<4} "
+                  f"{state:<4} {reason:<16} turns {result['turns']}  "
+                  f"calls {result['tool_calls']}  {_tokens_text(result)}")
             for problem in problems:
                 failures.append(f"{case['name']}: {problem}")
+
+        probe_root = os.path.join(tmp, "stale-read-probe")
+        os.makedirs(probe_root)
+        with open(os.path.join(probe_root, "settings.ini"), "w",
+                  encoding="utf-8") as f:
+            f.write(SETTINGS_AFTER)
+        stale_pass, stale_reason, _ = check_updated_file(
+            probe_root, "",
+            [{"name": "write_file",
+              "arguments": {"path": "settings.ini"}, "ok": True,
+              "result": "wrote settings.ini"},
+             {"name": "read_file",
+              "arguments": {"path": "settings.ini"}, "ok": True,
+              "result": "[duplicate tool output collapsed]"}])
+        stale_ok = not stale_pass and stale_reason == "stale_read"
+
+    flaky = aggregate_runs([
+        {"ok": True, "reason": None, "detail": "", "turns": 2,
+         "tool_calls": 1, "seconds": 0.1, "final_tail": "", "calls": [],
+         "prompt_tokens": 10, "cached_tokens": 0,
+         "completion_tokens": 5, "reasoning_tokens": 0},
+        {"ok": False, "reason": "wrong_answer", "detail": "bad", "turns": 3,
+         "tool_calls": 2, "seconds": 0.2, "final_tail": "", "calls": [],
+         "prompt_tokens": 20, "cached_tokens": 0,
+         "completion_tokens": 6, "reasoning_tokens": 0},
+    ])
+    aggregate_ok = (not flaky["ok"] and flaky["flaky"]
+                    and flaky["passes"] == 1 and flaky["repeats"] == 2
+                    and flaky["reason"] == "flaky" and flaky["turns"] == 5
+                    and flaky["tool_calls"] == 3
+                    and flaky["prompt_tokens"] == 30)
+    if not stale_ok:
+        failures.append("stale-read: a collapsed re-read was not rejected")
+    print(f"  {'stale-read':<24} {'ok' if stale_ok else 'FAIL'}")
+    if not aggregate_ok:
+        failures.append("repeat-aggregate: a 1/2 run was not reported as flaky")
+    print(f"  {'repeat-aggregate':<24} {'ok' if aggregate_ok else 'FAIL'}")
 
     if failures:
         for line in failures:
@@ -945,15 +1456,36 @@ def _tokens_text(row):
 
 
 def print_result(name, result):
-    state = "PASS" if result["ok"] else "FAIL"
-    print(f"  {name:<18} {state}  turns {result['turns']}  "
-          f"calls {result['tool_calls']}  {_tokens_text(result)}")
+    repeats = result.get("repeats", 1)
+    passes = result.get("passes", 1 if result["ok"] else 0)
+    if repeats > 1:
+        if passes == repeats:
+            state = "PASS"
+        elif passes:
+            state = "FLAKY"
+        else:
+            state = "FAIL"
+        print(f"  {name:<18} {state:<5} {passes}/{repeats}  "
+              f"turns {result['turns']}  calls {result['tool_calls']}  "
+              f"{_tokens_text(result)}")
+    else:
+        state = "PASS" if result["ok"] else "FAIL"
+        print(f"  {name:<18} {state}  turns {result['turns']}  "
+              f"calls {result['tool_calls']}  {_tokens_text(result)}")
     if not result["ok"]:
         print(f"       {result['reason']}: {result['detail']}")
 
 
 def _status(result):
-    return "PASS" if result.get("ok") else "FAIL"
+    repeats = result.get("repeats") or 1
+    passes = result.get("passes")
+    if passes is None or repeats <= 1:
+        return "PASS" if result.get("ok") else "FAIL"
+    if passes == repeats:
+        return f"PASS {passes}/{repeats}"
+    if not passes:
+        return f"FAIL 0/{repeats}"
+    return f"FLAKY {passes}/{repeats}"
 
 
 def _delta(current, baseline):
@@ -1032,6 +1564,9 @@ def main(argv=None):
                     help="model name (env BENCH_MODEL)")
     ap.add_argument("--max-tokens", type=int, default=2048)
     ap.add_argument("--timeout", type=int, default=900)
+    ap.add_argument("--repeat", type=int, default=1,
+                    help="run each task N times and report passes per task "
+                         "(default 1)")
     ap.add_argument("--only", help="comma-separated task names")
     ap.add_argument("--json", metavar="FILE", help="write the run to FILE")
     ap.add_argument("--compare", metavar="FILE",
@@ -1044,6 +1579,8 @@ def main(argv=None):
         return selftest()
     if args.fail_on_regression and not args.compare:
         ap.error("--fail-on-regression requires --compare")
+    if args.repeat < 1:
+        ap.error("--repeat must be at least 1")
 
     baseline = None
     if args.compare:
@@ -1068,18 +1605,27 @@ def main(argv=None):
     results = {}
     print(f"endpoint {url}")
     print(f"model {args.model}")
+    if args.repeat > 1:
+        print(f"repeat {args.repeat}")
     with tempfile.TemporaryDirectory(prefix="tooltasks-") as tmp:
         for task in tasks:
-            result = run_task(task, os.path.join(tmp, task["name"]), chat,
-                              task["max_turns"])
+            runs = []
+            for i in range(args.repeat):
+                root = os.path.join(tmp, f"{task['name']}-{i + 1}")
+                runs.append(run_task(task, root, chat, task["max_turns"]))
+            result = aggregate_runs(runs)
             results[task["name"]] = result
             print_result(task["name"], result)
 
     passed = sum(1 for result in results.values() if result["ok"])
+    task_passes = sum(result["passes"] for result in results.values())
+    task_runs = sum(result["repeats"] for result in results.values())
     turns = sum(result["turns"] for result in results.values())
     calls = sum(result["tool_calls"] for result in results.values())
     totals = reasoning_check.token_totals(results)
     print(f"\nscore: {passed}/{len(results)}")
+    if task_runs != len(results):
+        print(f"passes: {task_passes}/{task_runs} task runs")
     print(f"turns: {turns}  tool calls: {calls}")
     print(f"tokens: {_tokens_text(totals)}")
 
@@ -1087,8 +1633,11 @@ def main(argv=None):
         "when": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "model": args.model,
         "base": args.base,
+        "repeat": args.repeat,
         "passed": passed,
         "total": len(results),
+        "task_passes": task_passes,
+        "task_runs": task_runs,
         "turns": turns,
         "tool_calls": calls,
         "tokens": totals,
