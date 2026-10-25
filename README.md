@@ -140,6 +140,8 @@ Single box, `tensor_parallel_size = 1`, the committed recipe. Each row is reprod
 | Reasoning and long-context, 12 tasks | 12 of 12 |
 | Knowledge, 600 questions | 31.7% accuracy, 63.9% hallucination |
 
+Every shipped mechanism has its source recorded in [`docs/provenance.md`](docs/provenance.md), including the work that was evaluated and deliberately rejected.
+
 Two-rank numbers are deliberately absent, and they are not extrapolations of these: step time, TTFT and concurrency all change with the second rank, while token counts do not. `docs/serving-experiments.md` states which side of that line each measurement sits on.
 
 ## Tests
