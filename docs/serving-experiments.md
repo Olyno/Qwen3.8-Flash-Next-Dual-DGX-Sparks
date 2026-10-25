@@ -244,6 +244,25 @@ The ceiling is small anyway. Generated tokens are **3% of the tokens a session s
 
 Verdict: no default to set, and the planned trace-budget work is dropped rather than shipped unmeasured. Reopen only if a real agent trace is observed above the budget, which would show up directly in the accounting line.
 
+## A changed re-read costs a diff, not the file
+
+A coding harness does not re-send a file after an edit; it sends a diff. The proxy can do the same, because it knows the earlier result of the same call. `PROXY_DIFF_TOOL_OUTPUT=1` sends a unified diff against the first result of that call when the content changed, and only when the diff is under half the payload.
+
+Measured on a ~30k-token file read, then read again, three arms:
+
+| case | off | dedupe only | diff |
+|---|---|---|---|
+| second read unchanged | 60,161 | **30,191** | **30,191** |
+| one line edited | 60,165 | 60,165 | **30,375** |
+| whole file rewritten | 61,361 | 61,361 | 61,361 |
+
+- **A one-line edit costs 49.5% less.** Plain duplicate collapse saves nothing here, because the bytes differ; the diff saves the file.
+- **The diff itself is 184 tokens** beyond the collapsed case (30,375 against 30,191) — the patch for one line with two lines of context.
+- **A rewrite falls back to the full payload**, by design: above half the payload a diff stops being a saving and starts being a worse description of the file.
+- The reference is always the *first* result of that call, which keeps its full content, so the header always points at a message the model can still read.
+
+Off by default, because it changes what the model reads. The `updated_file` task scores exactly that: write, re-read, answer from the new content — and it fails a `stale_read` where the model answers from a marker or a collapsed copy.
+
 ## Duplicate tool output, and per-request accounting
 
 A tool result that repeats verbatim is the one part of an agent transcript that is pure waste: it is paid for in every later turn's prompt. The rule that decides what counts as a repeat matters more than the saving, because two cases look identical byte for byte and must be treated differently.
