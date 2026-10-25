@@ -788,6 +788,15 @@ def run_task(task, root, chat, max_turns):
         "tool_calls": len(calls),
         "seconds": round(time.time() - started, 1),
         "final_tail": final.strip()[-200:],
+        # What the model actually did, so a failure can be diagnosed without
+        # re-running the task. Arguments and results are clipped: enough to
+        # see the shape of the call, not a second copy of the transcript.
+        "calls": [{"name": call["name"],
+                   "arguments": json.dumps(call["arguments"],
+                                           ensure_ascii=False)[:160],
+                   "ok": call["ok"],
+                   "result": str(call["result"])[:160]}
+                  for call in calls],
     }
     result.update(sum_usage(usages))
     return result
