@@ -222,3 +222,15 @@ class CompareEndToEndTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_top1_gate_relaxes_to_self_floor():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "kl_yardstick", Path(__file__).resolve().parent.parent / "bench" / "kl_yardstick.py")
+    kl = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(kl)
+    assert kl.top1_threshold(0.995, {"top1": 0.909}) == (0.909, True)
+    assert kl.top1_threshold(0.995, {"top1": 0.999}) == (0.995, False)
+    assert kl.top1_threshold(0.995, None) == (0.995, False)
