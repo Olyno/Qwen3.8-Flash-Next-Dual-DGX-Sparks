@@ -60,14 +60,47 @@ The larger term is tokens/step, not step time. That is acceptance: the draft hea
 - **Loop-guard scan.** The proxy's repetition detector scanned 662 candidate periods per chunk. A one-byte comparison before building each slice cut it from 161 to 85 µs per call, with identical verdicts on the regression corpus. Kept.
 - **Pinned policy skill.** The proxy now inlines a pinned skill's body instead of a path. Functional, not a speed change. Kept.
 
+## Draft depth 3 instead of 4 (rejected)
+
+The reference runs three drafts and reports 3.00 tokens/step; this build runs four and reports 2.09. If the fourth row does not pay for itself, a shallower chain should win. It does not.
+
+Arms: identical recipe, identical texts, identical context nonces, one stream, temperature 0, 200 decoded tokens. The only difference is `mtp_num_speculative_tokens`, 4 on the baseline above and 3 here.
+
+| context | content | TTFT (s) | decode (tok/s) | steps/s | tokens/step | acceptance |
+|---|---|---|---|---|---|---|
+| 1,000 | prose | 0.55 | 27.4 | 14.7 | 1.86 | 44.9% |
+| 1,000 | code | 0.52 | 39.1 | 14.9 | 2.63 | 67.0% |
+| 1,000 | entropy | 0.51 | 30.1 | 15.3 | 1.97 | 46.9% |
+| 1,000 | copy | 0.52 | 53.8 | 15.1 | 3.59 | 94.2% |
+| 32,000 | prose | 11.25 | 32.5 | 14.0 | 2.33 | 56.2% |
+| 32,000 | code | 11.22 | 37.5 | 14.7 | 2.58 | 63.4% |
+| 32,000 | entropy | 11.26 | 38.9 | 15.4 | 2.54 | 61.9% |
+| 32,000 | copy | 11.27 | 58.8 | 15.1 | 3.92 | 97.4% |
+| 65,000 | prose | 22.73 | 29.8 | 14.1 | 2.12 | 50.0% |
+| 65,000 | code | 22.74 | 39.8 | 14.6 | 2.74 | 66.1% |
+| 65,000 | entropy | 22.73 | 43.1 | 15.4 | 2.85 | 68.9% |
+| 65,000 | copy | 22.75 | 55.4 | 14.7 | 3.81 | 96.1% |
+
+What it shows:
+
+- **One fewer verify row buys 5-8% of step rate**, uniformly: 13-14 steps/s becomes 14-15.4 at every context.
+- **Acceptance per row goes up** when the fourth draft is removed (32k prose 46.7% → 56.2%), which confirms the fourth position is the weakest one: most of those rows end in a rejection.
+- **But the cap binds on predictable content.** Copy loses 13-15% at every context and entropy loses 22% at 1k, because those tasks were spending the fourth row well (copy ran 4.42 tokens/step on the baseline).
+- Prose gains at long context (+7.6% at 32k, +6.0% at 65k) and is flat at 1k (−1.4%); code is mixed (−5.5% at 32k, +5.7% at 1k, +3.1% at 65k), which is the shape most agent traffic has.
+
+Mean over the twelve cells: **40.5 tok/s against 42.8 on the baseline**, so the change is a net loss. Rejected; `mtp_num_speculative_tokens` stays at 4. The comparison with the reference stays unexplained by depth, which points the remaining gap at the draft head and the prompt content rather than the chain length.
+
+## Already settled by configuration
+
+- **BF16 recurrent state.** `mamba_ssm_cache_dtype: bfloat16` is in the committed recipe and visible in the live container arguments, so the reference's +8.5% is already in the baseline above. No A/B left to run.
+- **`gpu_memory_utilization` 0.80.** Rejected on record: 0.80 fails the start-up free-memory check on this class of box, and 0.75 lets the driver fail allocations under load. 0.72 is the highest value that boots and stays up, so the comparison with a 0.80 reference carries a genuine capacity difference that cannot be removed.
+- **Prefix-cache hashing with CBOR.** The flag exists in this vLLM build (`prefix_caching_hash_algo` accepts `sha256_cbor`) and `cbor2` is importable in the image, so wiring `--prefix-caching-hash-algo sha256_cbor` would work. Its ceiling is about 4 ms per 64k request against a 23 s prefill, which is below run-to-run noise. Not wired; revisit only if prefix hashing ever shows up in a profile.
+- **`--performance-mode interactivity`.** Read the v0.32 source: only `throughput` changes anything (it doubles `max_num_batched_tokens` and `max_num_seqs`); `balanced` and `interactivity` are no-ops. Not a lever.
+
 ## Next experiments, in order
 
-1. **Draft depth 3 versus 4** on identical texts. The reference runs 3 and reports 3.00 tokens/step; we run 4 and see 2.09. If depth 3 wins on prose, the extra verify row is not paying for itself.
-2. **`MAX_NUM_SEQS = 8`** with the full graph capture set the reference uses. Step time and acceptance both move with the capture configuration.
-3. **BF16 recurrent state** (`mamba_ssm_cache_dtype`) against the current setting; the reference measures +8.5% at eight streams.
-4. **`gpu_memory_utilization` 0.72 versus 0.80.** This changes the KV pool, not the decode math, but the reference runs 0.80 and the comparison should not carry a second variable.
-5. **Prefix-cache hashing with CBOR** (`--prefix-caching-hash-algo sha256_cbor`). Expected 3.5 ms per 64k request, zero decode effect. Config-only; needs a restart.
-6. **Proxy micro-optimizations:** one batched embedding call per request, `math.sumprod` cosine with cached norms, and skipping the request JSON parse when no proxy feature is enabled. Measured CPU savings of 1.5 ms, 0.2 ms and 1.2 ms per request respectively.
+1. **`MAX_NUM_SEQS = 8`** with the full graph capture set the reference uses, plus concurrent-stream throughput at 4 and 8 streams. This is a capacity question: the aggregate rate at 4 streams is the number an agent harness feels.
+2. **Proxy micro-optimizations:** one batched embedding call per request, `math.sumprod` cosine with cached norms, and skipping the request JSON parse when no proxy feature is enabled. Measured CPU savings of 1.5 ms, 0.2 ms and 1.2 ms per request respectively.
 
 ## Reproduction
 
