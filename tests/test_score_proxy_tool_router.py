@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import unittest
 
@@ -144,6 +145,66 @@ class ToolPruneTest(unittest.TestCase):
         changed, _ = tr.apply(req, "m")
         self.assertFalse(changed)
         self.assertEqual(len(req["tools"]), 10)
+
+
+ARG_SCHEMA = {"type": "object", "properties": {
+    "count": {"type": "integer"},
+    "ratio": {"type": "number"},
+    "verbose": {"type": "boolean"},
+    "tags": {"type": "array", "items": {"type": "string"}},
+    "items": {"type": "array", "items": {"type": "integer"}},
+    "opts": {"type": "object",
+             "properties": {"n": {"type": "integer"}}},
+    "query": {"type": "string"},
+    "nullable": {"type": ["integer", "null"]},
+    "untyped": {"description": "no declared type"},
+}}
+
+
+class ToolArgumentCoercionTest(unittest.TestCase):
+    def test_declared_types_are_coerced(self):
+        cases = [
+            ({"count": "5"}, {"count": 5}),
+            ({"count": " 5 "}, {"count": 5}),
+            ({"count": "5ms"}, {"count": 5}),
+            ({"count": "5.0"}, {"count": 5}),
+            ({"count": "five"}, {"count": "five"}),
+            ({"count": True}, {"count": True}),
+            ({"ratio": "3.5"}, {"ratio": 3.5}),
+            ({"ratio": "2"}, {"ratio": 2}),
+            ({"verbose": "true"}, {"verbose": True}),
+            ({"verbose": " FALSE "}, {"verbose": False}),
+            ({"tags": "alpha"}, {"tags": ["alpha"]}),
+            ({"tags": '["a", "b"]'}, {"tags": ["a", "b"]}),
+            ({"items": "7"}, {"items": [7]}),
+            ({"opts": '{"n": "2"}'}, {"opts": {"n": 2}}),
+            ({"opts": {"n": "2"}}, {"opts": {"n": 2}}),
+            ({"nullable": "7"}, {"nullable": 7}),
+        ]
+        for given, expected in cases:
+            with self.subTest(given):
+                self.assertEqual(sp.coerce_arguments(given, ARG_SCHEMA),
+                                 expected)
+
+    def test_undeclared_and_string_values_stay_verbatim(self):
+        given = {"query": "5", "extra": "5", "untyped": "5"}
+        self.assertEqual(sp.coerce_arguments(given, ARG_SCHEMA), given)
+
+    def test_absent_arguments_are_not_invented(self):
+        given = {"count": 5}
+        self.assertEqual(sp.coerce_arguments(given, ARG_SCHEMA), {"count": 5})
+
+    def test_input_is_not_mutated(self):
+        given = {"count": "5"}
+        sp.coerce_arguments(given, ARG_SCHEMA)
+        self.assertEqual(given, {"count": "5"})
+
+    def test_wellformed_values_are_byte_equivalent_after_json_roundtrip(self):
+        given = {"count": 5, "ratio": 3.5, "verbose": True,
+                 "tags": ["a"], "items": [1, 2], "opts": {"n": 2},
+                 "nullable": None, "query": "5"}
+        coerced = sp.coerce_arguments(given, ARG_SCHEMA)
+        self.assertEqual(json.dumps(coerced), json.dumps(given))
 
 
 if __name__ == "__main__":

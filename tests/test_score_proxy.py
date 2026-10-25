@@ -1,3 +1,4 @@
+import copy
 import json
 import math
 import sys
@@ -12,6 +13,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "proxy"))
 import score_proxy
 
+sp = score_proxy
+
 BASE_LP = {"red": -0.2, "green": -2.0, "blue": -1.0}
 POSITION_BONUS = 0.6  # fake position bias: the label listed first scores higher
 
@@ -24,6 +27,32 @@ LOOP_CHUNKS = tuple(
 
 HARD_KEYWORDS = ("prove", "design", "debug", "analy", "parser",
                  "trade-off", "refactor", "hard")
+
+REPAIR_TOOLS = [{"type": "function", "function": {
+    "name": "run",
+    "parameters": {"type": "object", "properties": {
+        "count": {"type": "integer"},
+        "ratio": {"type": "number"},
+        "verbose": {"type": "boolean"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+        "items": {"type": "array", "items": {"type": "integer"}},
+        "opts": {"type": "object", "properties": {"n": {"type": "integer"}}},
+        "query": {"type": "string"},
+    }},
+}}]
+
+MALFORMED_CALL = (
+    '```json\n{"name": "run", "arguments": {"count": "5", '
+    '"verbose": "true"}}\n```')
+WELLFORMED_CALL = {
+    "choices": [{
+        "index": 0,
+        "message": {"role": "assistant", "content": None, "tool_calls": [{
+            "id": "call_1", "type": "function",
+            "function": {"name": "run", "arguments": '{"count": 5}'}}]},
+        "finish_reason": "tool_calls",
+    }],
+}
 
 
 def fake_embed(text):
@@ -68,6 +97,7 @@ class FakeUpstream(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length)
         self.server.requests.append((self.path, raw))
+        self.server.last_headers = dict(self.headers)
         req = json.loads(raw)
         if self.path == "/v1/completions":
             self._completions(req)
@@ -99,6 +129,40 @@ class FakeUpstream(BaseHTTPRequestHandler):
         self._json(200, {"choices": choices})
 
     def _chat(self, req):
+        text = json.dumps(req["messages"])
+        if "forever think" in text:
+            self._json(200, {"choices": [{"index": 0,
+                "message": {"role": "assistant", "content": "",
+                            "reasoning_content": "still thinking"},
+                "finish_reason": "length"}]})
+            return
+        if "truncated think" in text:
+            if req.get("continue_final_message"):
+                self._json(200, {"choices": [{"index": 0,
+                    "message": {"role": "assistant",
+                                "content": "recovered answer"},
+                    "finish_reason": "stop"}],
+                    "usage": {"completion_tokens": 3, "total_tokens": 13}})
+            else:
+                self._json(200, {"choices": [{"index": 0,
+                    "message": {"role": "assistant", "content": "",
+                                "reasoning_content": "still thinking"},
+                    "finish_reason": "length"}],
+                    "usage": {"completion_tokens": 10, "total_tokens": 20}})
+            return
+        if "malformed call" in text:
+            self._json(200, {"choices": [{"index": 0,
+                "message": {"role": "assistant", "content": MALFORMED_CALL},
+                "finish_reason": "stop"}]})
+            return
+        if "wellformed call" in text:
+            self._json(200, WELLFORMED_CALL)
+            return
+        if "plain answer" in text:
+            self._json(200, {"choices": [{"index": 0,
+                "message": {"role": "assistant", "content": "plain answer"},
+                "finish_reason": "stop"}]})
+            return
         kwargs = req.get("chat_template_kwargs") or {}
         if kwargs.get("enable_thinking") is False:
             lp = -0.01 if "confident" in json.dumps(req["messages"]) else -1.0
@@ -448,6 +512,407 @@ class RouterDownTest(ProxyTestBase):
         self.assertEqual(self.upstream.requests[-1][1], body)
         self.assertEqual(resp["choices"][0]["message"]["content"],
                          "thinking answer")
+
+
+class ToolCallRepairTest(unittest.TestCase):
+    def repair(self, content, reasoning=None, finish="stop"):
+        message = {"role": "assistant", "content": content}
+        if reasoning is not None:
+            message["reasoning_content"] = reasoning
+        resp = {"choices": [{"index": 0, "message": message,
+                             "finish_reason": finish}]}
+        req = {"model": "m", "messages": [{"role": "user", "content": "go"}],
+               "tools": REPAIR_TOOLS}
+        return resp, sp.repair_reply(resp, req)
+
+    def assert_call(self, resp, expected):
+        choice = resp["choices"][0]
+        self.assertEqual(choice["finish_reason"], "tool_calls")
+        calls = choice["message"]["tool_calls"]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["type"], "function")
+        self.assertEqual(calls[0]["function"]["name"], "run")
+        self.assertEqual(json.loads(calls[0]["function"]["arguments"]), expected)
+
+    def test_malformed_forms_normalize_to_tool_calls(self):
+        cases = [
+            ("fenced",
+             '```json\n{"name": "run", "arguments": {"count": 5}}\n```',
+             None, {"count": 5}),
+            ("fence left open",
+             '```json\n{"name": "run", "arguments": {"count": 8}',
+             None, {"count": 8}),
+            ("trailing commas",
+             '{"name": "run", "arguments": {"count": 5,}}',
+             None, {"count": 5}),
+            ("single-quoted keys",
+             "{'name': 'run', 'arguments': {'verbose': 'true'}}",
+             None, {"verbose": True}),
+            ("tool_call wrapper",
+             '{"tool_call": {"name": "run", "arguments": {"count": 6}}}',
+             None, {"count": 6}),
+            ("wrapper without arguments",
+             '{"tool_call": {"name": "run"}}',
+             None, {}),
+            ("arguments as JSON string",
+             '{"function_call": {"name": "run", '
+             '"arguments": "{\\"ratio\\": \\"3.5\\"}"}}',
+             None, {"ratio": 3.5}),
+            ("function as a name",
+             '{"function": "run", "arguments": {"count": 7}}',
+             None, {"count": 7}),
+            ("unclosed JSON tail",
+             '{"name": "run", "arguments": {"count": 5, "query": ',
+             None, {"count": 5}),
+            ("unclosed string",
+             '{"name": "run", "arguments": {"query": "half a sent',
+             None, {"query": "half a sent"}),
+            ("unclosed array",
+             '{"name": "run", "arguments": {"tags": ["a", "b"',
+             None, {"tags": ["a", "b"]}),
+            ("xml tool_call",
+             "<tool_call>\n<function=run>\n<parameter=count>\n5 ms\n"
+             "</parameter>\n</function>\n</tool_call>",
+             None, {"count": 5}),
+            ("xml wrapper left open",
+             "<tool_call>\n<function=run>\n<parameter=tags>\nalpha\n"
+             "</parameter>",
+             None, {"tags": ["alpha"]}),
+            ("invoke wrapper",
+             '<invoke name="run"><parameter name="count">7</parameter></invoke>',
+             None, {"count": 7}),
+            ("call inside reasoning",
+             "",
+             '<tool_call><function=run><parameter=opts>{"n": "2"}'
+             "</parameter></function></tool_call>",
+             {"opts": {"n": 2}}),
+        ]
+        for name, content, reasoning, expected in cases:
+            with self.subTest(name):
+                resp, (changed, retry) = self.repair(content, reasoning)
+                self.assertTrue(changed)
+                self.assertIsNone(retry)
+                self.assert_call(resp, expected)
+
+    def test_unclosed_tail_at_the_token_cap_is_repaired(self):
+        resp, (changed, retry) = self.repair(
+            '{"name": "run", "arguments": {"count": 9',
+            finish="length")
+        self.assertTrue(changed)
+        self.assertIsNone(retry)
+        self.assert_call(resp, {"count": 9})
+
+    def test_quoted_call_inside_an_answer_is_not_repaired(self):
+        resp, (changed, retry) = self.repair(
+            "The harness sends "
+            '{"name": "run", "arguments": {"count": 5}} '
+            "and then waits for the result.")
+        self.assertFalse(changed)
+        self.assertIsNone(retry)
+        self.assertFalse(resp["choices"][0]["message"].get("tool_calls"))
+
+    def test_reasoning_call_ignored_once_an_answer_exists(self):
+        resp, (changed, retry) = self.repair(
+            "the answer",
+            '<tool_call><function=run><parameter=count>5</parameter>'
+            "</function></tool_call>")
+        self.assertFalse(changed)
+        self.assertIsNone(retry)
+        self.assertNotIn("tool_calls", resp["choices"][0]["message"])
+
+    def test_undeclared_tool_name_is_not_emitted(self):
+        resp, (changed, retry) = self.repair(
+            '{"name": "nope", "arguments": {"count": 5}}')
+        self.assertFalse(changed)
+        self.assertIsNone(retry)
+        self.assertNotIn("tool_calls", resp["choices"][0]["message"])
+
+    def test_wellformed_reply_is_not_touched(self):
+        resp = copy.deepcopy(WELLFORMED_CALL)
+        changed, retry = sp.repair_reply(
+            resp, {"model": "m", "messages": [], "tools": REPAIR_TOOLS})
+        self.assertFalse(changed)
+        self.assertIsNone(retry)
+        self.assertEqual(resp, WELLFORMED_CALL)
+
+
+class ThinkingRepairTest(unittest.TestCase):
+    def reply(self, content="", reasoning=None, finish="length", usage=None):
+        message = {"role": "assistant", "content": content}
+        if reasoning is not None:
+            message["reasoning_content"] = reasoning
+        resp = {"choices": [{"index": 0, "message": message,
+                             "finish_reason": finish}]}
+        if usage is not None:
+            resp["usage"] = usage
+        return resp
+
+    def request(self, max_tokens=8192):
+        req = {"model": "m", "messages": [{"role": "user", "content": "q"}]}
+        if max_tokens is not None:
+            req["max_tokens"] = max_tokens
+        return req
+
+    def test_stops_inside_reasoning_schedules_one_retry(self):
+        resp = self.reply(reasoning="still thinking",
+                          usage={"completion_tokens": 2048})
+        changed, retry = sp.repair_reply(resp, self.request())
+        self.assertFalse(changed)
+        self.assertIsNotNone(retry)
+        body = retry["request"]
+        self.assertTrue(body["continue_final_message"])
+        self.assertFalse(body["add_generation_prompt"])
+        self.assertEqual(body["messages"][-1]["reasoning_content"],
+                         "still thinking")
+        self.assertEqual(body["max_tokens"], sp.THINK_RETRY_MAX)
+        self.assertGreaterEqual(body["max_tokens"], sp.ANSWER_RESERVE_MIN)
+
+    def test_wellformed_reasoning_and_answer_untouched(self):
+        resp = self.reply(content="the answer", reasoning="complete thought",
+                          finish="stop")
+        before = copy.deepcopy(resp)
+        changed, retry = sp.repair_reply(resp, self.request())
+        self.assertFalse(changed)
+        self.assertIsNone(retry)
+        self.assertEqual(resp, before)
+
+    def test_answer_in_content_blocks_retry(self):
+        resp = self.reply(content="the answer", reasoning="thinking",
+                          finish="stop")
+        changed, retry = sp.repair_reply(resp, self.request())
+        self.assertFalse(changed)
+        self.assertIsNone(retry)
+
+    def test_closed_thinking_blocks_retry(self):
+        resp = self.reply(content="<think>done</think>", finish="stop")
+        _, retry = sp.repair_reply(resp, self.request())
+        self.assertIsNone(retry)
+
+    def test_finish_reason_must_be_length_or_stop(self):
+        resp = self.reply(reasoning="thinking", finish="tool_calls")
+        _, retry = sp.repair_reply(resp, self.request())
+        self.assertIsNone(retry)
+
+    def test_allow_retry_false_never_schedules(self):
+        resp = self.reply(reasoning="thinking")
+        _, retry = sp.repair_reply(resp, self.request(), allow_retry=False)
+        self.assertIsNone(retry)
+
+    def test_retry_budget_reserves_answer_room(self):
+        cases = [
+            (None, sp.THINK_RETRY_MAX),
+            (512, 512),
+            (1024, 512),
+            (4096, sp.THINK_RETRY_MAX),
+            (100000, sp.THINK_RETRY_MAX),
+        ]
+        for cap, expected in cases:
+            with self.subTest(cap):
+                self.assertEqual(sp.answer_room(cap), expected)
+                self.assertLessEqual(sp.answer_room(cap), sp.THINK_RETRY_MAX)
+
+    def test_retry_budget_clamped_to_remaining_context(self):
+        resp = self.reply(reasoning="thinking",
+                          usage={"completion_tokens": 10})
+        req = {"model": "m", "max_tokens": 8192,
+               "messages": [{"role": "user", "content": "x" * 4000}]}
+        _, retry = sp.repair_reply(resp, req, context_tokens=1200)
+        budget = retry["request"]["max_tokens"]
+        self.assertGreaterEqual(budget, 1)
+        self.assertLess(budget, sp.THINK_RETRY_MAX)
+
+    def test_merge_closes_content_thinking_and_appends_answer(self):
+        resp = self.reply(content="<think>partial", finish="stop")
+        _, retry = sp.repair_reply(resp, self.request())
+        retried = {"choices": [{"index": 0,
+                                "message": {"role": "assistant",
+                                            "content": "42"},
+                                "finish_reason": "stop"}],
+                   "usage": {"completion_tokens": 1, "total_tokens": 1}}
+        self.assertTrue(sp.apply_thinking_retry(resp, retried, retry))
+        message = resp["choices"][0]["message"]
+        self.assertEqual(message["content"],
+                         "<think>partial\n\n</think>\n\n42")
+        self.assertEqual(resp["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(resp["x_proxy"], {"thinking_retry": "closed"})
+
+    def test_merge_keeps_reasoning_channel_and_uses_answer(self):
+        resp = self.reply(reasoning="partial thought")
+        _, retry = sp.repair_reply(resp, self.request())
+        retried = {"choices": [{"index": 0,
+                                "message": {"role": "assistant",
+                                            "content": "the answer"},
+                                "finish_reason": "stop"}]}
+        self.assertTrue(sp.apply_thinking_retry(resp, retried, retry))
+        message = resp["choices"][0]["message"]
+        self.assertEqual(message["content"], "the answer")
+        self.assertEqual(message["reasoning_content"], "partial thought")
+
+    def test_retry_merges_into_the_truncated_choice(self):
+        resp = {"choices": [
+            {"index": 0, "message": {"role": "assistant",
+                                     "content": "first answer"},
+             "finish_reason": "stop"},
+            {"index": 1, "message": {"role": "assistant", "content": "",
+                                     "reasoning_content": "partial"},
+             "finish_reason": "length"}]}
+        changed, retry = sp.repair_reply(resp, self.request())
+        self.assertFalse(changed)
+        self.assertEqual(retry["index"], 1)
+        retried = {"choices": [{"index": 0,
+                                "message": {"role": "assistant",
+                                            "content": "second answer"},
+                                "finish_reason": "stop"}]}
+        self.assertTrue(sp.apply_thinking_retry(resp, retried, retry))
+        self.assertEqual(resp["choices"][0]["message"]["content"],
+                         "first answer")
+        self.assertEqual(resp["choices"][1]["message"]["content"],
+                         "second answer")
+
+    def test_empty_continuation_leaves_original_alone(self):
+        resp = self.reply(reasoning="partial thought")
+        before = copy.deepcopy(resp)
+        _, retry = sp.repair_reply(resp, self.request())
+        retried = {"choices": [{"index": 0,
+                                "message": {"role": "assistant",
+                                            "content": ""},
+                                "finish_reason": "length"}]}
+        self.assertFalse(sp.apply_thinking_retry(resp, retried, retry))
+        self.assertEqual(resp, before)
+
+
+class MaxTokensClampTest(unittest.TestCase):
+    def test_clamps_only_when_the_explicit_cap_exceeds_room(self):
+        req = {"max_tokens": 5000,
+               "messages": [{"role": "user", "content": "x" * 400}]}
+        self.assertTrue(sp.clamp_max_tokens(req, 1024))
+        self.assertLess(req["max_tokens"], 5000)
+        self.assertGreaterEqual(req["max_tokens"], 1)
+        fits = {"max_tokens": 10,
+                "messages": [{"role": "user", "content": "x" * 400}]}
+        self.assertFalse(sp.clamp_max_tokens(fits, 1024))
+        self.assertEqual(fits["max_tokens"], 10)
+
+    def test_disabled_without_context_or_cap(self):
+        req = {"max_tokens": 5000,
+               "messages": [{"role": "user", "content": "x" * 400}]}
+        self.assertFalse(sp.clamp_max_tokens(req, 0))
+        no_cap = {"messages": [{"role": "user", "content": "x" * 400}]}
+        self.assertFalse(sp.clamp_max_tokens(no_cap, 1024))
+        self.assertNotIn("max_tokens", no_cap)
+
+    def test_tools_count_toward_the_prompt(self):
+        messages = [{"role": "user", "content": "x" * 200}]
+        without = {"max_tokens": 5000, "messages": messages}
+        with_tools = {"max_tokens": 5000, "messages": messages,
+                      "tools": REPAIR_TOOLS}
+        sp.clamp_max_tokens(without, 1024)
+        sp.clamp_max_tokens(with_tools, 1024)
+        self.assertLess(with_tools["max_tokens"], without["max_tokens"])
+
+
+class RepairHttpTest(ProxyTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.make_stack()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.stop_stack()
+
+    def test_client_headers_forwarded_on_buffered_path(self):
+        body = json.dumps({
+            "model": "m",
+            "messages": [{"role": "user", "content": "plain answer"}],
+        }).encode()
+        req = urllib.request.Request(
+            self.url + "/v1/chat/completions", data=body,
+            headers={"Content-Type": "application/json",
+                     "Authorization": "Bearer test-token"})
+        urllib.request.urlopen(req).read()
+        self.assertEqual(self.upstream.last_headers.get("Authorization"),
+                         "Bearer test-token")
+
+    def test_malformed_call_repaired_end_to_end(self):
+        _, resp = self.post_chat({
+            "model": "m", "tools": REPAIR_TOOLS,
+            "messages": [{"role": "user", "content": "malformed call"}]})
+        choice = resp["choices"][0]
+        self.assertEqual(choice["finish_reason"], "tool_calls")
+        call = choice["message"]["tool_calls"][0]
+        self.assertEqual(call["function"]["name"], "run")
+        self.assertEqual(json.loads(call["function"]["arguments"]),
+                         {"count": 5, "verbose": True})
+
+    def test_wellformed_tool_call_bytes_untouched(self):
+        body = json.dumps({
+            "model": "m", "tools": REPAIR_TOOLS,
+            "messages": [{"role": "user", "content": "wellformed call"}],
+        }).encode()
+        req = urllib.request.Request(
+            self.url + "/v1/chat/completions", data=body,
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            received = resp.read()
+        self.assertEqual(received, json.dumps(WELLFORMED_CALL).encode())
+
+    def test_wellformed_answer_without_tools_bytes_untouched(self):
+        body = json.dumps({
+            "model": "m",
+            "messages": [{"role": "user", "content": "plain answer"}],
+        }).encode()
+        req = urllib.request.Request(
+            self.url + "/v1/chat/completions", data=body,
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            received = resp.read()
+        expected = {"choices": [{"index": 0,
+                                 "message": {"role": "assistant",
+                                             "content": "plain answer"},
+                                 "finish_reason": "stop"}]}
+        self.assertEqual(received, json.dumps(expected).encode())
+
+    def test_truncated_thinking_retried_once(self):
+        _, resp = self.post_chat({
+            "model": "m", "max_tokens": 8192,
+            "messages": [{"role": "user", "content": "truncated think"}]})
+        choice = resp["choices"][0]
+        self.assertEqual(choice["message"]["content"], "recovered answer")
+        self.assertEqual(choice["finish_reason"], "stop")
+        self.assertEqual(resp["x_proxy"], {"thinking_retry": "closed"})
+        sent = [json.loads(raw) for _, raw in self.upstream.requests]
+        self.assertEqual(len(sent), 2)
+        self.assertTrue(sent[1]["continue_final_message"])
+        self.assertEqual(sent[1]["messages"][-1]["reasoning_content"],
+                         "still thinking")
+        self.assertLessEqual(sent[1]["max_tokens"], sp.THINK_RETRY_MAX)
+        self.assertGreaterEqual(sent[1]["max_tokens"], 1)
+
+    def test_failed_continuation_not_retried_twice(self):
+        _, resp = self.post_chat({
+            "model": "m",
+            "messages": [{"role": "user", "content": "forever think"}]})
+        self.assertEqual(len(self.upstream.requests), 2)
+        self.assertEqual(resp["choices"][0]["message"]["content"], "")
+        self.assertEqual(resp["choices"][0]["finish_reason"], "length")
+
+
+class MaxTokensClampHttpTest(ProxyTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.make_stack(context_tokens=600)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.stop_stack()
+
+    def test_max_tokens_clamped_before_the_request(self):
+        self.post_chat({
+            "model": "m", "max_tokens": 100000,
+            "messages": [{"role": "user", "content": "x" * 400}]})
+        sent = json.loads(self.upstream.requests[-1][1])
+        self.assertLess(sent["max_tokens"], 100000)
+        self.assertGreaterEqual(sent["max_tokens"], 1)
 
 
 if __name__ == "__main__":

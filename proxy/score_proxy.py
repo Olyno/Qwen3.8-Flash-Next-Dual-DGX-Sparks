@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """proxy/score_proxy.py — thin OpenAI-compatible decision proxy for vLLM.
 
-Passthrough reverse proxy (SSE streams through chunk-by-chunk) plus two
-decision features — see docs/score-proxy.md:
+Passthrough reverse proxy (SSE streams through chunk-by-chunk) plus
+decision features and a non-streaming repair pass — see
+docs/score-proxy.md:
 
   POST /v1/score              score N options in one batched prefill
   POST /v1/chat/completions   confidence-gated thinking escalation
@@ -25,6 +26,12 @@ decision features — see docs/score-proxy.md:
                               PROXY_SKILLS_DIR=path surfaces the top-k skills
                               relevant to the last user message in a system
                               block before generation.
+                              Non-streaming replies are repaired in place:
+                              malformed call syntax is normalized to
+                              tool_calls and schema-typed, a reply that stops
+                              inside thinking is continued once with the
+                              thinking closed, and an explicit max_tokens
+                              larger than the context is clamped.
 
 Env: PROXY_UPSTREAM (default http://localhost:8888), PROXY_PORT (8889),
 PROXY_ESCALATE, PROXY_ESCALATE_THRESHOLD (-0.35),
@@ -38,9 +45,13 @@ tool_choice=required instead of the system nudge), PROXY_TOOL_TOP_K (8;
 prune larger tool lists by embedding similarity), PROXY_TOOL_ALWAYS
 (comma-separated tool names never pruned), PROXY_SKILLS_DIR (unset = off;
 directory of <name>/SKILL.md or *.md skills), PROXY_SKILLS_TOP_K (3),
-PROXY_SKILLS_MIN_SIM (0.25, heuristic — calibrate per workload).
+PROXY_SKILLS_MIN_SIM (0.25, heuristic — calibrate per workload),
+PROXY_CONTEXT_TOKENS (0 = off; model context size used to clamp an
+oversized max_tokens).
 Stdlib only.
 """
+import ast
+import hashlib
 import http.client
 import json
 import math
@@ -154,6 +165,20 @@ def post_json(upstream, path, body, timeout=300):
                      headers={"Content-Type": "application/json"})
         resp = conn.getresponse()
         return resp.status, json.loads(resp.read())
+    finally:
+        conn.close()
+
+
+def post_buffered(upstream, path, body, headers=None, timeout=600):
+    """POST and buffer the whole response. Repair must see the complete body;
+    callers relay the raw bytes when nothing fired."""
+    request_headers = {"Content-Type": "application/json"}
+    request_headers.update(headers or {})
+    conn = http.client.HTTPConnection(upstream[0], upstream[1], timeout=timeout)
+    try:
+        conn.request("POST", path, body=body, headers=request_headers)
+        resp = conn.getresponse()
+        return resp.status, resp.getheaders(), resp.read()
     finally:
         conn.close()
 
@@ -322,6 +347,531 @@ class ToolRouter:
             messages.insert(0, {"role": "system", "content": TOOL_NUDGE})
             req["messages"] = messages
         return True, prob
+
+
+# ── tool-call / truncated-answer repair ─────────────────────────────────
+# Post-hoc repair for a model that emits call syntax the harness rejects or
+# runs out of budget mid-thought. Every path is a no-op unless the reply is
+# actually malformed; a well-formed response is relayed as the raw upstream
+# bytes.
+
+ANSWER_RESERVE_MIN = 512   # answer tokens kept when thinking is cut short
+ANSWER_ROOM_MIN_CAP = 1024
+THINK_RETRY_MAX = 1024     # single close-thinking continuation budget
+CHARS_PER_TOKEN = 4        # clamp estimate only; no tokenizer in the proxy
+
+FENCE_RE = re.compile(
+    r"```[ \t]*(?:json|tool_call|function)?[ \t]*\r?\n?(.*?)(?:```|$)",
+    re.S | re.I)
+TOOL_CALL_BLOCK_RE = re.compile(
+    r"<tool_call\b[^>]*>(.*?)(?:</tool_call\s*>|$)", re.S | re.I)
+FUNCTION_BLOCK_RE = re.compile(
+    r"<function\s*(?:=\s*|name\s*=\s*)?['\"]?([^'\"\s>]+)['\"]?\s*>"
+    r"(.*?)(?:</function\s*>|(?=<function\s)|$)", re.S | re.I)
+INVOKE_BLOCK_RE = re.compile(
+    r"<invoke\s+name\s*=\s*['\"]?([^'\"\s>]+)['\"]?\s*>"
+    r"(.*?)(?:</invoke\s*>|$)", re.S | re.I)
+PARAM_BLOCK_RE = re.compile(
+    r"<parameter\s*(?:=\s*|name\s*=\s*)?['\"]?([^'\"\s>]+)['\"]?\s*>"
+    r"(.*?)(?:</parameter\s*>|(?=<parameter\s)|$)", re.S | re.I)
+THINK_OPEN_RE = re.compile(r"<(think|reasoning)\b[^>]*>", re.I)
+THINK_CLOSE_RE = re.compile(r"</(?:think|reasoning)\s*>", re.I)
+NUMBER_RE = re.compile(r"^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*[^\d\s]*\s*$")
+CALL_ARG_KEYS = ("arguments", "parameters", "args", "params", "input")
+
+
+def estimate_tokens(value):
+    if isinstance(value, str):
+        text = value
+    else:
+        text = json.dumps(value, ensure_ascii=False)
+    return (len(text) + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN
+
+
+def tool_schemas(tools):
+    """Declared tool name -> its parameters schema (both OpenAI
+    `function.parameters` and Anthropic `input_schema` shapes)."""
+    schemas = {}
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function")
+        fn = fn if isinstance(fn, dict) else tool
+        name = fn.get("name")
+        if isinstance(name, str) and name.strip():
+            schema = fn.get("parameters")
+            if not isinstance(schema, dict):
+                schema = fn.get("input_schema")
+            schemas[name.strip()] = schema if isinstance(schema, dict) else {}
+    return schemas
+
+
+def _declared_type(prop):
+    typ = prop.get("type") if isinstance(prop, dict) else None
+    if isinstance(typ, list):
+        typ = next((x for x in typ if isinstance(x, str) and x != "null"), None)
+    return typ if isinstance(typ, str) else None
+
+
+def _coerce_value(value, prop):
+    typ = _declared_type(prop)
+    if typ is None:
+        return value                       # nothing declared: never guess
+    if typ == "integer":
+        if isinstance(value, bool) or isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value) if value.is_integer() else value
+        if isinstance(value, str):
+            match = NUMBER_RE.match(value)
+            if match:
+                number = float(match.group(1))
+                if number.is_integer():
+                    return int(number)
+        return value
+    if typ == "number":
+        if isinstance(value, bool) or isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            match = NUMBER_RE.match(value)
+            if match:
+                number = float(match.group(1))
+                return int(number) if number.is_integer() else number
+        return value
+    if typ == "boolean":
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in ("true", "false"):
+                return lowered == "true"
+        return value
+    if typ == "array":
+        items = prop.get("items")
+        items = items if isinstance(items, dict) else None
+        if isinstance(value, str) and value.lstrip().startswith("["):
+            parsed = _loads_tolerant(value)
+            if isinstance(parsed, list):
+                value = parsed
+        if not isinstance(value, list):
+            value = [value]
+        return [_coerce_value(item, items) for item in value] if items else value
+    if typ == "object":
+        if isinstance(value, str):
+            parsed = _loads_tolerant(value)
+            if isinstance(parsed, dict):
+                return coerce_arguments(parsed, prop)
+        if isinstance(value, dict):
+            return coerce_arguments(value, prop)
+        return value
+    return value
+
+
+def coerce_arguments(args, schema):
+    """Coerce only keys the schema declares, and only their existing values:
+    a missing argument is never invented, an undeclared one is never typed."""
+    if not isinstance(args, dict) or not isinstance(schema, dict):
+        return args
+    props = schema.get("properties")
+    if not isinstance(props, dict):
+        return args
+    out = dict(args)
+    for key, value in out.items():
+        prop = props.get(key)
+        if isinstance(prop, dict):
+            out[key] = _coerce_value(value, prop)
+    return out
+
+
+def _loads_tolerant(text):
+    """Parse JSON-ish text: strict JSON, Python literals (single-quoted
+    keys/strings), trailing commas, and a truncated tail with its open
+    quote/bracket closed and a dangling key dropped."""
+    if not isinstance(text, str):
+        return None
+    variants = []
+    for candidate in (text.strip(), _strip_fence(text)):
+        if candidate and candidate not in variants:
+            variants.append(candidate)
+    for candidate in variants:
+        closed = _close_json(candidate)
+        for attempt in (candidate, closed,
+                        re.sub(r",\s*([}\]])", r"\1", closed)):
+            if not attempt:
+                continue
+            try:
+                return json.loads(attempt)
+            except ValueError:
+                pass
+            try:
+                return ast.literal_eval(attempt)
+            except (ValueError, SyntaxError):
+                pass
+    return None
+
+
+def _strip_fence(text):
+    text = text.strip()
+    if not text.startswith("```"):
+        return text
+    newline = text.find("\n")
+    text = text[newline + 1:] if newline >= 0 else text[3:]
+    text = text.rstrip()
+    if text.endswith("```"):
+        text = text[:-3]
+    return text.strip()
+
+
+def _close_json(text):
+    stack, quote, escaped = [], "", False
+    for char in text:
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char in "{[":
+            stack.append("}" if char == "{" else "]")
+        elif char in "}]" and stack:
+            stack.pop()
+    out = text + quote if quote else text
+    bare_key = r"(?:\"[^\"]*\"|'[^']*'|[A-Za-z_][\w.-]*)"
+    out = re.sub(r",\s*" + bare_key + r"\s*:\s*$", "", out)
+    out = re.sub(r"\{\s*" + bare_key + r"\s*:\s*$", "{", out)
+    out = re.sub(r",\s*$", "", out)
+    return out + "".join(reversed(stack))
+
+
+def _balanced_span(text, start):
+    """`text[start:]` through its matching brace (or to the end)."""
+    stack, quote, escaped = [], "", False
+    for index in range(start, len(text)):
+        char = text[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+            continue
+        if char in "\"'":
+            quote = char
+        elif char in "{[":
+            stack.append("}" if char == "{" else "]")
+        elif char in "}]" and stack:
+            stack.pop()
+            if not stack:
+                return text[start:index + 1]
+    return text[start:]
+
+
+def _arguments(value):
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        parsed = _loads_tolerant(value)
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def _outer_arguments(obj):
+    return _arguments(next((obj[k] for k in CALL_ARG_KEYS if k in obj), {}))
+
+
+def _call_from_object(obj, wrapped=False):
+    """A dict -> (name, arguments) when it has a call shape; else None."""
+    if not isinstance(obj, dict):
+        return None
+    for key in ("tool_call", "function_call", "invoke"):
+        inner = obj.get(key)
+        if isinstance(inner, dict):
+            call = _call_from_object(inner, True)
+            if call is not None:
+                name, args = call
+                return name, args or _outer_arguments(obj) or {}
+        elif isinstance(inner, str) and key == "invoke":
+            args = _outer_arguments(obj)
+            if args is not None and inner.strip():
+                return inner.strip(), args
+    fn = obj.get("function")
+    if isinstance(fn, dict):
+        call = _call_from_object(fn, True)
+        if call is not None:
+            name, args = call
+            return name, args or _outer_arguments(obj) or {}
+    name = obj.get("name") or obj.get("tool") or obj.get("tool_name")
+    if not isinstance(name, str) and isinstance(fn, str):
+        name = fn                          # {"function": "run", "arguments": ...}
+    if not isinstance(name, str) or not name.strip():
+        return None
+    has_args = any(key in obj for key in CALL_ARG_KEYS)
+    if not has_args and not wrapped:
+        return None
+    args = _outer_arguments(obj)
+    if args is None:
+        return None
+    return name.strip(), args
+
+
+def _xml_parameters(body):
+    args = {}
+    for match in PARAM_BLOCK_RE.finditer(body):
+        value = match.group(2)
+        # A parameter left open at the end of the reply swallows the wrapper
+        # close tags; they are structure, not part of the value.
+        value = re.split(r"</(?:function|invoke|tool_call)\s*>", value,
+                         maxsplit=1, flags=re.I)[0]
+        args[match.group(1)] = value.strip()
+    return args
+
+
+def _calls_from_xml(text):
+    blocks = TOOL_CALL_BLOCK_RE.findall(text)
+    if blocks:
+        calls = []
+        for body in blocks:
+            functions = list(FUNCTION_BLOCK_RE.finditer(body))
+            if functions:
+                calls.extend((match.group(1), _xml_parameters(match.group(2)))
+                             for match in functions)
+            else:
+                calls.extend(_calls_from_json(body))
+        return calls, True
+    for regex in (INVOKE_BLOCK_RE, FUNCTION_BLOCK_RE):
+        matches = list(regex.finditer(text))
+        if matches:
+            return [(match.group(1), _xml_parameters(match.group(2)))
+                    for match in matches], True
+    return [], False
+
+
+def _tail_is_empty(text, end):
+    """True when nothing but punctuation follows the span. A call object in the
+    middle of an answer is prose quoting an example, not an intended call."""
+    return not text[end:].strip(" \t\r\n.,;:)]}>")
+
+
+def _calls_from_json(text):
+    for match in FENCE_RE.finditer(text):
+        call = _call_from_object(_loads_tolerant(match.group(1)))
+        if call is not None:
+            return [call]
+    # Bounded scan: a long non-call answer full of braces must not turn
+    # repair into an O(n²) parse.
+    position = attempts = 0
+    while attempts < 64:
+        attempts += 1
+        start = text.find("{", position)
+        if start < 0:
+            return []
+        span = _balanced_span(text, start)
+        call = _call_from_object(_loads_tolerant(span))
+        if call is not None and _tail_is_empty(text, start + len(span)):
+            return [call]
+        position = start + max(1, len(span) if span else 1)
+    return []
+
+
+def extract_tool_calls(text):
+    """Recover (name, arguments) pairs from a reply's text, in every syntax
+    the model has been seen to emit around the declared one."""
+    if not isinstance(text, str) or not text.strip():
+        return []
+    calls, wrapped = _calls_from_xml(text)
+    if wrapped:
+        return calls
+    return _calls_from_json(text)
+
+
+def _call_entry(name, arguments):
+    serialized = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+    digest = hashlib.sha1(f"{name}\0{serialized}".encode()).hexdigest()[:24]
+    return {"id": f"call_{digest}", "type": "function",
+            "function": {"name": name, "arguments": serialized}}
+
+
+def recover_tool_calls(message, schemas):
+    """Add a `tool_calls` entry recovered from content, or from the reasoning
+    channel when that is where the call died. Returns True when it fired."""
+    if message.get("tool_calls"):
+        return False
+    content = message.get("content")
+    calls = extract_tool_calls(content) if isinstance(content, str) else []
+    reasoning = message.get("reasoning_content")
+    if (not calls and isinstance(reasoning, str)
+            and (not isinstance(content, str) or not content.strip())):
+        calls = extract_tool_calls(reasoning)
+    entries = []
+    for name, arguments in calls:
+        schema = schemas.get(name)
+        if schema is None:
+            continue                       # undeclared name: not a valid call
+        entries.append(_call_entry(name, coerce_arguments(arguments, schema)))
+    if not entries:
+        return False
+    message["tool_calls"] = entries
+    return True
+
+
+def open_thinking(message):
+    """(field, tag, thinking_text) when the reply stops inside a thinking
+    block with no answer before it; else None."""
+    content = message.get("content")
+    if isinstance(content, str):
+        opens = list(THINK_OPEN_RE.finditer(content))
+        if opens:
+            match = opens[-1]
+            tag = match.group(1).lower()
+            closed_at = content.lower().rfind(f"</{tag}>")
+            if closed_at < match.start():
+                if content[:match.start()].strip():
+                    return None            # text before the block is an answer
+                return "content", tag, content[match.end():]
+    reasoning = message.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning.strip():
+        if isinstance(content, str) and content.strip():
+            return None                    # the answer arrived
+        if THINK_CLOSE_RE.search(reasoning):
+            return None                    # thinking ended on purpose
+        return "reasoning_content", "think", reasoning
+    return None
+
+
+def answer_room(max_tokens):
+    """Answer budget after the thinking is cut: a quarter of the request cap
+    (at least ANSWER_RESERVE_MIN, at most half of it), bounded small because
+    this is one continuation. A cap under ANSWER_ROOM_MIN_CAP cannot fit both
+    parts, so the whole cap becomes answer room."""
+    if not isinstance(max_tokens, int) or max_tokens <= 0:
+        return THINK_RETRY_MAX
+    if max_tokens < ANSWER_ROOM_MIN_CAP:
+        return max_tokens
+    reserve = min(max(ANSWER_RESERVE_MIN, max_tokens // 4), max_tokens // 2)
+    return min(THINK_RETRY_MAX, reserve)
+
+
+def clamp_max_tokens(req, context_tokens):
+    """Clamp an explicit max_tokens to the context left after the prompt.
+    ponytail: 4 chars/token is a heuristic; without a tokenizer the proxy can
+    only under-reserve, which leaves the server's own truncation in place."""
+    max_tokens = req.get("max_tokens")
+    if not context_tokens or not isinstance(max_tokens, int) or max_tokens <= 0:
+        return False
+    prompt = estimate_tokens(req.get("messages") or [])
+    if req.get("tools"):
+        prompt += estimate_tokens(req["tools"])
+    room = max(1, context_tokens - prompt)
+    if max_tokens <= room:
+        return False
+    req["max_tokens"] = room
+    return True
+
+
+def _thinking_retry(req, field, tag, thinking, used, context_tokens):
+    """One continuation with the thinking already closed. The template
+    renders `reasoning_content` inside the close tag, which is the same cut
+    the reply needed; every token of the retry budget is answer room."""
+    request = dict(req)
+    request["messages"] = list(req.get("messages") or []) + [{
+        "role": "assistant", "content": "",
+        "reasoning_content": thinking}]
+    request["continue_final_message"] = True
+    request["add_generation_prompt"] = False
+    request["stream"] = False
+    budget = answer_room(req.get("max_tokens"))
+    if context_tokens:
+        prompt = estimate_tokens(req.get("messages") or [])
+        if req.get("tools"):
+            prompt += estimate_tokens(req["tools"])
+        room = context_tokens - prompt - max(0, used or 0)
+        budget = max(1, min(budget, room))
+    request["max_tokens"] = budget
+    return request
+
+
+def apply_thinking_retry(resp, retry_resp, plan):
+    """Merge a close-thinking continuation into the original reply. Returns
+    False (and leaves it alone) when the retry produced no answer."""
+    choices = resp.get("choices") or []
+    retry_choices = retry_resp.get("choices") or []
+    index = plan.get("index", 0)
+    if index >= len(choices) or not retry_choices:
+        return False
+    choice, retry_choice = choices[index], retry_choices[0]
+    if not isinstance(choice, dict) or not isinstance(retry_choice, dict):
+        return False
+    message = choice.get("message")
+    retry_message = retry_choice.get("message")
+    if not isinstance(message, dict) or not isinstance(retry_message, dict):
+        return False
+    calls = retry_message.get("tool_calls")
+    answer = retry_message.get("content")
+    if not isinstance(answer, str) or not answer.strip():
+        answer = None
+    if not calls and answer is None:
+        return False
+    if plan["field"] == "content":
+        cut = plan["content"].rstrip()
+        closed = f"{cut}\n\n</{plan['tag']}>"
+        message["content"] = f"{closed}\n\n{answer}" if answer else closed
+    elif answer is not None:
+        message["content"] = answer
+    if calls:
+        message["tool_calls"] = calls
+        choice["finish_reason"] = "tool_calls"
+    else:
+        choice["finish_reason"] = retry_choice.get("finish_reason") or "stop"
+    usage, retry_usage = resp.get("usage"), retry_resp.get("usage")
+    if isinstance(usage, dict) and isinstance(retry_usage, dict):
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            first, second = usage.get(key), retry_usage.get(key)
+            if isinstance(first, (int, float)) and isinstance(second, (int, float)):
+                usage[key] = first + second
+    if not isinstance(resp.get("x_proxy"), dict):
+        resp["x_proxy"] = {}
+    resp["x_proxy"]["thinking_retry"] = "closed"
+    return True
+
+
+def repair_reply(resp, req, context_tokens=0, allow_retry=True):
+    """Repair one non-streaming chat response in place. Returns
+    (changed, retry_plan); `retry_plan` is at most one close-thinking
+    continuation for the caller to issue."""
+    if not isinstance(resp, dict):
+        return False, None
+    schemas = tool_schemas(req.get("tools"))
+    changed = False
+    retry = None
+    for index, choice in enumerate(resp.get("choices") or []):
+        if not isinstance(choice, dict):
+            continue
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            continue
+        if schemas and not message.get("tool_calls"):
+            if recover_tool_calls(message, schemas):
+                choice["finish_reason"] = "tool_calls"
+                changed = True
+        if (retry is None and allow_retry and not message.get("tool_calls")
+                and choice.get("finish_reason") in ("length", "stop")):
+            opened = open_thinking(message)
+            if opened is not None:
+                field, tag, thinking = opened
+                usage = resp.get("usage")
+                used = (usage.get("completion_tokens") or 0
+                        if isinstance(usage, dict) else 0)
+                retry = {
+                    "request": _thinking_retry(
+                        req, field, tag, thinking, used, context_tokens),
+                    "field": field, "tag": tag, "index": index,
+                    "content": message.get("content") or "",
+                }
+    return changed, retry
 
 
 SKILLS_MARKER = "Relevant skills (read the file before acting when it applies):"
@@ -745,6 +1295,7 @@ class Handler(BaseHTTPRequestHandler):
                 req["max_tokens"] = min(req.get("max_tokens")
                                         or router.max_tokens,
                                         router.max_tokens)
+                clamp_max_tokens(req, self.server.context_tokens)
                 body = json.dumps(req).encode()
                 print(f"score proxy: routed trivial "
                       f"(margin {margin:.3f})", file=sys.stderr)
@@ -755,9 +1306,16 @@ class Handler(BaseHTTPRequestHandler):
                 status, resp = post_json(self.server.upstream,
                                          "/v1/chat/completions", body)
                 if isinstance(resp, dict):
+                    repair_reply(resp, req, self.server.context_tokens,
+                                 allow_retry=False)
                     resp["x_proxy"] = {"route": "trivial",
                                        "margin": round(margin, 3)}
                 return self._send_json(status, resp)
+        if clamp_max_tokens(req, self.server.context_tokens):
+            body = json.dumps(req).encode()
+            print(f"score proxy: clamped max_tokens to {req['max_tokens']} "
+                  f"for a {self.server.context_tokens}-token context",
+                  file=sys.stderr)
         escalate = self.server.escalate_env or req.get("escalate") is True
         if req.get("stream"):
             # escalation needs the full response; streams pass through with
@@ -766,7 +1324,7 @@ class Handler(BaseHTTPRequestHandler):
                      if self.server.loop_guard else None)
             return self._passthrough(body, guard)
         if not escalate:
-            return self._passthrough(body)
+            return self._chat_result(req, body)
         # pass 1: thinking off, logprobs on
         p1 = dict(req)
         kwargs = dict(req.get("chat_template_kwargs") or {})
@@ -782,12 +1340,69 @@ class Handler(BaseHTTPRequestHandler):
         vals = [t["logprob"] for t in tokens if t.get("logprob") is not None]
         mean = sum(vals) / len(vals) if vals else 0.0
         if mean >= self.server.threshold:
+            repair_reply(resp, req, self.server.context_tokens,
+                         allow_retry=False)
             resp["x_proxy"] = {"escalated": False, "mean_logprob": mean}
             return self._send_json(status, resp)
         # low confidence: re-issue the original request unchanged (thinking on)
-        status, resp = post_json(self.server.upstream, "/v1/chat/completions", body)
-        resp["x_proxy"] = {"escalated": True, "mean_logprob": mean}
+        status, headers, raw, resp, _ = self._complete(req, body)
+        if resp is None:
+            return self._send_raw(status, headers, raw)
+        resp.setdefault("x_proxy", {})["escalated"] = True
+        resp["x_proxy"]["mean_logprob"] = mean
         self._send_json(status, resp)
+
+    def _complete(self, req, body):
+        """Buffered call with repair. The retry is issued at most once here;
+        a failed continuation leaves the original response untouched."""
+        client_headers = {
+            key: value for key, value in self.headers.items()
+            if key.lower() not in HOP_BY_HOP | {"host", "content-length"}}
+        status, headers, raw = post_buffered(
+            self.server.upstream, "/v1/chat/completions", body,
+            headers=client_headers)
+        if status != 200:
+            return status, headers, raw, None, False
+        try:
+            resp = json.loads(raw)
+        except ValueError:
+            return status, headers, raw, None, False
+        changed, retry = repair_reply(resp, req, self.server.context_tokens)
+        if retry is not None:
+            rstatus, _, rraw = post_buffered(
+                self.server.upstream, "/v1/chat/completions",
+                json.dumps(retry["request"]).encode(), headers=client_headers)
+            retry_resp = None
+            if rstatus == 200:
+                try:
+                    retry_resp = json.loads(rraw)
+                except ValueError:
+                    pass
+            merged = (retry_resp is not None
+                      and apply_thinking_retry(resp, retry_resp, retry))
+            if merged:
+                changed = True
+                changed = repair_reply(
+                    resp, req, self.server.context_tokens,
+                    allow_retry=False)[0] or changed
+            print(f"score proxy: thinking retry "
+                  f"{'closed' if merged else 'did not recover'}", file=sys.stderr)
+        return status, headers, raw, resp, changed
+
+    def _chat_result(self, req, body):
+        status, headers, raw, resp, changed = self._complete(req, body)
+        if resp is None or not changed:
+            return self._send_raw(status, headers, raw)
+        return self._send_json(status, resp)
+
+    def _send_raw(self, status, headers, raw):
+        self.send_response(status)
+        for key, value in headers:
+            if key.lower() not in HOP_BY_HOP | {"content-length"}:
+                self.send_header(key, value)
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
 
     def _send_json(self, status, obj):
         data = json.dumps(obj).encode()
@@ -806,10 +1421,11 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
                 router_timeout=2.0, tool_steer=False, tool_threshold=0.5,
                 tool_force=False, tool_top_k=8, tool_always=(),
                 skills_dir=None, skills_top_k=3, skills_min_sim=0.25,
-                skills_pin=(), skills_pin_chars=4000):
+                skills_pin=(), skills_pin_chars=4000, context_tokens=0):
     u = urllib.parse.urlparse(upstream_url)
     srv = ThreadingHTTPServer(("", port), Handler)
     srv.upstream = (u.hostname, u.port or 80)
+    srv.context_tokens = context_tokens
     srv.escalate_env = escalate_env
     srv.threshold = threshold
     srv.loop_guard = loop_guard
@@ -869,7 +1485,8 @@ def main():
         float(os.environ.get("PROXY_SKILLS_MIN_SIM", 0.25)),
         tuple(n for n in os.environ.get("PROXY_SKILLS_PIN", "").split(",")
               if n.strip()),
-        int(os.environ.get("PROXY_SKILLS_PIN_CHARS", 4000)))
+        int(os.environ.get("PROXY_SKILLS_PIN_CHARS", 4000)),
+        int(os.environ.get("PROXY_CONTEXT_TOKENS", 0) or 0))
     print(f"score proxy on :{srv.server_port} -> "
           f"http://{srv.upstream[0]}:{srv.upstream[1]}")
     srv.serve_forever()

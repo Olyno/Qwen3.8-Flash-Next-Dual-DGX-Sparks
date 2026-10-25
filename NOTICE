@@ -145,9 +145,33 @@ Ideas and approaches (no code copied)
   fodelf/YoungAi (MIT, ds4/DwarfStar engine) — spec-decode cost-gating and
     cgroup-shaped memory guard; idea-level only.
 
+  Luce-Org/lucebox (Apache-2.0) — https://github.com/Luce-Org/lucebox
+    Multi-syntax tool-call parsing, relaxed-JSON and schema-typed
+    argument recovery (server/src/server/tool_parser.cpp), and the
+    reply-reserve / close-thinking retry design
+    (docs/specs/thinking-budget.md); reimplemented from scratch for
+    proxy/score_proxy.py. No code copied.
+
+  zolotukhin/zinc (MIT) — https://github.com/zolotukhin/zinc
+    ChatML <tool_call> envelope parsing and schema-aware argument
+    decoding (src/server/tool_format.zig); reimplemented from scratch
+    for proxy/score_proxy.py. No code copied.
+
+  uv-genai/colibri (Apache-2.0) — https://github.com/uv-genai/colibri
+    Strict tool-call parsing with declared-type argument coercion
+    (c/openai_server.py); reimplemented from scratch for
+    proxy/score_proxy.py. No code copied.
+
   MistVVK/XeStrata (LGPL-3.0 — ideas only, code not copyleft-compatible)
     — https://github.com/MistVVK/XeStrata. PLE engagement startup
     assertion, PLE read/prefetch discipline, per-device gating practice.
+  MistVVK/XeStrata (LGPL-3.0-or-later AND MIT, per file) —
+  https://github.com/MistVVK/XeStrata
+
+    Tool-call recovery from markdown-fenced JSON and from the reasoning
+    channel, the close-thinking retry, and the answer-room reserve
+    (serve/server.py, serve/frontend.py); reimplemented from scratch for
+    proxy/score_proxy.py. No code copied.
 
   NVIDIA/flare-local-inference (Apache-2.0)
     — https://github.com/NVIDIA/flare-local-inference. Page-cache hygiene

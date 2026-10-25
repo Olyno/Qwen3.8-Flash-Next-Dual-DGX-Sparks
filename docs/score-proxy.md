@@ -3,8 +3,9 @@
 `proxy/score_proxy.py` is a thin OpenAI-compatible reverse proxy that sits
 between any client/harness and the vLLM server. Everything it doesn't
 recognize is forwarded byte-for-byte (SSE chat streams relay chunk-by-chunk,
-never buffered); on top of that it adds three decision features. Stdlib Python
-only, no dependencies.
+never buffered); on top of that it adds decision features and a
+non-streaming tool-call/answer repair pass. Stdlib Python only, no
+dependencies.
 
 ## Run it
 
@@ -94,6 +95,62 @@ order is preserved). `PROXY_TOOL_ALWAYS` names — comma-separated — are never
 pruned. Weak tool selection is often a choice-among-many problem, so a
 shorter, sharper list raises call rate and choice quality even when the
 model never sees the pruned tools. Any embedding failure keeps the full list.
+
+## Tool-call and truncated-answer repair
+
+Non-streaming chat replies are inspected before they are returned and
+repaired when the model emitted a call the harness cannot parse, or ran out
+of budget in the middle of its thinking. A reply that already parses and has
+an answer is relayed as the raw upstream bytes — the repair paths never
+rewrite well-formed traffic. SSE streams still pass through untouched (a
+buffered repair would defeat streaming), so call/answer repair applies to
+`stream: false` only; the pre-request max_tokens clamp covers both.
+
+The call/answer repair is always on and stdlib-only; the context clamp is
+opt-in because the proxy cannot infer the model's context size. The
+mechanisms:
+
+- **Tolerant call parse.** Accepts a JSON object in a Markdown fence,
+  trailing commas, single-quoted keys, a `tool_call` / `function_call` /
+  `invoke` wrapper, `arguments` as a JSON string or an object, the Qwen
+  `<tool_call><function=NAME><parameter=K>V</parameter>…` form, an
+  Anthropic-style `<invoke>`, and a call left inside `reasoning_content`
+  when no answer reached `content`. A truncated tail is closed (open
+  quote/bracket/brace) and a dangling key is dropped before parsing. Only
+  declared tool names become `tool_calls`; the entry is a normal OpenAI
+  function call with a deterministic id.
+- **Schema-typed coercion.** When the request declares `tools`, argument
+  values are coerced to the declared type: `"5"` → `5`, `"true"` → `true`,
+  numeric strings with whitespace or a unit suffix, a bare value into an
+  `array` (whose items are then coerced), and a JSON string into a declared
+  `object`. Undeclared keys and absent arguments are never touched or
+  invented.
+- **Unclosed wrapper/tail.** A reply that ends inside a JSON object or a
+  tool-call wrapper is closed and emitted as a call instead of a truncated
+  text turn; `finish_reason` becomes `tool_calls`.
+- **max_tokens clamp.** With `PROXY_CONTEXT_TOKENS` set to the model's
+  context size, an explicit `max_tokens` larger than the room left after the
+  prompt is clamped before generation. The estimate is a conservative
+  4 chars/token (no tokenizer in the proxy). The close-thinking continuation
+  is clamped against the same budget minus what was already generated.
+- **Close-thinking retry.** A non-streaming reply with `finish_reason`
+  `length` or `stop` that stops inside `<think>`/`<reasoning>` (or with
+  `reasoning_content` and no answer) is continued **once** with the thinking
+  closed via `continue_final_message`. The continuation is bounded by
+  `THINK_RETRY_MAX` (1024) tokens. A second retry is never issued.
+- **Answer-room reservation.** The continuation budget is the reply reserve
+  — a quarter of the request cap, at least 512 tokens, at most half of it,
+  and bounded to 1024 for the single continuation. Because the thinking is
+  already closed, all of that budget is answer room; a cap below 1024 cannot
+  fit both parts, so the whole cap goes to the answer rather than leaving
+  it empty. A non-streaming proxy cannot intervene inside one generation,
+  so the reserve is applied to the continuation, where the thinking is cut
+  and the answer gets the reserved budget.
+
+Repairs add `"x_proxy": {"thinking_retry": "closed"}` to the response; the
+tool-call parse does not add a marker. The continuation is fail-open: if it
+errors or returns no answer, the original response is relayed unchanged.
+Streaming passthrough and escalation gating are unchanged.
 
 ## Middleware triage (2026-10-10)
 
@@ -201,3 +258,16 @@ large static skill set, pre-filtering in the client is cheaper.
   [fastino/GLiNER2.5-Decide](https://huggingface.co/fastino/GLiNER2.5-Decide)
   — the score-don't-generate pattern; see
   [decision-scoring.md](decision-scoring.md).
+- [Luce-Org/lucebox](https://github.com/Luce-Org/lucebox) — multi-syntax
+  tool-call parsing, relaxed-JSON and schema-typed argument recovery, and
+  the reply-reserve / close-thinking retry design.
+- [zolotukhin/zinc](https://github.com/zolotukhin/zinc) — ChatML
+  `<tool_call>` envelope parsing and schema-aware argument decoding.
+- [uv-genai/colibri](https://github.com/uv-genai/colibri) — strict
+  tool-call parsing with declared-type argument coercion.
+- [MistVVK/XeStrata](https://github.com/MistVVK/XeStrata) — fenced-JSON
+  call recovery, reasoning-channel calls, close-thinking retry and
+  answer-room reserve.
+
+All four are idea-level credits: the proxy code is an independent
+reimplementation; see `NOTICE`.
