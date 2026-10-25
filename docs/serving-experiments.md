@@ -187,6 +187,8 @@ What each arm actually says:
 
 `edit_value` fails because the write dropped the file's trailing newline while every other byte matched. That is a real defect, not a checker artefact, and it is recorded as such rather than relaxed.
 
+The set has since grown to eighteen tasks: six of them isolate selection (`updated_file`, `pick_read_over_run`, `pick_search_over_read`, `pick_list_over_guess`, `no_tool_needed`, `write_then_verify`), and `--repeat N` reports a flaky task as flaky instead of as a pass or a fail. Baseline on the committed build: **13/18**, 60 turns, 56,710 prompt tokens, failing `edit_value` (wrong bytes), `large_output` and `pick_search_over_read` (turn cap on a large file), `count_matches` and `write_then_verify` (turn cap). `no_tool_needed` passes, so the model does not over-call on a question the conversation already answers.
+
 Two more arms were run against the same hypothesis, both negative:
 
 - **A nudge that names the narrowest tool** ("read a file with the file-reading tool instead of executing it, search instead of reading everything") changed nothing: same score, same failure, and the trace opens identically with `run_python` pointed at a path that is a directory.
