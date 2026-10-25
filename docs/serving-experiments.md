@@ -167,6 +167,27 @@ Compare **ms/step and tokens/step**, not tok/s: acceptance moves with the text, 
 
 The before/after matrix runs on the same deployment for the same reason, and its commands are unchanged from the ones above; only the deployment is different.
 
+## Duplicate tool output, and per-request accounting
+
+A tool result that repeats verbatim is the one part of an agent transcript that is pure waste: it is paid for in every later turn's prompt. Measured through the proxy with two byte-identical ~30k-token tool results in one conversation:
+
+| arm | prompt tokens |
+|---|---|
+| default (off) | 60,172 |
+| `PROXY_DEDUPE_TOOL_OUTPUT=1` | 30,195 |
+
+The later copy becomes `[identical to the tool result above at message N; B bytes]`, so the model still learns that a repeat happened and how large it was without re-reading it. Only exact bytes, only `role: "tool"`, only above 512 bytes; the first occurrence and every non-tool message stay byte-identical, and the replacement is idempotent across turns.
+
+It stays opt-in. That is a meaning change, and this benchmark has no repeated tool results, so nothing here answers the quality question — it needs a task set where the duplicate actually occurs.
+
+Every completed request now also logs its own cost:
+
+```
+score proxy: usage prompt_tokens=60172 cached_tokens=0 completion_tokens=16 reasoning_tokens=16
+```
+
+That line is the attribution mechanism for everything above: it separates "the prompt grew" from "the model thought longer", which is otherwise indistinguishable from the outside.
+
 ## Reasoning and long-context baseline
 
 `bench/reasoning_check.py`, ten short reasoning tasks plus two long-context recall probes, temperature as served, 2,048-token generation cap:
