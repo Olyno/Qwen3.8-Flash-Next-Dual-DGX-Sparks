@@ -129,6 +129,24 @@ The proxy adds 722 prompt tokens for the pinned skill body, and the repeat still
 
 This number does transfer. Prefix caching is per-rank, but the tokens that hit are the same tokens on either topology; a byte that changes in the head costs a full re-prefill per rank, so the saving if anything doubles with two ranks.
 
+## What a five-turn session actually costs
+
+Prefix caching helps only if the session grows by appending. This measures the real curve: a 4k-token document, then four turns that each append a short answer, a ~2k-token tool result and the next question. Direct to the server, no proxy, temperature 0.
+
+| turn | prompt tokens | served from cache | new prefill | completion |
+|---|---|---|---|---|
+| 1 | 4,077 | 0 (0.0%) | 4,077 | 64 |
+| 2 | 6,756 | 3,360 (49.7%) | 3,396 | 64 |
+| 3 | 9,430 | 6,720 (71.3%) | 2,710 | 64 |
+| 4 | 12,104 | 8,400 (69.4%) | 3,704 | 64 |
+| 5 | 14,801 | 11,760 (79.5%) | 3,041 | 64 |
+| **total** | **47,168** | **30,240 (64.1%)** | **16,928** | **320** |
+
+Two numbers matter downstream:
+
+- **Prompt tokens outnumber generated tokens 147 to 1** over the session. Any work on the prompt side moves more than any work on the decode side, and unlike decode it behaves the same on one rank or two.
+- **The marginal prefill is 2.7-3.7k tokens per turn**, and about 2k of that is the new tool output. That is the target: a tool result is paid for once when it arrives and again in every later turn's prompt, so shrinking or de-duplicating it attacks the only part of the prompt the cache cannot absorb.
+
 ## Already settled by configuration
 
 - **BF16 recurrent state.** `mamba_ssm_cache_dtype: bfloat16` is in the committed recipe and visible in the live container arguments, so the reference's +8.5% is already in the baseline above. No A/B left to run.
