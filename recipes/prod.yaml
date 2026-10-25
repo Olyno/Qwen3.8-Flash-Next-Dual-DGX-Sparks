@@ -144,6 +144,20 @@ fp8_dense: false
 # and it saves only ~50 MiB per draft call over FP8 (at most ~1.4% of an
 # engine step, under the 2% floor).
 fp8_draft_head: true
+# FP8 (E4M3, per-row scale) copy of the TARGET lm_head
+# (patches/patch_target_head_fp8_v030.py, VLLM_TARGET_HEAD_FP8): after weights
+# load the full 248,320-row BF16 head (1.27 GB) becomes an E4M3 copy, so the
+# per-step head read drops from ~4.6 ms to ~2.3 ms of a ~77 ms decode step at
+# ~273 GB/s. The sampler path is untouched (LogitsProcessor still all-gathers
+# across TP and applies its logit processors); each rank quantizes its own
+# shard, no vocabulary slice. Unlike fp8_draft_head this head feeds sampling
+# and target verification, so it is lossy, not output-free. Gate before
+# enabling: KL yardstick against a stock boot
+# (python3 bench/kl_yardstick.py compare --url <base> --candidate <cand>;
+# p99 <= 2x the self-noise floor, top-1 >= 99.5%), then
+# bench/decodebench.py for the per-step delta. Values: 1 (marlin, then w8a8),
+# marlin, w8a8. Default OFF; no speedup claimed until that run passes.
+target_head_fp8: false
 # SketchSSM (arXiv 2609.33051) and SuffixReplay (arXiv 2609.33477) assessed,
 # both SKIPPED: approximate methods that fail the quality bar by design
 # (SketchSSM's own table shows −2.4 pts on LiveCodeBench at G=8; SuffixReplay

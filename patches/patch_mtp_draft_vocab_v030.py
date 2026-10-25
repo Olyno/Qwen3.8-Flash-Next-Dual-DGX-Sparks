@@ -17,6 +17,10 @@ draft-step head bandwidth drops (~2x).
 Kernel: Marlin W8A16 first, CUTLASS W8A8 fallback, BF16 rows if neither builds
 (fail closed, agreed across TP ranks).
 
+The quantization and kernel code (FP8_HEAD_KERNELS) is also injected into
+model.py by patches/patch_target_head_fp8_v030.py for the target lm_head, so
+both heads run the same transform.
+
 Each delta is gated by its own env at runtime, so the two compose
 independently: draft vocab only, FP8 only, or both.
 
@@ -33,16 +37,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ORIG = os.path.join(HERE, "mtp_v030_patched.py.orig")
 OUT = os.path.join(HERE, "mtp_v030_patched.py")
 
-FP8_BLOCK = '''
+FP8_HEAD_KERNELS = '''
 
-# L1b' draft-only FP8 lm_head copy (ported from the sfxnz 2x-DGX-Spark
-# recipe's apply_mtp_overlay.py, MIT). Opt-in via VLLM_MTP_DRAFT_HEAD_FP8.
-_DRAFT_HEAD_FP8_ENV = "VLLM_MTP_DRAFT_HEAD_FP8"
+# FP8 (E4M3, per-row scale) lm_head copy, ported from the sfxnz 2x-DGX-Spark
+# recipe's apply_mtp_overlay.py, MIT (see licenses/sfxnz-MIT.LICENSE). Shared
+# with the target-head patch, which injects this block into model.py verbatim.
 _FP8_MAX = 448.0  # torch.finfo(torch.float8_e4m3fn).max
 
 
-def _draft_head_fp8_kernels(value: str) -> tuple:
-    """FP8 draft-head kernels to try, in order, for a VLLM_MTP_DRAFT_HEAD_FP8 value."""
+def _fp8_head_kernels(value: str, env: str) -> tuple:
+    """FP8 lm_head kernels to try, in order, for an env flag value."""
     v = value.strip().lower()
     if v in ("", "0", "off", "false", "no"):
         return ()
@@ -52,7 +56,7 @@ def _draft_head_fp8_kernels(value: str) -> tuple:
         return ("marlin",)
     if v in ("w8a8", "cutlass"):
         return ("w8a8",)
-    raise ValueError(f"{_DRAFT_HEAD_FP8_ENV}={value!r}: use 1|auto, marlin or w8a8")
+    raise ValueError(f"{env}={value!r}: use 1|auto, marlin or w8a8")
 
 
 def _quantize_rows_fp8(w: torch.Tensor, chunk: int = 8192) -> tuple:
@@ -75,8 +79,8 @@ def _quantize_rows_fp8(w: torch.Tensor, chunk: int = 8192) -> tuple:
     return q, scale
 
 
-class _Fp8DraftHead:
-    """Draft-only FP8 copy of lm_head rows [N, K]; logits(h) -> [M, N].
+class _Fp8Head:
+    """FP8 copy of lm_head rows [N, K]; logits(h) -> [M, N].
 
     kernel "marlin": W8A16, FP8 weights dequantized in the Marlin GEMM,
     activations stay BF16. kernel "w8a8": per-token dynamic FP8 activations
@@ -135,12 +139,12 @@ class _Fp8DraftHead:
         return err
 
 
-def _build_fp8_draft_head(rows: torch.Tensor, kernels: tuple) -> tuple:
+def _build_fp8_head(rows: torch.Tensor, kernels: tuple) -> tuple:
     """First kernel that builds and passes its self-check, else (None, why)."""
     errs = []
     for kernel in kernels:
         try:
-            head = _Fp8DraftHead(rows, kernel)
+            head = _Fp8Head(rows, kernel)
             head.check(rows)
             return head, ""
         except Exception as e:  # noqa: BLE001 - try the next kernel
@@ -161,6 +165,12 @@ def _tp_agree(ok: bool, err: str) -> tuple:
             return False, "another TP rank could not build it"
     return ok, err
 
+'''
+
+# Draft-only FP8 lm_head copy. Opt-in via VLLM_MTP_DRAFT_HEAD_FP8.
+_DRAFT_HEAD_FP8_ENV = "VLLM_MTP_DRAFT_HEAD_FP8"
+
+FP8_DRAFT_BLOCK = '''
 
 def _attach_fp8_draft_head(model: nn.Module) -> None:
     """Quantize the drafter's lm_head rows to FP8 (VLLM_MTP_DRAFT_HEAD_FP8).
@@ -172,7 +182,9 @@ def _attach_fp8_draft_head(model: nn.Module) -> None:
     stays on the BF16 rows, agreed across TP ranks so no rank diverges.
     """
     try:
-        kernels = _draft_head_fp8_kernels(os.environ.get(_DRAFT_HEAD_FP8_ENV, ""))
+        kernels = _fp8_head_kernels(
+            os.environ.get(_DRAFT_HEAD_FP8_ENV, ""), _DRAFT_HEAD_FP8_ENV
+        )
     except ValueError as exc:
         logger.warning("MTP FP8 draft head: %s; disabled.", exc)
         kernels = ()
@@ -192,7 +204,7 @@ def _attach_fp8_draft_head(model: nn.Module) -> None:
     resv0 = torch.cuda.memory_reserved()
     head, err = None, ""
     try:
-        head, err = _build_fp8_draft_head(rows, kernels)
+        head, err = _build_fp8_head(rows, kernels)
     except Exception as exc:  # noqa: BLE001 - fail closed to BF16
         head, err = None, f"{type(exc).__name__}: {exc}"
     torch.cuda.empty_cache()
@@ -218,6 +230,8 @@ def _attach_fp8_draft_head(model: nn.Module) -> None:
     )
 
 '''
+
+FP8_BLOCK = FP8_HEAD_KERNELS + FP8_DRAFT_BLOCK
 
 # get_top_tokens prologue + branch structure with an FP8-first path; replaces
 # the same region of the shared GET_TOP_TOKENS block when --fp8 is on.

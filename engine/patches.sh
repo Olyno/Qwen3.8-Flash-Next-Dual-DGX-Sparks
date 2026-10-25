@@ -257,6 +257,25 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         add_overlay "$FS/kv_cache_utils_v030.py" \
                     "$VLLM_PKG/v1/core/kv_cache_utils.py"
     fi
+    if [[ "$TARGET_HEAD_FP8" != "false" && -n "$TARGET_HEAD_FP8" && "$TARGET_HEAD_FP8" != "0" && "$TARGET_HEAD_FP8" != "off" ]]; then
+        info "=== Step 4c: FP8 target lm_head (vLLM 0.32) ==="
+        # patches/patch_target_head_fp8_v030.py: after weights load, the
+        # full-vocabulary BF16 lm_head is replaced by an E4M3 copy (per-row
+        # scale, one TP shard per rank). LogitsProcessor keeps its stock
+        # apply() -> all-gather -> trim path, so only the head read changes.
+        # The transform is lossy and this head feeds sampling and verify:
+        # gate it on the KL yardstick before enabling. Off = inert file.
+        [[ "$FP8_DENSE" != "true" ]] || err "TARGET_HEAD_FP8 and FP8_DENSE both overlay qwen4_exp/nvidia/model.py - pick one."
+        TH="$SCRIPT_DIR/patches/v030_target_head"
+        mkdir -p "$TH/orig"
+        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/model.py" \
+                           "$TH/orig/model.py"
+        python3 "$SCRIPT_DIR/patches/patch_target_head_fp8_v030.py" "$TH" \
+            || err "patch_target_head_fp8_v030.py failed"
+        add_overlay "$TH/model_v030.py" \
+                    "$VLLM_PKG/models/qwen4_exp/nvidia/model.py"
+        OVERLAY_ENV+=("-e VLLM_TARGET_HEAD_FP8=$TARGET_HEAD_FP8")
+    fi
     if [[ "$CHUNK_EQUAL_SPLIT" == "true" ]]; then
         info "=== Step 4c: equal-width chunked prefill (vLLM 0.32) ==="
         # patches/patch_chunk_equal_split.py (idea credit: Niko1221/Strata,

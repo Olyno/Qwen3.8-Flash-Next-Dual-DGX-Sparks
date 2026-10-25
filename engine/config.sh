@@ -142,6 +142,13 @@ SKIP_PLE_PATCH="${SKIP_PLE_PATCH:-false}"
 # reduced draft-vocab slice when MTP_DRAFT_VOCAB is set, else the full shard.
 # The target keeps its BF16 head for verify, so emitted tokens are unchanged.
 FP8_DRAFT_HEAD="${FP8_DRAFT_HEAD:-false}"
+# FP8 (E4M3, per-row scale) copy of the TARGET lm_head (v0.30 lane only,
+# patches/patch_target_head_fp8_v030.py): after weights load the full
+# 248,320-row BF16 head is replaced by an FP8 copy, roughly halving the
+# per-step head read. Values: 1/true (marlin, then w8a8), marlin, w8a8;
+# false/0/off disables. Lossy in the last logits bit and this head feeds
+# sampling and verification, so the KL yardstick gates it.
+TARGET_HEAD_FP8="${TARGET_HEAD_FP8:-false}"
 # Fused multi-step MTP draft metadata for QSA (v0.30 lane only,
 # patches/patch_qsa_fused_draft_v030.py): the QSA metadata builder opts into
 # the speculator's in-place update between draft steps instead of a full
@@ -225,6 +232,7 @@ PLE_STAGED_LOOKUP="${PLE_STAGED_LOOKUP:-false}"
 # expected. Ineligible destinations fall back to the stock path.
 GDN_DIRECT_OUT="${GDN_DIRECT_OUT:-false}"
 [[ "$FP8_DRAFT_HEAD" != "true" || "$V030" == "true" ]] || err "fp8_draft_head is only supported on the vLLM 0.32 lane (v030: true)."
+[[ "$TARGET_HEAD_FP8" == "false" || "$TARGET_HEAD_FP8" == "0" || "$TARGET_HEAD_FP8" == "off" || "$TARGET_HEAD_FP8" == "" || "$V030" == "true" ]] || err "target_head_fp8 is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$QSA_FUSED_DRAFT" != "true" || "$V030" == "true" ]] || err "qsa_fused_draft is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$QSA_ROPE_CLAMP" != "true" || "$V030" == "true" ]] || err "qsa_rope_clamp is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$LOAD_DROP_CACHE" != "true" || "$V030" == "true" ]] || err "load_drop_cache is only supported on the vLLM 0.32 lane (v030: true)."
