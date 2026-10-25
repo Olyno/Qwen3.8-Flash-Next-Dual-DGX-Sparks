@@ -170,6 +170,9 @@ def selftest():
 def main(argv):
     if len(argv) == 2 and argv[1] == "--selftest":
         return selftest()
+    if len(argv) == 3 and argv[1] == "snapshot":
+        base = __import__("os").environ.get("BENCH_BASE", "http://localhost:8888")
+        return snapshot(base, argv[2])
     if len(argv) == 4 and argv[1] == "snapshot":
         return snapshot(argv[2], argv[3])
     if len(argv) == 4 and argv[1] == "report":
