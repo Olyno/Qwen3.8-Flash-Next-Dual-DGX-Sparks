@@ -12,6 +12,10 @@ same tokenized positions; nothing is sampled.
 
     python3 bench/kl_yardstick.py compare --url http://localhost:8888 \
         --candidate http://localhost:8889
+    python3 bench/kl_yardstick.py compare --url http://localhost:8888 \
+        --capture base.json                        # snapshot baseline + floor
+    python3 bench/kl_yardstick.py compare --replay base.json \
+        --candidate http://localhost:8889          # score a later candidate
     python3 bench/kl_yardstick.py spine            # rebuild positions file
     python3 bench/kl_yardstick.py freeze --url ..  # pin token ids (live host)
 
@@ -41,6 +45,15 @@ and once `freeze` has pinned the tokenized position list against a healthy
 endpoint every later run diffs the live tokenization against the pin and
 refuses to score on mismatch.
 
+Single-GPU capture/replay: `--capture FILE` writes the baseline arm's
+per-position top-k distributions, its logprob of each actual token, the
+tokenized spine, the corpus sha256, the positions-pin hash, and the self-noise
+floor measured in that same run. `--replay FILE` then substitutes that file for
+the baseline endpoint and keeps the candidate live; the captured floor is used
+verbatim, and replay refuses to score if the live corpus hash, position pin, or
+candidate tokenization disagrees with the capture. `--url` and `--replay` are
+mutually exclusive. With neither flag the behaviour is unchanged.
+
 Ideas credited (methodology only, no code copied):
   Strata (MIT)         — fixed corpus, identical scoring positions
   XeStrata (LGPL, idea-only) — per-position top-k renormalized KL, p99 tail metric
@@ -48,11 +61,14 @@ Ideas credited (methodology only, no code copied):
   ds4-dfm-rs (MIT)   — teacher-forced scoring via prompt_logprobs
 """
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import math
 import os
 import sys
+import tempfile
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -243,12 +259,20 @@ def run_pass(url, model, texts, a, batch=None):
 
 # ---------- corpus spine ----------
 
+def corpus_sha256(texts):
+    """Hash the corpus content: sha256 over the ordered per-text sha256 hex
+    strings. Host-independent and byte-frozen (same recipe as `spine`)."""
+    blob = hashlib.sha256()
+    for t in texts:
+        blob.update(hashlib.sha256(t["text"].encode()).hexdigest().encode())
+    return blob.hexdigest()
+
+
 def spine_build(texts):
     """Offline position spine: per text — sha256, char count, whitespace-segment
     [start,end] spans. Host-independent; the pin that makes scoring
     position-identical once `freeze` adds live token ids."""
     doc = {"version": 1, "corpus_sha256": None, "texts": {}}
-    blob = hashlib.sha256()
     for t in texts:
         segs, i, n = [], 0, len(t["text"])
         while i < n:
@@ -261,11 +285,10 @@ def spine_build(texts):
                 segs.append([i, j])
             i = j
         sha = hashlib.sha256(t["text"].encode()).hexdigest()
-        blob.update(sha.encode())
         doc["texts"][t["id"]] = {"sha256": sha, "n_chars": n,
                                  "segments": segs, "token_ids": None,
                                  "frozen_url": None, "frozen_at": None}
-    doc["corpus_sha256"] = blob.hexdigest()
+    doc["corpus_sha256"] = corpus_sha256(texts)
     return doc
 
 
@@ -302,6 +325,171 @@ def load_positions(path=POSITIONS, corpus_sha=None):
     return doc
 
 
+# ---------- capture / replay (single-GPU yardstick) ----------
+
+CAPTURE_VERSION = 1
+
+
+def dist_pairs(elem):
+    """vLLM prompt_logprobs element -> [[token_id, logprob], ...] or None.
+    Canonical compact form written to a capture and rebuilt on replay."""
+    d = norm_dist(elem)
+    if not d:
+        return None
+    return [[tid, lp] for tid, lp in sorted(d.items())]
+
+
+def pairs_elem(pairs):
+    """[[token_id, logprob], ...] -> the vLLM element shape norm_dist expects."""
+    if pairs is None:
+        return None
+    return {str(tid): {"logprob": float(lp)} for tid, lp in pairs}
+
+
+def stat_summary(st):
+    """Scalar stats safe to serialize: score_pair also carries per-position
+    lists, but a capture only needs the summary for display and gating."""
+    return {k: st[k] for k in
+            ("n", "top1", "mean_kl", "p99_kl", "ppl_p", "ppl_c")}
+
+
+def positions_pin_hash(doc):
+    """Hash of the pinned tokenized spine, or None when nothing is pinned.
+    Metadata (frozen_url/frozen_at) is excluded: only position identity
+    matters for a replay."""
+    if not doc:
+        return None
+    pins = {k: v["token_ids"] for k, v in doc.get("texts", {}).items()
+            if v.get("token_ids") is not None}
+    if not pins:
+        return None
+    return hashlib.sha256(json.dumps(pins, sort_keys=True,
+                                     separators=(",", ":")).encode()).hexdigest()
+
+
+def capture_build(texts, base, a, floor=None, floor_rows=None,
+                  shape_floor=None, shape_rows=None, pos=None):
+    """Everything a later candidate needs to be scored against this baseline:
+    per-position top-k pairs, the baseline's logprob of each actual token, the
+    tokenized spine, corpus/positions hashes, and the measured floor."""
+    doc = {
+        "version": CAPTURE_VERSION,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "source_url": a.url,
+        "model": a.model,
+        "topk": a.topk,
+        "gen_tokens": a.gen_tokens,
+        "corpus_sha256": corpus_sha256(texts),
+        "positions_pin_sha256": positions_pin_hash(pos),
+        "floor": stat_summary(floor) if floor else None,
+        "floor_rows": ({t["id"]: stat_summary(st)
+                        for t, st in zip(texts, floor_rows)}
+                       if floor_rows is not None else None),
+        "shape_floor": stat_summary(shape_floor) if shape_floor else None,
+        "shape_floor_rows": ({t["id"]: stat_summary(st)
+                              for t, st in zip(texts, shape_rows)}
+                             if shape_rows is not None else None),
+        "shape_floor_batch": a.shape_floor if shape_floor else None,
+        "texts": {},
+    }
+    for t, (ids, plist) in zip(texts, base):
+        if len(plist) < len(ids):
+            raise SystemExit(f"capture: {t['id']} has {len(ids)} token ids but "
+                             f"only {len(plist)} logprob elements — refusing to write")
+        dists, actual = [], []
+        for i, tid in enumerate(ids):
+            d = norm_dist(plist[i])
+            dists.append(dist_pairs(plist[i]))
+            if i == 0 or not d:
+                actual.append(None)
+            else:
+                actual.append(d.get(tid, min(d.values()) - MISS_MARGIN))
+        doc["texts"][t["id"]] = {
+            "sha256": hashlib.sha256(t["text"].encode()).hexdigest(),
+            "n_positions": len(ids),
+            "token_ids": ids,
+            "dists": dists,
+            "token_logprob": actual,
+        }
+    return doc
+
+
+def capture_write(path, doc):
+    try:
+        with open(path, "w") as f:
+            json.dump(doc, f, separators=(",", ":"))
+            f.write("\n")
+    except OSError as e:
+        raise SystemExit(f"capture: cannot write {path}: {e}")
+
+
+def capture_load(path):
+    try:
+        with open(path) as f:
+            doc = json.load(f)
+    except OSError as e:
+        raise SystemExit(f"replay: cannot read capture {path}: {e}")
+    except ValueError as e:
+        raise SystemExit(f"replay: {path} is not valid JSON: {e}")
+    if not isinstance(doc, dict) or doc.get("version") != CAPTURE_VERSION:
+        got = doc.get("version") if isinstance(doc, dict) else "?"
+        raise SystemExit(f"replay: {path} is not a version-{CAPTURE_VERSION} "
+                         f"capture (got version={got})")
+    if not isinstance(doc.get("texts"), dict) or not doc.get("corpus_sha256"):
+        raise SystemExit(f"replay: {path} is missing corpus_sha256/texts")
+    return doc
+
+
+def replay_baseline(capture, texts, pos=None):
+    """Reconstruct the baseline pass from a capture, refusing loudly when the
+    live corpus, position pin, or captured spine no longer matches."""
+    live_sha = corpus_sha256(texts)
+    if capture["corpus_sha256"] != live_sha:
+        raise SystemExit(
+            f"replay refused: capture corpus_sha256={capture['corpus_sha256']} "
+            f"but the live corpus is {live_sha} — the capture was made from "
+            f"different text, refusing to score")
+    cap_pin = capture.get("positions_pin_sha256")
+    live_pin = positions_pin_hash(pos)
+    if cap_pin and live_pin and cap_pin != live_pin:
+        raise SystemExit("replay refused: the positions pin changed since the "
+                         "capture — re-capture or re-freeze, refusing to score")
+    out = []
+    for t in texts:
+        cap = capture["texts"].get(t["id"])
+        if not cap:
+            raise SystemExit(f"replay refused: capture has no text {t['id']!r}")
+        sha = hashlib.sha256(t["text"].encode()).hexdigest()
+        if cap.get("sha256") != sha:
+            raise SystemExit(f"replay refused: corpus text {t['id']} differs "
+                             f"from the capture — refusing to score")
+        ids = cap["token_ids"]
+        if pos:
+            frozen = pos.get("texts", {}).get(t["id"], {}).get("token_ids")
+            if frozen is not None and frozen != ids:
+                raise SystemExit(f"replay refused: positions pin for {t['id']} "
+                                 f"differs from the capture — refusing to score")
+        pairs = cap["dists"]
+        if len(pairs) != len(ids):
+            raise SystemExit(f"replay refused: capture for {t['id']} has "
+                             f"{len(pairs)} distributions for {len(ids)} positions")
+        out.append((ids, [pairs_elem(p) for p in pairs]))
+    return out
+
+
+def check_replay_tokenization(capture, texts, cand):
+    """The live candidate must be scored on exactly the captured positions."""
+    for t, (ids_c, _) in zip(texts, cand):
+        cap = capture["texts"].get(t["id"])
+        if not cap:
+            raise SystemExit(f"replay refused: capture has no text {t['id']!r}")
+        if ids_c != cap["token_ids"]:
+            raise SystemExit(
+                f"replay refused: live tokenization of {t['id']} differs from "
+                f"the capture ({len(ids_c)} vs {len(cap['token_ids'])} tokens or "
+                f"id mismatch) — positions are not identical, refusing to score")
+
+
 # ---------- modes ----------
 
 def fmt_row(name, st):
@@ -332,6 +520,33 @@ def score_all(texts, a, left, right):
             for i in range(len(texts))]
 
 
+def replay_capture_floor(capture, texts):
+    """Print a captured floor before any verdict (floor first, as in a live
+    run); returns the pooled floor and shape floor for the gate."""
+    floor = capture.get("floor")
+    floor_rows = capture.get("floor_rows") or {}
+    if floor:
+        print_header("SELF-NOISE FLOOR (baseline vs itself) — judge nothing inside this")
+        for t in texts:
+            st = floor_rows.get(t["id"])
+            if st:
+                print(fmt_row(f"floor {t['id']}", st))
+        print(fmt_row("floor POOLED", floor))
+    shape_floor = capture.get("shape_floor")
+    shape_rows = capture.get("shape_floor_rows") or {}
+    if shape_floor:
+        batch = capture.get("shape_floor_batch")
+        batch = "?" if batch is None else batch
+        print_header(f"BATCH-SHAPE FLOOR (baseline vs itself, "
+                     f"batch={batch}) — folded into the gate floor")
+        for t in texts:
+            st = shape_rows.get(t["id"])
+            if st:
+                print(fmt_row(f"floor(shape) {t['id']}", st))
+        print(fmt_row("floor(shape) POOLED", shape_floor))
+    return floor, shape_floor
+
+
 def cmd_compare(a):
     texts = load_corpus(a.corpus)
     pos = load_positions(a.positions) if os.path.isfile(a.positions) else None
@@ -341,43 +556,66 @@ def cmd_compare(a):
             if not pin or hashlib.sha256(t["text"].encode()).hexdigest() != pin["sha256"]:
                 raise SystemExit(f"corpus text {t['id']} differs from {a.positions} "
                                  f"— rerun `spine` (corpus is byte-frozen)")
-    hdr = f"baseline={a.url} candidate={a.candidate or '(self-noise only)'} topk={a.topk}"
+    capture = capture_load(a.replay) if a.replay else None
+    if capture is not None and capture.get("topk") is not None \
+            and a.topk != capture["topk"]:
+        raise SystemExit(f"replay refused: --topk={a.topk} but the capture was "
+                         f"made with topk={capture['topk']} — refusing to score")
+    baseline = f"replay:{a.replay}" if capture is not None else a.url
+    hdr = f"baseline={baseline} candidate={a.candidate or '(self-noise only)'} topk={a.topk}"
     print(f"p99-KL yardstick — {hdr}")
-    base1 = run_pass(a.url, a.model, texts, a)
-    print("  [pass 1/3 baseline] done", flush=True)
-    if pos:  # diff live tokenization against the frozen pin where pinned
-        for t, (ids, _) in zip(texts, base1):
-            frozen = pos["texts"][t["id"]]["token_ids"]
-            if frozen is not None and ids != frozen:
-                raise SystemExit(f"tokenization of {t['id']} differs from the frozen "
-                                 f"pin in {a.positions} — positions moved; do not judge "
-                                 f"this delta, re-freeze on a verified host")
     floor = shape_floor = None
-    if not a.no_floor:
-        base2 = run_pass(a.url, a.model, texts, a)
-        print("  [pass 2/3 baseline re-run] done", flush=True)
-        floor_rows = score_all(texts, a, base1, base2)
-        floor = pool(floor_rows)
-        print_header("SELF-NOISE FLOOR (baseline vs itself) — judge nothing inside this")
-        for t, st in zip(texts, floor_rows):
-            print(fmt_row(f"floor {t['id']}", st))
-        print(fmt_row("floor POOLED", floor))
-        if a.shape_floor > 0:
-            base3 = run_pass(a.url, a.model, texts, a, batch=a.shape_floor)
-            print(f"  [pass 2b baseline re-run at batch={a.shape_floor}] done",
-                  flush=True)
-            shape_rows = score_all(texts, a, base1, base3)
-            shape_floor = pool(shape_rows)
-            print_header(f"BATCH-SHAPE FLOOR (baseline vs itself, "
-                         f"batch={a.shape_floor}) — folded into the gate floor")
-            for t, st in zip(texts, shape_rows):
-                print(fmt_row(f"floor(shape) {t['id']}", st))
-            print(fmt_row("floor(shape) POOLED", shape_floor))
+    floor_rows = shape_rows = None
+    if capture is not None:
+        base1 = replay_baseline(capture, texts, pos)
+        print("  [pass 1/2 baseline replay] done", flush=True)
+        if a.shape_floor > 0 and not capture.get("shape_floor"):
+            raise SystemExit("--shape-floor was requested but the capture has no "
+                             "shape floor — re-capture with --shape-floor")
+        floor, shape_floor = replay_capture_floor(capture, texts)
+    else:
+        base1 = run_pass(a.url, a.model, texts, a)
+        print("  [pass 1/3 baseline] done", flush=True)
+        if pos:  # diff live tokenization against the frozen pin where pinned
+            for t, (ids, _) in zip(texts, base1):
+                frozen = pos["texts"][t["id"]]["token_ids"]
+                if frozen is not None and ids != frozen:
+                    raise SystemExit(f"tokenization of {t['id']} differs from the frozen "
+                                     f"pin in {a.positions} — positions moved; do not judge "
+                                     f"this delta, re-freeze on a verified host")
+        if not a.no_floor:
+            base2 = run_pass(a.url, a.model, texts, a)
+            print("  [pass 2/3 baseline re-run] done", flush=True)
+            floor_rows = score_all(texts, a, base1, base2)
+            floor = pool(floor_rows)
+            print_header("SELF-NOISE FLOOR (baseline vs itself) — judge nothing inside this")
+            for t, st in zip(texts, floor_rows):
+                print(fmt_row(f"floor {t['id']}", st))
+            print(fmt_row("floor POOLED", floor))
+            if a.shape_floor > 0:
+                base3 = run_pass(a.url, a.model, texts, a, batch=a.shape_floor)
+                print(f"  [pass 2b baseline re-run at batch={a.shape_floor}] done",
+                      flush=True)
+                shape_rows = score_all(texts, a, base1, base3)
+                shape_floor = pool(shape_rows)
+                print_header(f"BATCH-SHAPE FLOOR (baseline vs itself, "
+                             f"batch={a.shape_floor}) — folded into the gate floor")
+                for t, st in zip(texts, shape_rows):
+                    print(fmt_row(f"floor(shape) {t['id']}", st))
+                print(fmt_row("floor(shape) POOLED", shape_floor))
+
+    if a.capture:
+        capture_write(a.capture, capture_build(
+            texts, base1, a, floor, floor_rows, shape_floor, shape_rows, pos))
+        print(f"  [capture] baseline -> {a.capture}", flush=True)
 
     rows = None
     if a.candidate:
         cand = run_pass(a.candidate, a.model, texts, a)
-        print("  [pass 3/3 candidate] done", flush=True)
+        if capture is not None:
+            check_replay_tokenization(capture, texts, cand)
+        total = 2 if capture is not None else 3
+        print(f"  [pass {total}/{total} candidate] done", flush=True)
         rows = score_all(texts, a, base1, cand)
         print_header("BASELINE vs CANDIDATE")
         for t, st in zip(texts, rows):
@@ -487,7 +725,102 @@ def _self_check():
     d = spine_build(t)
     assert d["texts"]["x"]["segments"] == [[0, 1], [2, 4], [8, 11]]
     assert spine_build(t)["corpus_sha256"] == d["corpus_sha256"]
-    print("self-check OK")
+
+    # capture/replay: capture a fixed baseline, replay it as the baseline and
+    # score the same fixed pass as the candidate -- no server involved.
+    class _CaptureArgs:
+        url = "self-check"
+        model = "self-check"
+        topk = 64
+        gen_tokens = 1
+        batch = 1
+        shape_floor = 0
+        decision_ids = None
+
+    cap_args = _CaptureArgs()
+    fixed = [(ids, dp)]
+    fixed_floor_rows = score_all(t, cap_args, fixed, fixed)
+    fixed_floor = pool(fixed_floor_rows)
+    cap = capture_build(t, fixed, cap_args, fixed_floor, fixed_floor_rows)
+    assert cap["positions_pin_sha256"] is None
+    assert cap["texts"]["x"]["token_ids"] == ids
+    assert cap["texts"]["x"]["token_logprob"][1] == dp[1]["8"]["logprob"]
+    with tempfile.TemporaryDirectory() as tmp:
+        cap_path = os.path.join(tmp, "capture.json")
+        capture_write(cap_path, cap)
+        loaded = capture_load(cap_path)
+        replay = replay_baseline(loaded, t)
+        assert replay[0][0] == ids
+        replay_st = pool(score_all(t, cap_args, replay, fixed))
+        assert replay_st["top1"] == 1.0
+        assert replay_st["mean_kl"] < 1e-12
+        assert replay_st["p99_kl"] < 1e-12
+        assert replay_st["ppl_p"] == replay_st["ppl_c"]
+        # a live corpus that disagrees with the capture is refused
+        try:
+            replay_baseline(loaded, [{"id": "x", "text": "a different corpus"}])
+            raise AssertionError("mismatched corpus hash must abort replay")
+        except SystemExit as e:
+            assert "corpus" in str(e)
+        # a live candidate on different token positions is refused
+        try:
+            check_replay_tokenization(loaded, t, [(ids[:2], dp[:2])])
+            raise AssertionError("mismatched candidate tokenization must abort")
+        except SystemExit as e:
+            assert "tokenization" in str(e)
+        # the CLI path: --replay as baseline, a (fake) live candidate
+        corpus_path = os.path.join(tmp, "corpus.jsonl")
+        with open(corpus_path, "w") as f:
+            f.write(json.dumps({"id": "x", "kind": "prose",
+                                "text": t[0]["text"]}) + "\n")
+        positions_path = os.path.join(tmp, "no-positions.json")
+        calls = []
+
+        def fake_pass(url, model, texts, args, batch=None):
+            calls.append(url)
+            return fixed
+
+        orig = globals()["run_pass"]
+        globals()["run_pass"] = fake_pass
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = main(["compare", "--replay", cap_path,
+                             "--candidate", "http://self-check",
+                             "--corpus", corpus_path,
+                             "--positions", positions_path])
+            text = out.getvalue()
+            assert code == 0, text
+            assert calls == ["http://self-check"], calls
+            assert "SELF-NOISE FLOOR" in text
+            assert "kl metric=p99_kl value=0.000000 threshold=0.000000 PASS" in text
+            assert "kl metric=top1_agreement value=1.000000" in text
+            assert "kl overall PASS" in text
+            # mismatched corpus is refused loudly through the CLI too
+            bad_path = os.path.join(tmp, "bad.jsonl")
+            with open(bad_path, "w") as f:
+                f.write(json.dumps({"id": "x", "kind": "prose",
+                                    "text": "different text"}) + "\n")
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    main(["compare", "--replay", cap_path,
+                          "--candidate", "http://self-check",
+                          "--corpus", bad_path,
+                          "--positions", positions_path])
+                raise AssertionError("mismatched corpus must abort the CLI")
+            except SystemExit as e:
+                assert "corpus" in str(e)
+            # --url and --replay are mutually exclusive
+            try:
+                with contextlib.redirect_stderr(io.StringIO()):
+                    main(["compare", "--url", "http://self-check",
+                          "--replay", cap_path])
+                raise AssertionError("--url and --replay must be exclusive")
+            except SystemExit:
+                pass
+        finally:
+            globals()["run_pass"] = orig
+    print("self-check OK (capture/replay: top1=100% KL=0; corpus mismatch refused)")
     return 0
 
 
@@ -499,10 +832,15 @@ def parse_id_set(s):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=("compare", "spine", "freeze"))
-    ap.add_argument("--url", default=os.environ.get("BENCH_BASE", "http://localhost:8888"),
-                    help="baseline endpoint")
+    ap.add_argument("mode", choices=("compare", "spine", "freeze"), nargs="?")
+    ap.add_argument("--url", default=None, help="baseline endpoint")
     ap.add_argument("--candidate", help="candidate endpoint (omit for floor-only run)")
+    ap.add_argument("--capture", metavar="FILE",
+                    help="write the baseline arm's per-position data and the "
+                         "measured floor to FILE for a later --replay")
+    ap.add_argument("--replay", metavar="FILE",
+                    help="use a --capture file as the baseline arm (the "
+                         "candidate stays live); mutually exclusive with --url")
     ap.add_argument("--model", default=os.environ.get("BENCH_MODEL", "Qwen3.8-Flash-Next-NVFP4"))
     ap.add_argument("--corpus", default=CORPUS)
     ap.add_argument("--positions", default=POSITIONS)
@@ -533,6 +871,19 @@ def main(argv=None):
         ap.error("--shape-floor must be >= 0")
     if a.self_check:
         return _self_check()
+    if a.mode is None:
+        ap.error("a mode is required (compare, spine, or freeze)")
+    if a.mode != "compare" and (a.capture or a.replay):
+        ap.error("--capture/--replay are only valid with `compare`")
+    if a.capture and a.replay:
+        ap.error("--capture and --replay cannot be combined")
+    if a.replay and a.url is not None:
+        ap.error("--url and --replay are mutually exclusive")
+    if a.replay and a.no_floor:
+        ap.error("--no-floor cannot be combined with --replay "
+                 "(the capture carries its floor)")
+    if a.url is None:
+        a.url = os.environ.get("BENCH_BASE", "http://localhost:8888")
     if a.mode == "spine":
         return cmd_spine(a)
     if a.mode == "freeze":
