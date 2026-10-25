@@ -953,14 +953,22 @@ def run_task(task, root, chat, max_turns):
     error = None
     turns = 0
     started = time.time()
+    # Wall-clock split: the model call is the engine's share, the tool loop is
+    # local work (file reads, python). Without this the harness can only say
+    # what a task cost, not whether the engine or the harness spent it.
+    model_seconds = 0.0
+    tool_seconds = 0.0
 
     while turns < max_turns:
         turns += 1
+        t_model = time.time()
         try:
             reply = chat(messages)
         except Exception as exc:                        # noqa: BLE001
+            model_seconds += time.time() - t_model
             error = f"{type(exc).__name__}: {exc}"
             break
+        model_seconds += time.time() - t_model
         usage = reply.get("usage")
         usages.append(usage if isinstance(usage, dict) else {})
         message = reply.get("message")
@@ -982,13 +990,16 @@ def run_task(task, root, chat, max_turns):
                          "tool_calls": normalized})
         for call in normalized:
             name = call["function"]["name"]
+            t_tool = time.time()
             try:
                 arguments = parse_arguments(call["function"]["arguments"])
                 ok_call, output = invoke_tool(name, arguments, root)
             except ToolError as exc:
                 arguments, ok_call, output = {}, False, f"error: {exc}"
+            tool_seconds += time.time() - t_tool
             calls.append({"name": name, "arguments": arguments,
-                          "ok": ok_call, "result": output})
+                          "ok": ok_call, "result": output,
+                          "seconds": round(time.time() - t_tool, 2)})
             messages.append({"role": "tool", "tool_call_id": call["id"],
                              "content": output})
     else:
@@ -1016,6 +1027,8 @@ def run_task(task, root, chat, max_turns):
         "turns": turns,
         "tool_calls": len(calls),
         "seconds": round(time.time() - started, 1),
+        "model_seconds": round(model_seconds, 1),
+        "tool_seconds": round(tool_seconds, 1),
         "final_tail": final.strip()[-200:],
         # What the model actually did, so a failure can be diagnosed without
         # re-running the task. Arguments and results are clipped: enough to
@@ -1024,7 +1037,8 @@ def run_task(task, root, chat, max_turns):
                    "arguments": json.dumps(call["arguments"],
                                            ensure_ascii=False)[:160],
                    "ok": call["ok"],
-                   "result": str(call["result"])[:160]}
+                   "result": str(call["result"])[:160],
+                   "seconds": call["seconds"]}
                   for call in calls],
     }
     result.update(sum_usage(usages))
@@ -1057,6 +1071,10 @@ def aggregate_runs(runs):
         "turns": sum(run["turns"] for run in runs),
         "tool_calls": sum(run["tool_calls"] for run in runs),
         "seconds": round(sum(run["seconds"] for run in runs), 1),
+        "model_seconds": round(sum(run.get("model_seconds", 0)
+                                   for run in runs), 1),
+        "tool_seconds": round(sum(run.get("tool_seconds", 0)
+                                  for run in runs), 1),
         "final_tail": shown["final_tail"],
         "calls": shown["calls"],
     }
@@ -1472,6 +1490,9 @@ def print_result(name, result):
         state = "PASS" if result["ok"] else "FAIL"
         print(f"  {name:<18} {state}  turns {result['turns']}  "
               f"calls {result['tool_calls']}  {_tokens_text(result)}")
+    if "model_seconds" in result:
+        print(f"       time {result['seconds']}s = model "
+              f"{result['model_seconds']}s + tools {result['tool_seconds']}s")
     if not result["ok"]:
         print(f"       {result['reason']}: {result['detail']}")
 
@@ -1628,6 +1649,13 @@ def main(argv=None):
         print(f"passes: {task_passes}/{task_runs} task runs")
     print(f"turns: {turns}  tool calls: {calls}")
     print(f"tokens: {_tokens_text(totals)}")
+    wall_total = round(sum(r.get("seconds", 0) for r in results.values()), 1)
+    model_total = round(sum(r.get("model_seconds", 0)
+                            for r in results.values()), 1)
+    tool_total = round(sum(r.get("tool_seconds", 0)
+                           for r in results.values()), 1)
+    print(f"time: {wall_total}s = model {model_total}s + tools {tool_total}s"
+          f" + harness {round(wall_total - model_total - tool_total, 1)}s")
 
     run = {
         "when": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -1640,6 +1668,9 @@ def main(argv=None):
         "task_runs": task_runs,
         "turns": turns,
         "tool_calls": calls,
+        "seconds": wall_total,
+        "model_seconds": model_total,
+        "tool_seconds": tool_total,
         "tokens": totals,
         "results": results,
     }
