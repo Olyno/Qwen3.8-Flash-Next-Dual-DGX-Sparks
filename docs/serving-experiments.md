@@ -167,6 +167,26 @@ Compare **ms/step and tokens/step**, not tok/s: acceptance moves with the text, 
 
 The before/after matrix runs on the same deployment for the same reason, and its commands are unchanged from the ones above; only the deployment is different.
 
+## Prefix caching is quantised to 1,680 tokens
+
+The engine sets its attention block size to **1,680** tokens on this configuration (`Setting attention block size to 1680` in the boot log), because one block has to hold one GDN page and the page geometry follows the draft depth (`scripts/mtp_block.py`). Prefix caching works in whole blocks, so the hit is always an integer multiple of 1,680:
+
+| prompt | cached | floor(prompt / 1,680) × 1,680 |
+|---|---|---|
+| 6,072 | 5,040 | 5,040 |
+| 6,794 | 6,720 | 6,720 |
+| 792 | **0** | 0 |
+
+The first two rows are the measurements from the cache section above and they match the arithmetic exactly. The third is the one that matters: **a prompt shorter than one block is never cached at all**, even when the same 792-token system message is sent three times in a row.
+
+Three consequences:
+
+- **Short requests pay full price every time.** A system prompt, a skill block or a policy preamble only becomes free once the conversation is longer than one block. Below that it is a straight cost, repeated per request.
+- **The injected policy skill costs 722 tokens per request on short traffic.** A batch of twelve unrelated requests through the proxy with the skill pinned moved prompt tokens from 77,522 to 86,186 — exactly 722 each — with **zero** of it cached, because 722 is less than one block. In a growing conversation the same block lands inside the first 1,680 tokens and is cached from the second turn on, which is why the five-turn session above reaches 80%.
+- **The block size cannot be lowered.** The engine only ever raises a requested block size, and the derived value is forced by the MTP draft depth plus the GDN page geometry. A smaller draft depth (3) would give 1,664 instead of 1,680 — a rounding difference, not a lever.
+
+So the rule for anything the proxy injects is: it is free only if it stays byte-identical *and* the request is already past a block boundary. Otherwise it is 722 tokens of pure overhead, and the decision to pin a skill has to be made on that basis rather than on the assumption that the cache absorbs it.
+
 ## The thinking budget is native, and it does not bind here
 
 This build accepts `thinking_token_budget` on the chat request and enforces it in the sampler (`v1/worker/gpu/sample/thinking_budget.py`), so a trace cap needs no proxy code and no patch. Measured against the baseline on the same twelve tasks:
