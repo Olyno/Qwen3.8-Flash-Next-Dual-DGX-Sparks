@@ -167,6 +167,15 @@ Compare **ms/step and tokens/step**, not tok/s: acceptance moves with the text, 
 
 The before/after matrix runs on the same deployment for the same reason, and its commands are unchanged from the ones above; only the deployment is different.
 
+## Two request-shape findings
+
+Measured against the live server while preparing the prompt-side work:
+
+- **A prompt plus `max_tokens` over the window is not an error.** 57,563 prompt tokens with `max_tokens: 8192` asks for 65,755 against a 65,536 window and succeeds; generation stops at the window with `finish_reason: length`. A pre-send clamp that lowers `max_tokens` to fit therefore changes nothing — the answer ends at the same token either way — so there is no guard to add here.
+- **An over-long prompt is an error, and it is immediate.** A prompt above `max_model_len` returns 400 before any prefill, so there is no wasted work to recover either. The only way to make such a request succeed would be to drop conversation content, which is not lossless.
+
+Together these remove a whole class of "fit check" work from the plan: the server already does the right thing in both directions.
+
 ## Already settled by configuration
 
 - **BF16 recurrent state.** `mamba_ssm_cache_dtype: bfloat16` is in the committed recipe and visible in the live container arguments, so the reference's +8.5% is already in the baseline above. No A/B left to run.
