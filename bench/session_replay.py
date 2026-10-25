@@ -158,6 +158,20 @@ def cmd_stats(args):
     return 0
 
 
+def _norm_args(raw):
+    """Canonical form of a tool call's arguments: key-sorted JSON, so two arms
+    can be compared on what they asked for, not just which tool they picked."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return raw
+    try:
+        return json.dumps(raw, sort_keys=True)
+    except TypeError:
+        return str(raw)
+
+
 def post(url, payload, timeout):
     req = urllib.request.Request(
         url.rstrip("/") + "/v1/chat/completions",
@@ -192,8 +206,11 @@ def cmd_send(args):
                      "completion": usage.get("completion_tokens"),
                      "reasoning": (usage.get("completion_tokens_details") or {})
                      .get("reasoning_tokens"),
-                     "tool_calls": [tc.get("function", {}).get("name")
-                                    for tc in (choice.get("tool_calls") or [])],
+                     "tool_calls": [
+                         {"name": tc.get("function", {}).get("name"),
+                          "args": _norm_args(
+                              tc.get("function", {}).get("arguments"))}
+                         for tc in (choice.get("tool_calls") or [])],
                      "reply_head": (choice.get("content") or "")[:160]})
         print(f"  turn {req['turn']:3d}  {elapsed:6.1f}s  "
               f"out {rows[-1]['completion']}  think {rows[-1]['reasoning']}")
@@ -221,9 +238,18 @@ def cmd_compare(a_path, b_path):
     print(f"  completion {ta} -> {tb}  ({100 * (tb - ta) / max(ta, 1):+.1f}%)")
     print(f"  reasoning  {ra} -> {rb}  ({100 * (rb - ra) / max(ra, 1):+.1f}%)")
     print(f"  wall       {sa:.0f}s -> {sb:.0f}s  ({100 * (sb - sa) / max(sa, 1):+.1f}%)")
-    agree = sum(1 for i in range(n)
-                if a[i].get("tool_calls") == b[i].get("tool_calls"))
-    print(f"  tool-call agreement {agree}/{n} ({100 * agree / max(n, 1):.0f}%)")
+    def calls(row):
+        return row.get("tool_calls") or []
+
+    name_agree = arg_agree = 0
+    for i in range(n):
+        ca, cb = calls(a[i]), calls(b[i])
+        if [c.get("name") for c in ca] == [c.get("name") for c in cb]:
+            name_agree += 1
+            if [c.get("args") for c in ca] == [c.get("args") for c in cb]:
+                arg_agree += 1
+    print(f"  tool-name agreement {name_agree}/{n} ({100 * name_agree / max(n, 1):.0f}%)")
+    print(f"  tool-arg  agreement {arg_agree}/{n} ({100 * arg_agree / max(n, 1):.0f}%)")
     return 0
 
 
