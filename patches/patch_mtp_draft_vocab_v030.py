@@ -167,10 +167,12 @@ def _tp_agree(ok: bool, err: str) -> tuple:
 
 '''
 
+FP8_DRAFT_BLOCK = '''
+
 # Draft-only FP8 lm_head copy. Opt-in via VLLM_MTP_DRAFT_HEAD_FP8.
+# Defined here, in the injected text: the host module has no such name.
 _DRAFT_HEAD_FP8_ENV = "VLLM_MTP_DRAFT_HEAD_FP8"
 
-FP8_DRAFT_BLOCK = '''
 
 def _attach_fp8_draft_head(model: nn.Module) -> None:
     """Quantize the drafter's lm_head rows to FP8 (VLLM_MTP_DRAFT_HEAD_FP8).
