@@ -324,6 +324,36 @@ charged) on every turn. Enable this only when skill discovery is actually the
 failure mode; for a large static skill set, pre-filtering in the client is
 cheaper.
 
+## Request-shape knobs
+
+Two small switches that change the request without touching evidence.
+
+### `PROXY_REASONING_EFFORT=low|medium|xhigh`
+
+Sets `chat_template_kwargs.reasoning_effort` on every request that does not
+already carry it, so a caller's explicit value wins. This exists because the
+chat template reads that variable and nothing else in the stack can supply it:
+`reasoning_effort` sent as a top-level field is accepted by the server and
+ignored, each OpenAI request may carry its own `chat_template_kwargs`, and the
+serving build has no default-kwargs flag. Off when unset.
+
+The three values are not a budget: `medium` removes the template's reasoning
+instruction entirely, while `xhigh` (the template default) and `low` each add a
+different sentence. On the 18-task agent ruler, `medium` beat the unset default
+in five of five paired passes (15.6 vs 14.0 tasks mean) and `low` was worst on
+both score and tokens, so `low` should not be used as a "cheaper" setting here.
+
+### `PROXY_EDIT_GUARD=1`
+
+Appends one line to the conversation when the same file has been written three
+or more times in it: state the hypothesis the next rewrite tests, or measure the
+failing operation first. Cumulative by design — rewrites separated by a check
+are the common shape, so a counter that resets on observation would miss it.
+
+Off by default and unmeasured: the trace that motivated it turned out to come
+from a bench carrying a stale output file, and no verified A/B exists yet. Treat
+it as an available instrument, not a recommended default.
+
 ## Credits
 
 - [autotrust/GEV-26B-Decide](https://huggingface.co/autotrust/GEV-26B-Decide)
