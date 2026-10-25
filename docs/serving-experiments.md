@@ -167,6 +167,26 @@ Compare **ms/step and tokens/step**, not tok/s: acceptance moves with the text, 
 
 The before/after matrix runs on the same deployment for the same reason, and its commands are unchanged from the ones above; only the deployment is different.
 
+## Tool use, measured: twelve tasks, three arms
+
+`bench/tool_tasks.py` plays the harness: it offers `list_dir`, `read_file`, `write_file`, `search` and `run_python`, executes what the model asks for in a scratch directory, feeds results back, and scores each task in code. Twelve tasks, temperature as served, turn bounds 4-7. Same set, three arms:
+
+| arm | score | prompt tokens | failures |
+|---|---|---|---|
+| direct to the server | **10/12** | 34,892 | `edit_value` (wrong bytes), `large_output` (turn cap) |
+| proxy, tool nudge on | **10/12** | 37,396 | `large_output`, **`count_matches`** (turn cap) |
+| proxy, policy skill pinned | **11/12** | 62,947 | `large_output` |
+
+What each arm actually says:
+
+- **The nudge does not help, and it costs.** Its premise is that the model answers without calling a tool; on this checkpoint it calls 30 tools in 37 turns, so there is nothing to nudge. The arm gained no task, lost `count_matches` to a turn cap, and added 2,504 prompt tokens. Rejected as a default.
+- **The pinned policy skill buys one task for 28,055 prompt tokens.** It is charged per *turn*, not per task — 38 turns at 722 tokens each — which is the cache finding above in practice. One run, so the gain is not separable from run-to-run drift; the cost is large and certain. It stays opt-in.
+- **`large_output` fails in every arm, and the trace shows why.** Three runs, same behaviour: `list_dir`, then `run_python` on `big.log` itself, then `run_python` on a script that does not exist yet, then `write_file` for that script, then the turn cap. It never calls `read_file`. The model does not avoid tools here; it picks the wrong one. That is a different problem from the one the nudge was written for, and it is the first measured target worth chasing.
+
+`edit_value` fails because the write dropped the file's trailing newline while every other byte matched. That is a real defect, not a checker artefact, and it is recorded as such rather than relaxed.
+
+Next experiment, already scoped by this result: replace the "use a tool" nudge with one that names the narrowest tool, and score it on the same set. `large_output` is the task it has to move.
+
 ## Prefix caching is quantised to 1,680 tokens
 
 The engine sets its attention block size to **1,680** tokens on this configuration (`Setting attention block size to 1680` in the boot log), because one block has to hold one GDN page and the page geometry follows the draft depth (`scripts/mtp_block.py`). Prefix caching works in whole blocks, so the hit is always an integer multiple of 1,680:
