@@ -83,6 +83,46 @@ def strip_reasoning(text: str) -> str:
     return text
 
 
+def served_len(url):
+    """max_model_len the endpoint will accept, or None when it will not say."""
+    base = url.split("/v1/")[0]
+    try:
+        with urllib.request.urlopen(base + "/v1/models", timeout=10) as r:
+            data = json.load(r)["data"][0]
+        return int(data["max_model_len"])
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def count_tokens(url, model, prompt, timeout=30):
+    """Token count for one prompt via /tokenize, or None when unavailable."""
+    base = url.split("/v1/")[0]
+    body = json.dumps({"model": model, "prompt": prompt}).encode()
+    req = urllib.request.Request(base + "/tokenize", data=body,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            got = json.load(r)
+        return int(got.get("count") or len(got.get("tokens") or []))
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def fit_needle(depth, secret, url, model, max_len, max_tokens, margin=64):
+    """Shrink the needle until prompt + generation fits the served window.
+    A request over the limit is a 400, which would read as a model failure in
+    the score; the filler-to-token ratio is not a constant worth guessing, so
+    ask the server for the real count and re-fit once."""
+    budget = max_len - max_tokens - margin
+    while depth > 512:
+        prompt, accepted = needle_task(depth, secret)
+        used = count_tokens(url, model, prompt)
+        if used is None or used <= budget:
+            return prompt, accepted, used
+        depth = int(depth * budget / used) - 1
+    return None, None, None
+
+
 def ask(url, model, prompt, max_tokens, timeout):
     body = json.dumps({
         "model": model,
@@ -135,9 +175,22 @@ def main():
     args = ap.parse_args()
 
     tasks = list(TASKS)
+    max_len = served_len(args.url)
     for i, depth in enumerate([d for d in args.needles.split(",") if d.strip()]):
         secret = f"BRIGHT-HARBOR-{9174 + i}"
-        prompt, accepted = needle_task(int(depth), secret)
+        if max_len:
+            prompt, accepted, used = fit_needle(
+                int(depth), secret, args.url, args.model, max_len,
+                args.max_tokens)
+        else:
+            prompt, accepted = needle_task(int(depth), secret)
+            used = None
+        if prompt is None:
+            print(f"  needle_{depth}  SKIP  no prompt that size fits {max_len}")
+            continue
+        if used:
+            print(f"note: needle_{depth} fitted to {used} prompt tokens "
+                  f"(window {max_len}, generation cap {args.max_tokens})")
         tasks.append((f"needle_{depth}", prompt, accepted))
 
     results = {}
