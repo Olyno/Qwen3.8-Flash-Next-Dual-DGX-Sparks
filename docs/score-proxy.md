@@ -80,8 +80,10 @@ Agentic nudge: on chat requests that carry a `tools` array, the proxy
 scores whether the last user turn needs a tool (`use_tool` vs `answer`, both
 option orders averaged — the same two-option prefill as `/v1/score`, ~0.5–1 s
 at 1K tokens). Above `PROXY_TOOL_THRESHOLD` (default **0.5**) it either
-appends a fixed system nudge ("call the tool before answering when one
-applies") or, with `PROXY_TOOL_FORCE=1`, sets `tool_choice: "required"`.
+appends a fixed nudge ("call the tool before answering when one
+applies") as a trailing user message, or, with `PROXY_TOOL_FORCE=1`, sets
+`tool_choice: "required"`. The nudge never touches the conversation head, so
+it cannot invalidate a cached prompt prefix.
 A `tool_choice` the client already sent is never overridden. Without tools,
 below threshold, or on any scoring failure the request is forwarded
 unchanged. Every firing logs `tool steer prob=... force=...` — calibrate the
@@ -192,20 +194,25 @@ passthrough, so chat traffic is unaffected.
 When `PROXY_SKILLS_DIR` points at a directory of skills, the proxy stops
 waiting for the model to discover them: it embeds each skill once, ranks them
 by cosine against the last user message on every chat request, and appends the
-best matches to the system prompt. This needs the embedding service
-(`PROXY_ROUTER_URL`); without it the feature stays off.
+best matches to the end of the message list as a trailing user message. This
+needs the embedding service (`PROXY_ROUTER_URL`); without it the feature stays
+off. The tail is the only place the chat template accepts an injection: it
+refuses a system message that is not first, and the leading system message
+must stay byte-identical or the cached prefix is lost. A pinned skill is the
+exception — its body never changes, so it joins the leading system message and
+costs nothing in the cache.
 
 Layouts: `<dir>/<name>/SKILL.md` (primary) or `<dir>/*.md` (flat). The skill
 name is the directory name or file stem. The description comes from a
 `description:` line in YAML frontmatter between leading `---` markers; when
 absent, the first non-heading paragraph is used, truncated to 200 characters.
 The directory is scanned once (lazily on the first chat request) and the
-vectors are cached until restart.
+vectors are cached until restart. The scan is sorted by name (path as
+tie-break), so adding a skill cannot reshuffle the existing lines.
 
 The top `PROXY_SKILLS_TOP_K` (default **3**) skills whose cosine similarity is
-at least `PROXY_SKILLS_MIN_SIM` (default **0.25**) are appended as one fixed
-system block after the existing system message (or as a new first system
-message when none exists):
+at least `PROXY_SKILLS_MIN_SIM` (default **0.25**) are appended as one system
+block after the conversation:
 
 ```
 Relevant skills (read the file before acting when it applies):
@@ -214,7 +221,9 @@ Relevant skills (read the file before acting when it applies):
 
 The block is only added when skills qualify, never twice in one request, and
 ranks deterministically, so the same skill set produces byte-identical text.
-Each injection logs `skills: injected N (top sim X.XXX)` to stderr.
+Because it trails the conversation, a changed block leaves the prompt head
+untouched for the prefix cache. Each injection logs `skills: injected N
+(top sim X.XXX)` to stderr.
 
 **Threshold note:** 0.25 is a heuristic default for embeddinggemma, chosen so
 loosely related skills still surface. Calibrate it from the logged
@@ -223,11 +232,15 @@ similarities and lower it if relevant skills are being filtered out.
 ### Pinned skills (`PROXY_SKILLS_PIN`)
 
 A skill named in `PROXY_SKILLS_PIN` (comma-separated) is always injected,
-regardless of similarity, and leads the block. Its body is inlined after a
-`## <name>` heading instead of the one-line pointer, so a harness that cannot
-read the path still gets the rules. The body is stripped of YAML frontmatter
-and capped at `PROXY_SKILLS_PIN_CHARS` (default **4000**), cut at a line
-boundary.
+regardless of similarity. Its body is inlined after a `## <name>` heading
+instead of the one-line pointer, so a harness that cannot read the path still
+gets the rules. The body is stripped of YAML frontmatter and capped at
+`PROXY_SKILLS_PIN_CHARS` (default **4000**), cut at a line boundary.
+
+A pin takes the whole request: the directory is not scanned, no skills are
+embedded or listed, and only the pinned bodies (in declaration order) are
+injected. That keeps the per-request block fixed instead of a volatile listing
+on every turn.
 
 ```
 PROXY_SKILLS_DIR=skills PROXY_SKILLS_PIN=ponytail \
@@ -240,12 +253,15 @@ repository (MIT, see NOTICE) as the reference pin.
 
 **Fail-open:** any scan or embedding error leaves the index empty and requests
 pass through unchanged. If the embedding service is down on the first request,
-the index stays empty until the proxy restarts.
+the index stays empty until the proxy restarts. A pin that names a missing
+file injects nothing.
 
-**Prefix-cache caveat:** the injected block varies by request, so it can split
-what would otherwise be a shared prompt prefix and reduce prefix-cache hits.
-Enable this only when skill discovery is actually the failure mode; for a
-large static skill set, pre-filtering in the client is cheaper.
+**Prefix-cache note:** the injected block varies by request, so it is kept
+after the conversation; the transcript ahead of it stays byte-identical and
+the server can reuse its cached prefix. The block itself is still sent (and
+charged) on every turn. Enable this only when skill discovery is actually the
+failure mode; for a large static skill set, pre-filtering in the client is
+cheaper.
 
 ## Credits
 
@@ -259,8 +275,9 @@ large static skill set, pre-filtering in the client is cheaper.
   — the score-don't-generate pattern; see
   [decision-scoring.md](decision-scoring.md).
 - [Luce-Org/lucebox](https://github.com/Luce-Org/lucebox) — multi-syntax
-  tool-call parsing, relaxed-JSON and schema-typed argument recovery, and
-  the reply-reserve / close-thinking retry design.
+  tool-call parsing, relaxed-JSON and schema-typed argument recovery, the
+  reply-reserve / close-thinking retry design, and the prefix-cache-safe
+  prompt layout (volatile injected context after the stable transcript).
 - [zolotukhin/zinc](https://github.com/zolotukhin/zinc) — ChatML
   `<tool_call>` envelope parsing and schema-aware argument decoding.
 - [uv-genai/colibri](https://github.com/uv-genai/colibri) — strict

@@ -24,8 +24,10 @@ docs/score-proxy.md:
                               centroids and 'trivial' requests are rewritten
                               pre-hoc (thinking off, max_tokens capped);
                               PROXY_SKILLS_DIR=path surfaces the top-k skills
-                              relevant to the last user message in a system
-                              block before generation.
+                              relevant to the last user message in a trailing
+                              system block after the conversation; a pinned
+                              skill is read directly and nothing else is
+                              listed.
                               Non-streaming replies are repaired in place:
                               malformed call syntax is normalized to
                               tool_calls and schema-typed, a reply that stops
@@ -46,6 +48,8 @@ prune larger tool lists by embedding similarity), PROXY_TOOL_ALWAYS
 (comma-separated tool names never pruned), PROXY_SKILLS_DIR (unset = off;
 directory of <name>/SKILL.md or *.md skills), PROXY_SKILLS_TOP_K (3),
 PROXY_SKILLS_MIN_SIM (0.25, heuristic — calibrate per workload),
+PROXY_SKILLS_PIN (comma-separated skill names whose bodies are inlined
+instead of enumerated), PROXY_SKILLS_PIN_CHARS (4000),
 PROXY_CONTEXT_TOKENS (0 = off; model context size used to clamp an
 oversized max_tokens).
 Stdlib only.
@@ -250,6 +254,31 @@ def last_user_text(messages):
     return ""
 
 
+TAIL_FRAME = "Context for the request above, not a new request:\n\n"
+
+
+def _append_user_tail(messages, block):
+    """Volatile proxy context goes after the conversation. Prefix caching
+    matches from the start of the prompt, so text that can change between
+    turns must never sit ahead of the stable transcript. A trailing user
+    message is the only tail the chat template accepts (it rejects a system
+    message that is not first), and the frame keeps it from reading as a new
+    request."""
+    messages.append({"role": "user", "content": TAIL_FRAME + block})
+
+
+def _append_system_head(messages, block):
+    """Constant proxy context goes into the leading system message: it is the
+    same bytes on every request, so it costs nothing in the prefix cache and
+    keeps the authority a policy block needs."""
+    for message in messages:
+        if (isinstance(message, dict) and message.get("role") == "system"
+                and isinstance(message.get("content"), str)):
+            message["content"] += "\n\n" + block
+            return
+    messages.insert(0, {"role": "system", "content": block})
+
+
 TOOL_NEED_OPTIONS = [
     {"label": "use_tool",
      "use_when": "the request needs reading, searching, running, or changing "
@@ -336,16 +365,11 @@ class ToolRouter:
             req["tool_choice"] = "required"
             return True, prob
         messages = req.get("messages") or []
-        system = next((m for m in messages
-                       if isinstance(m, dict) and m.get("role") == "system"),
-                      None)
-        if system is not None:
-            if TOOL_NUDGE in (system.get("content") or ""):
-                return pruned, prob
-            system["content"] = (system.get("content") or "") + "\n\n" + TOOL_NUDGE
-        else:
-            messages.insert(0, {"role": "system", "content": TOOL_NUDGE})
-            req["messages"] = messages
+        if any(isinstance(m, dict) and m.get("role") == "system"
+               and TOOL_NUDGE in (m.get("content") or "") for m in messages):
+            return pruned, prob
+        _append_user_tail(messages, TOOL_NUDGE)
+        req["messages"] = messages
         return True, prob
 
 
@@ -914,11 +938,13 @@ def skill_description(text):
 class SkillIndex:
     """Preemptive skill surfacing: scan a skills directory once, embed each
     skill's name + description through the embedding endpoint, and append the
-    top-k skills matching the last user message to the system prompt. The
-    block is deterministic for a given skill set, so repeated requests keep a
-    stable prompt prefix. Fail-open: any scan/embedding error leaves the index
-    empty and requests pass through unchanged. ponytail: one lazy scan cached
-    forever — restart the proxy after editing the skills directory."""
+    top-k matches to the end of the message list as a system message. Because
+    the block trails the conversation, a changed block leaves the stable head
+    byte-identical. With a pin the directory is not scanned at all: the pinned
+    bodies are read directly and nothing else is listed. Fail-open: any
+    scan/embedding error leaves the index empty and requests pass through
+    unchanged. ponytail: one lazy scan cached forever — restart the proxy
+    after editing the skills directory."""
 
     def __init__(self, directory, embed_fn, top_k=3, min_sim=0.25,
                  pin=(), pin_chars=4000):
@@ -933,7 +959,7 @@ class SkillIndex:
 
     def _scan(self):
         found = []
-        for entry in sorted(os.listdir(self.directory)):
+        for entry in os.listdir(self.directory):
             path = os.path.join(self.directory, entry)
             if os.path.isdir(path):
                 skill = os.path.join(path, "SKILL.md")
@@ -941,6 +967,9 @@ class SkillIndex:
                     found.append((entry, skill))
             elif entry.endswith(".md") and os.path.isfile(path):
                 found.append((os.path.splitext(entry)[0], path))
+        # Name order, path as tie-break: the directory's own iteration order
+        # must never reshuffle the listing.
+        found.sort()
         skills = []
         for name, path in found:
             with open(path, encoding="utf-8", errors="replace") as f:
@@ -978,15 +1007,9 @@ class SkillIndex:
             return []
         ranked = [(cosine(query, vec), name, desc, path)
                   for name, desc, path, vec in skills]
-        # Pinned skills bypass the similarity floor: they are policy, not a
-        # retrieval hit. They lead the block in declaration order.
-        ranked = [s for s in ranked
-                  if s[0] >= self.min_sim or s[1] in self.pin]
+        ranked = [s for s in ranked if s[0] >= self.min_sim]
         ranked.sort(key=lambda s: (-s[0], s[1]))
-        pinned = sorted((s for s in ranked if s[1] in self.pin),
-                        key=lambda s: self.pin.index(s[1]))
-        rest = [s for s in ranked if s[1] not in self.pin]
-        return (pinned + rest)[:max(self.top_k, len(pinned))]
+        return ranked[:self.top_k]
 
     def _body(self, path):
         """Pinned skills ship their rules, not a path the caller may not be
@@ -1005,34 +1028,48 @@ class SkillIndex:
             trimmed = trimmed.rsplit("\n", 1)[0]
         return trimmed
 
+    def _pinned(self):
+        """[(name, body)] for the pinned skills, in declaration order. The pin
+        is policy, not retrieval: probe its two layouts directly instead of
+        scanning the directory, and never enumerate anything else."""
+        pinned = []
+        for name in self.pin:
+            if name in (".", "..") or name != os.path.basename(name):
+                continue
+            path = os.path.join(self.directory, name, "SKILL.md")
+            if not os.path.isfile(path):
+                path = os.path.join(self.directory, name + ".md")
+            body = self._body(path)
+            if body:
+                pinned.append((name, body))
+        return pinned
+
     def apply(self, req):
         """Returns (changed, top_sim, count); mutates req in place. The
-        marker check makes injection idempotent per request."""
+        marker check makes injection idempotent per request. A pinned body is
+        constant, so it joins the leading system message; the ranked listing
+        changes as the conversation moves, so it trails the conversation and
+        leaves everything ahead of it byte-identical."""
         messages = req.get("messages") or []
+        if any(isinstance(m, dict) and isinstance(m.get("content"), str)
+               and SKILLS_MARKER in m["content"] for m in messages):
+            return False, 0.0, 0
+        if self.pin:
+            pinned = self._pinned()
+            if not pinned:
+                return False, 0.0, 0
+            block = SKILLS_MARKER + "\n" + "\n".join(
+                f"## {name}\n{body}" for name, body in pinned)
+            _append_system_head(messages, block)
+            req["messages"] = messages
+            return True, 0.0, len(pinned)
         ranked = self.rank(last_user_text(messages)[:2000])
         if not ranked:
             return False, 0.0, 0
-        lines = []
-        for _, name, desc, path in ranked:
-            if name in self.pin:
-                body = self._body(path)
-                if body:
-                    lines.append(f"## {name}\n{body}")
-                    continue
-            lines.append(f"- {name}: {desc} [{path}]")
-        block = SKILLS_MARKER + "\n" + "\n".join(lines)
-        systems = [m for m in messages if isinstance(m, dict)
-                   and m.get("role") == "system"]
-        if any(isinstance(m.get("content"), str)
-               and SKILLS_MARKER in m["content"] for m in systems):
-            return False, ranked[0][0], len(ranked)
-        system = next((m for m in systems
-                       if isinstance(m.get("content"), str)), None)
-        if system is not None:
-            system["content"] += "\n\n" + block
-        else:
-            messages.insert(0, {"role": "system", "content": block})
-            req["messages"] = messages
+        block = SKILLS_MARKER + "\n" + "\n".join(
+            f"- {name}: {desc} [{path}]" for _, name, desc, path in ranked)
+        _append_user_tail(messages, block)
+        req["messages"] = messages
         return True, ranked[0][0], len(ranked)
 
 

@@ -1,7 +1,9 @@
 import copy
 import json
 import math
+import os
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -400,6 +402,80 @@ class CanonicalizeTest(ProxyTestBase):
             {"role": "user", "content": "U"}]}, url=self.url_strip)
         self.assertEqual(self.upstream_messages()[0]["content"],
                          "You are helpful.")
+
+
+class PromptLayoutHttpTest(unittest.TestCase):
+    """Proxy-injected context trails the conversation: a changed injection
+    must never move the cached prompt head."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        roots = [os.path.join(cls.tmp.name, n) for n in ("base", "extra")]
+        for root, extra in zip(roots, (False, True)):
+            cls.write_skill(root, "alpha", "Ship services safely.")
+            cls.write_skill(root, "beta", "Trace failures to a root cause.")
+            if extra:
+                # fake_embed sends this one far from the query; the other
+                # two stay in the selected set.
+                cls.write_skill(root, "design", "Paint watercolor landscapes.")
+        cls.upstream = ThreadingHTTPServer(("127.0.0.1", 0), FakeUpstream)
+        cls.upstream.requests = []
+        threading.Thread(target=cls.upstream.serve_forever, daemon=True).start()
+        upstream_url = f"http://127.0.0.1:{cls.upstream.server_port}"
+        cls.proxies = []
+        for root in roots:
+            proxy = score_proxy.make_server(
+                0, upstream_url, router_url=upstream_url, skills_dir=root)
+            threading.Thread(target=proxy.serve_forever, daemon=True).start()
+            cls.proxies.append(proxy)
+
+    @staticmethod
+    def write_skill(root, name, description):
+        os.makedirs(root, exist_ok=True)
+        with open(os.path.join(root, name + ".md"), "w", encoding="utf-8") as f:
+            f.write(f"---\ndescription: {description}\n---\n")
+
+    @classmethod
+    def tearDownClass(cls):
+        for proxy in cls.proxies:
+            proxy.shutdown()
+            proxy.server_close()
+        cls.upstream.shutdown()
+        cls.upstream.server_close()
+        cls.tmp.cleanup()
+
+    def test_changed_skills_keep_the_head_byte_identical(self):
+        payload = {"model": "m", "route": False, "messages": [
+            {"role": "system", "content": "policy: be brief"},
+            {"role": "assistant", "content": "ready"},
+            {"role": "user", "content": "how do I fix the deploy pipeline?"},
+        ]}
+        self.upstream.requests.clear()
+        for proxy in self.proxies:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{proxy.server_port}/v1/chat/completions",
+                data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req).read()
+        bodies = [json.loads(raw)["messages"]
+                  for path, raw in self.upstream.requests
+                  if path == "/v1/chat/completions"]
+        self.assertEqual(len(bodies), 2)
+        head = len(payload["messages"])
+        for messages in bodies:
+            self.assertEqual(messages[:head], payload["messages"])
+            self.assertEqual(messages[-1]["role"], "user")
+            # the chat template refuses a system message that is not first
+            self.assertEqual([i for i, m in enumerate(messages)
+                              if m["role"] == "system"], [0])
+            self.assertIn(sp.SKILLS_MARKER, messages[-1]["content"])
+        self.assertEqual(
+            json.dumps(bodies[0][:head]).encode(),
+            json.dumps(bodies[1][:head]).encode())
+        self.assertIn("alpha", bodies[0][-1]["content"])
+        self.assertIn("beta", bodies[0][-1]["content"])
+        self.assertNotIn("design", bodies[1][-1]["content"])
 
 
 class KeepaliveTest(ProxyTestBase):

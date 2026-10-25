@@ -1,7 +1,10 @@
+import copy
 import importlib.util
+import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 spec = importlib.util.spec_from_file_location(
@@ -115,39 +118,44 @@ class SkillIndexTest(unittest.TestCase):
         ranked = sp.SkillIndex(self.root, fake_embed, top_k=1).rank(QUERY_TEXT)
         self.assertEqual([r[1] for r in ranked], ["deploy"])
 
-    def test_injects_block_into_new_system_message(self):
+    def test_injects_block_as_trailing_user_message(self):
         req = user_req()
         changed, sim, count = sp.SkillIndex(self.root, fake_embed).apply(req)
         self.assertTrue(changed)
         self.assertEqual(count, 2)
         self.assertAlmostEqual(sim, 0.998751, places=5)
-        self.assertEqual(req["messages"][0]["role"], "system")
-        self.assertEqual(req["messages"][0]["content"], (
-            sp.SKILLS_MARKER + "\n"
+        self.assertEqual(req["messages"][0]["role"], "user")
+        self.assertEqual(req["messages"][-1]["role"], "user")
+        self.assertEqual(req["messages"][-1]["content"], (
+            sp.TAIL_FRAME + sp.SKILLS_MARKER + "\n"
             f"- deploy: {sp.skill_description(DEPLOY)} [{self.deploy_path}]\n"
             f"- debug: {sp.skill_description(DEBUG)} [{self.debug_path}]"))
 
-    def test_appends_to_existing_system_message(self):
+    def test_existing_system_message_stays_at_the_head(self):
         req = {"model": "m", "messages": [
             {"role": "system", "content": "base"},
             {"role": "user", "content": QUERY_TEXT}]}
         changed, _, _ = sp.SkillIndex(self.root, fake_embed).apply(req)
         self.assertTrue(changed)
-        content = req["messages"][0]["content"]
-        self.assertTrue(content.startswith("base\n\n" + sp.SKILLS_MARKER))
-        self.assertEqual(content.count(sp.SKILLS_MARKER), 1)
+        self.assertEqual(req["messages"][0], {"role": "system",
+                                              "content": "base"})
+        self.assertEqual(req["messages"][-1]["role"], "user")
+        self.assertTrue(req["messages"][-1]["content"]
+                        .startswith(sp.TAIL_FRAME))
+        self.assertEqual(req["messages"][-1]["content"]
+                         .count(sp.SKILLS_MARKER), 1)
 
     def test_idempotent(self):
         index = sp.SkillIndex(self.root, fake_embed)
         req = user_req()
         self.assertTrue(index.apply(req)[0])
-        first = req["messages"][0]["content"]
+        first = req["messages"][-1]["content"]
         changed, _, _ = index.apply(req)
         self.assertFalse(changed)
-        self.assertEqual(req["messages"][0]["content"], first)
+        self.assertEqual(req["messages"][-1]["content"], first)
         self.assertEqual(first.count(sp.SKILLS_MARKER), 1)
 
-    def test_marker_in_any_system_message_blocks_duplicate(self):
+    def test_marker_in_any_message_blocks_duplicate(self):
         req = {"model": "m", "messages": [
             {"role": "system", "content": "base"},
             {"role": "system", "content": sp.SKILLS_MARKER + "\n- old"},
@@ -210,10 +218,73 @@ class SkillIndexTest(unittest.TestCase):
             changed, _, count = index.apply(req)
             self.assertTrue(changed)
             self.assertEqual(count, 1)
+            self.assertEqual(req["messages"][0]["role"], "system")
             content = req["messages"][0]["content"]
             self.assertIn("## ponytail", content)
             self.assertIn("Ask if it needs to exist.", content)
             self.assertNotIn("SKILL.md", content)
+
+    def test_pinned_skill_skips_scan_and_listing(self):
+        with tempfile.TemporaryDirectory() as root:
+            write(root, os.path.join("ponytail", "SKILL.md"),
+                  "---\nname: ponytail\ndescription: Laziest fix.\n---\n\n"
+                  "# Ponytail\n\nAsk if it needs to exist.\n")
+            write(root, "debug.md", DEBUG)
+            calls = []
+
+            def embed(texts):
+                calls.append(list(texts))
+                return [[1.0, 0.0] for _ in texts]
+
+            index = sp.SkillIndex(root, embed, pin=("ponytail",))
+            req = user_req()
+            with mock.patch("os.listdir",
+                            side_effect=AssertionError("directory scanned")):
+                changed, _, count = index.apply(req)
+            self.assertTrue(changed)
+            self.assertEqual(count, 1)
+            self.assertEqual(calls, [])       # no scan embedding, no query
+            self.assertEqual(req["messages"][0]["role"], "system")
+            content = req["messages"][0]["content"]
+            self.assertIn("## ponytail", content)
+            self.assertNotIn("debug", content)
+
+    def test_changed_skill_set_leaves_stable_head_byte_identical(self):
+        conversation = [
+            {"role": "system", "content": "base policy"},
+            {"role": "assistant", "content": "ready"},
+            {"role": "user", "content": QUERY_TEXT},
+        ]
+        with tempfile.TemporaryDirectory() as base, \
+                tempfile.TemporaryDirectory() as extra:
+            for root in (base, extra):
+                write(root, os.path.join("deploy", "SKILL.md"), DEPLOY)
+                write(root, "debug.md", DEBUG)
+            write(extra, os.path.join("unrelated", "SKILL.md"), UNRELATED)
+
+            first = {"model": "m", "messages": copy.deepcopy(conversation)}
+            sp.SkillIndex(base, fake_embed).apply(first)
+
+            real_listdir = os.listdir
+
+            def reversed_listdir(path):
+                return list(reversed(real_listdir(path)))
+
+            second = {"model": "m", "messages": copy.deepcopy(conversation)}
+            with mock.patch("os.listdir", side_effect=reversed_listdir):
+                sp.SkillIndex(extra, fake_embed).apply(second)
+
+        head = len(conversation)
+        self.assertEqual(
+            json.dumps(first["messages"][:head], sort_keys=True).encode(),
+            json.dumps(second["messages"][:head], sort_keys=True).encode())
+        for req in (first, second):
+            self.assertEqual(req["messages"][:head], conversation)
+            self.assertEqual(len(req["messages"]), head + 1)
+            self.assertEqual(req["messages"][-1]["role"], "user")
+            self.assertIn(sp.SKILLS_MARKER, req["messages"][-1]["content"])
+            self.assertNotIn(sp.SKILLS_MARKER,
+                             json.dumps(req["messages"][:head]))
 
 
 class SkillWiringTest(unittest.TestCase):

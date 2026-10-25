@@ -1,3 +1,4 @@
+import copy
 import importlib.util
 import json
 import os
@@ -47,21 +48,25 @@ class ToolRouterTest(unittest.TestCase):
         self.assertEqual(req["messages"][0]["content"], "base")
         self.assertNotIn("tool_choice", req)
 
-    def test_nudge_inserted_without_system(self):
+    def test_nudge_is_a_trailing_user_message(self):
         tr = sp.ToolRouter(FakeScorer(0.9, 0.9))
         req = req_with()
         changed, prob = tr.apply(req, "m")
         self.assertTrue(changed)
-        self.assertEqual(req["messages"][0]["role"], "system")
-        self.assertIn(sp.TOOL_NUDGE, req["messages"][0]["content"])
+        self.assertEqual(req["messages"][0]["content"],
+                         "fix the failing test")
+        self.assertEqual(req["messages"][-1]["role"], "user")
+        self.assertIn(sp.TOOL_NUDGE, req["messages"][-1]["content"])
 
-    def test_nudge_appended_to_system_and_idempotent(self):
+    def test_nudge_leaves_the_head_and_is_idempotent(self):
         tr = sp.ToolRouter(FakeScorer(0.9, 0.9))
         req = req_with(system="base")
+        head = copy.deepcopy(req["messages"])
         changed, _ = tr.apply(req, "m")
         self.assertTrue(changed)
-        self.assertTrue(req["messages"][0]["content"].startswith("base"))
-        self.assertIn(sp.TOOL_NUDGE, req["messages"][0]["content"])
+        self.assertEqual(req["messages"][:len(head)], head)
+        self.assertEqual(req["messages"][-1]["role"], "user")
+        self.assertIn(sp.TOOL_NUDGE, req["messages"][-1]["content"])
         changed, _ = tr.apply(req, "m")
         self.assertFalse(changed)
 
