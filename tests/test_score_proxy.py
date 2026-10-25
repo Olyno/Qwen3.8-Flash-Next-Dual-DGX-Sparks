@@ -1103,47 +1103,67 @@ def tool_message(content, call_id="call_1"):
     return {"role": "tool", "tool_call_id": call_id, "content": content}
 
 
+def call_message(call_id, name="read_file", arguments='{"path": "a.log"}'):
+    return {"role": "assistant", "content": None,
+            "tool_calls": [{"id": call_id, "type": "function",
+                            "function": {"name": name,
+                                         "arguments": arguments}}]}
+
+
 class ToolOutputDedupeTest(unittest.TestCase):
     LONG = "tool output line\n" * 60
 
     def messages(self):
         return [
-            {"role": "user", "content": self.LONG},
-            tool_message(self.LONG, "call_1"),
-            {"role": "assistant", "content": self.LONG},
-            tool_message(self.LONG, "call_2"),
+            {"role": "user", "content": "read it, then read it again"},
+            call_message("call_1"), tool_message(self.LONG, "call_1"),
+            call_message("call_2"), tool_message(self.LONG, "call_2"),
+            # same bytes, different path: a different call, so it must survive
+            call_message("call_3", arguments='{"path": "b.log"}'),
             tool_message(self.LONG, "call_3"),
-            tool_message("short", "call_4"),
-            tool_message("short", "call_5"),
         ]
 
-    def test_collapses_later_duplicates_only(self):
+    def test_collapses_a_repeated_identical_call(self):
         req = {"messages": self.messages()}
         size = len(self.LONG.encode())
-        self.assertEqual(sp.collapse_duplicate_tool_output(req), 2)
+        self.assertEqual(sp.collapse_duplicate_tool_output(req), 1)
         messages = req["messages"]
-        marker = (f"[identical to the tool result above at message 2; "
-                  f"{size} bytes]")
-        self.assertEqual(messages[0]["content"], self.LONG)   # user
-        self.assertEqual(messages[1]["content"], self.LONG)   # first tool
-        self.assertEqual(messages[2]["content"], self.LONG)   # assistant
-        self.assertEqual(messages[3]["content"], marker)      # duplicate 1
-        self.assertEqual(messages[4]["content"], marker)      # duplicate 2
-        self.assertEqual(messages[5]["content"], "short")
-        self.assertEqual(messages[6]["content"], "short")
+        self.assertEqual(messages[2]["content"], self.LONG)   # first result
+        self.assertEqual(
+            messages[4]["content"],
+            f'[identical to the read_file({{"path": "a.log"}}) result at '
+            f'message 3; {size} bytes]')
+        self.assertEqual(messages[6]["content"], self.LONG)
+
+    def test_updated_file_is_not_collapsed(self):
+        req = {"messages": [
+            call_message("call_1"), tool_message(self.LONG, "call_1"),
+            call_message("call_2"),
+            tool_message(self.LONG + "a new line\n", "call_2")]}
+        self.assertEqual(sp.collapse_duplicate_tool_output(req), 0)
+
+    def test_unresolvable_call_is_not_collapsed(self):
+        req = {"messages": [tool_message(self.LONG, "ghost_1"),
+                            tool_message(self.LONG, "ghost_2")]}
+        before = copy.deepcopy(req)
+        self.assertEqual(sp.collapse_duplicate_tool_output(req), 0)
+        self.assertEqual(req, before)
 
     def test_short_and_non_string_content_untouched(self):
         small = "y" * (sp.DEDUPE_MIN_BYTES - 1)
         blocks = [{"type": "text", "text": "z" * 1024}]
-        req = {"messages": [tool_message(small), tool_message(small),
-                            tool_message(blocks), tool_message(blocks)]}
+        req = {"messages": [
+            call_message("c1"), tool_message(small, "c1"),
+            call_message("c2"), tool_message(small, "c2"),
+            call_message("c3"), tool_message(blocks, "c3"),
+            call_message("c4"), tool_message(blocks, "c4")]}
         before = copy.deepcopy(req)
         self.assertEqual(sp.collapse_duplicate_tool_output(req), 0)
         self.assertEqual(req, before)
 
     def test_second_pass_is_a_no_op(self):
         req = {"messages": self.messages()}
-        self.assertEqual(sp.collapse_duplicate_tool_output(req), 2)
+        self.assertEqual(sp.collapse_duplicate_tool_output(req), 1)
         self.assertEqual(sp.collapse_duplicate_tool_output(req), 0)
 
 
@@ -1167,8 +1187,8 @@ class ToolOutputDedupeHttpTest(ProxyTestBase):
         big = "tool output line\n" * 60
         return {"model": "m", "messages": [
             {"role": "user", "content": "plain answer"},
-            tool_message(big, "call_1"),
-            tool_message(big, "call_2")]}
+            call_message("call_1"), tool_message(big, "call_1"),
+            call_message("call_2"), tool_message(big, "call_2")]}
 
     def test_gate_off_is_byte_identical(self):
         body, _ = self.post_chat(self.payload(), url=self.url_off)
@@ -1176,15 +1196,15 @@ class ToolOutputDedupeHttpTest(ProxyTestBase):
 
     def test_gate_on_collapses_the_later_copy(self):
         payload = self.payload()
-        big = payload["messages"][1]["content"]
+        big = payload["messages"][2]["content"]
         body, _ = self.post_chat(payload)
         sent = json.loads(self.upstream.requests[-1][1])
         self.assertNotEqual(self.upstream.requests[-1][1], body)
-        self.assertEqual(sent["messages"][1]["content"], big)
+        self.assertEqual(sent["messages"][2]["content"], big)
         self.assertEqual(
-            sent["messages"][2]["content"],
-            f"[identical to the tool result above at message 2; "
-            f"{len(big.encode())} bytes]")
+            sent["messages"][4]["content"],
+            f'[identical to the read_file({{"path": "a.log"}}) result at '
+            f'message 3; {len(big.encode())} bytes]')
 
 
 if __name__ == "__main__":

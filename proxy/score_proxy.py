@@ -1233,18 +1233,48 @@ DEDUPE_MARKER = ("[identical to the tool result above at message {position}; "
                  "{size} bytes]")
 
 
+DEDUPE_MARKER = ("[identical to the {call} result at message {position}; "
+                 "{size} bytes]")
+
+
+def _tool_call_index(messages):
+    """tool_call_id -> (name, arguments) from the assistant messages, so a
+    result can be tied to the call that produced it."""
+    calls = {}
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            function = call.get("function")
+            call_id = call.get("id")
+            if isinstance(call_id, str) and isinstance(function, dict):
+                calls[call_id] = (str(function.get("name") or ""),
+                                  str(function.get("arguments") or ""))
+    return calls
+
+
 def collapse_duplicate_tool_output(req, min_bytes=DEDUPE_MIN_BYTES):
-    """Replace the content of a repeated tool result with a marker naming the
-    first occurrence's position in the message list and the payload's size in
-    bytes. Only role="tool" messages with string content of at least
-    min_bytes participate; the first occurrence and every non-tool message
-    stay byte-identical, and positions are 1-based as a transcript reads.
-    Returns how many messages were collapsed.
-    ponytail: exact bytes only — a near-duplicate diff would have to
-    paraphrase the payload, which changes what the model reads."""
+    """Replace a repeated *identical call*'s result with a marker naming the
+    first occurrence. A result collapses only when the call that produced it
+    is the same call — same tool, same arguments — and the payload is byte
+    for byte the same. That distinction matters twice:
+
+    - A file that was updated between two reads returns different bytes, so
+      it never collapses and the model always sees the current content.
+    - Two different paths that happen to hold the same bytes are different
+      calls, so the second is delivered in full: the model asked for that
+      path and must not be told it already has it.
+
+    A result whose originating call cannot be resolved is left untouched,
+    because sameness cannot be proved. Only role="tool" messages with string
+    content of at least min_bytes participate; the first occurrence and every
+    non-tool message stay byte-identical. Returns how many were collapsed."""
     messages = req.get("messages")
     if not isinstance(messages, list):
         return 0
+    calls = _tool_call_index(messages)
     first_at = {}
     collapsed = 0
     for position, message in enumerate(messages, 1):
@@ -1256,11 +1286,16 @@ def collapse_duplicate_tool_output(req, min_bytes=DEDUPE_MIN_BYTES):
         raw = content.encode()
         if len(raw) < min_bytes:
             continue
-        earlier = first_at.setdefault(raw, position)
+        signature = calls.get(message.get("tool_call_id"))
+        if signature is None:
+            continue
+        earlier = first_at.setdefault((signature, raw), position)
         if earlier == position:
             continue
-        message["content"] = DEDUPE_MARKER.format(position=earlier,
-                                                  size=len(raw))
+        name, arguments = signature
+        message["content"] = DEDUPE_MARKER.format(
+            call=f"{name}({arguments[:60]})", position=earlier,
+            size=len(raw))
         collapsed += 1
     return collapsed
 
