@@ -167,6 +167,24 @@ Compare **ms/step and tokens/step**, not tok/s: acceptance moves with the text, 
 
 The before/after matrix runs on the same deployment for the same reason, and its commands are unchanged from the ones above; only the deployment is different.
 
+## Reasoning and long-context baseline
+
+`bench/reasoning_check.py`, ten short reasoning tasks plus two long-context recall probes, temperature as served, 2,048-token generation cap:
+
+| | |
+|---|---|
+| score | **12 / 12** |
+| prompt tokens | 77,522 (11,760 served from cache) |
+| completion tokens | 2,407 |
+| of which reasoning | 1,659 (69%) |
+| long-context probe | fitted to 63,482 prompt tokens, PASS in 24.8 s |
+
+Three things this fixes for later comparisons:
+
+- **Thinking is 69% of everything the model generates here.** A budget on the reasoning trace is the only lever that moves completion tokens by a large fraction, and this is the number any such change has to be measured against.
+- **The score is 12/12 on the current build**, so a later change that drops a task is a regression, not noise.
+- **The long-context probe now fits the served window before it is sent.** It previously asked for a prompt above `max_model_len` and recorded a 400, which read like a model failure in the score.
+
 ## Two request-shape findings
 
 Measured against the live server while preparing the prompt-side work:
