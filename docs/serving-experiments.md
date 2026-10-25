@@ -101,6 +101,34 @@ Mean over the twelve cells: **40.5 tok/s against 42.8 on the baseline**, so the 
 
 Read this verdict with the scope note above in mind. What transfers is the token count: the fourth draft is accepted often enough to add 0.23 tokens per step on prose and 0.83 on copy, and no topology changes that. What does not transfer is what the extra row costs. One more verify row is one more all-reduce per layer on a two-rank deployment, so the row is relatively more expensive there and the trade could flip. This is the one experiment in this file that deserves a repeat on the dual-node deployment before the question is closed.
 
+## Concurrent streams on one rank
+
+Same build as the baseline above, with `max_num_seqs` raised from 4 to 8 and nothing else changed. Each stream asks for the same prose task, 200 tokens, temperature 0.
+
+| streams | aggregate (tok/s) | per stream (tok/s) |
+|---|---|---|
+| 4 | 59.9 | 15.0 – 19.9 |
+| 8 | 95.1 | 11.9 – 12.9 |
+
+Four streams were measured twice on the depth-3 arm and once here and land in the same 51-62 range, so treat the four-stream row as ±10%. Eight streams add 59% aggregate while per-stream rate falls 21%, which says the box is not saturated at four.
+
+Single-stream rows are unchanged by the higher limit: 1k copy 61.2 against 61.7, 65k prose 28.2 against 28.1, 65k copy 65.4 against 62.0. One row moved a lot (32k code 34.3 against 39.7) with no mechanism behind it, so it is recorded as unexplained rather than as a regression.
+
+This is a capacity measurement, and capacity is the part that does not transfer: at two ranks the KV pool is per-rank and each step pays an all-reduce, so eight streams may scale differently. It is not evidence for the deployment.
+
+## Prompt-cache reuse, measured
+
+The point of the prompt-layout work is that an injected block must not invalidate the cached prefix. `cached_tokens` in the response usage measures exactly that: send the same conversation twice and read how much of the second prompt the server did not have to prefill.
+
+| path | prompt tokens | cached on the repeat | share |
+|---|---|---|---|
+| straight to the server | 6,072 | 5,040 | 83.0% |
+| through the proxy, pinned skill | 6,794 | 6,720 | 98.9% |
+
+The proxy adds 722 prompt tokens for the pinned skill body, and the repeat still prefills only 74 of 6,794 tokens. Two things follow: the injection is byte-identical across requests, so it is paid once and cached thereafter, and a 6k prompt costs about 17% of one prefill per turn instead of 100%.
+
+This number does transfer. Prefix caching is per-rank, but the tokens that hit are the same tokens on either topology; a byte that changes in the head costs a full re-prefill per rank, so the saving if anything doubles with two ranks.
+
 ## Already settled by configuration
 
 - **BF16 recurrent state.** `mamba_ssm_cache_dtype: bfloat16` is in the committed recipe and visible in the live container arguments, so the reference's +8.5% is already in the baseline above. No A/B left to run.
@@ -108,10 +136,13 @@ Read this verdict with the scope note above in mind. What transfers is the token
 - **Prefix-cache hashing with CBOR.** The flag exists in this vLLM build (`prefix_caching_hash_algo` accepts `sha256_cbor`) and `cbor2` is importable in the image, so wiring `--prefix-caching-hash-algo sha256_cbor` would work. Its ceiling is about 4 ms per 64k request against a 23 s prefill, which is below run-to-run noise. Not wired; revisit only if prefix hashing ever shows up in a profile.
 - **`--performance-mode interactivity`.** Read the v0.32 source: only `throughput` changes anything (it doubles `max_num_batched_tokens` and `max_num_seqs`); `balanced` and `interactivity` are no-ops. Not a lever.
 
-## Next experiments, in order
+## Next experiments
 
-1. **`MAX_NUM_SEQS = 8`** with the full graph capture set the reference uses, plus concurrent-stream throughput at 4 and 8 streams. This is a capacity question: the aggregate rate at 4 streams is the number an agent harness feels.
-2. **Proxy micro-optimizations:** one batched embedding call per request, `math.sumprod` cosine with cached norms, and skipping the request JSON parse when no proxy feature is enabled. Measured CPU savings of 1.5 ms, 0.2 ms and 1.2 ms per request respectively.
+Single-rank performance work stops here: step time, decode rate and concurrency scaling on one box do not predict the deployment, so every remaining performance change belongs on the dual-node box. What one box can still decide is anything counted in tokens, and that is where the next work goes:
+
+1. **`max_num_seqs`** stays derived from the node count (4 on one box, 8 on two). The single-box A/B above shows no single-stream effect, so there is nothing to pin.
+2. **Prompt and completion tokens per task.** `bench/reasoning_check.py --out ... --compare ...` now totals `prompt_tokens`, `cached_tokens`, `completion_tokens` and `reasoning_tokens` and prints the delta against a baseline file. Run it before and after every token-side change.
+3. **Proxy micro-optimizations:** one batched embedding call per request, `math.sumprod` cosine with cached norms, and skipping the request JSON parse when no proxy feature is enabled. Measured CPU savings of 1.5 ms, 0.2 ms and 1.2 ms per request respectively.
 
 ## Reproduction
 
