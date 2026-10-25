@@ -167,6 +167,22 @@ Compare **ms/step and tokens/step**, not tok/s: acceptance moves with the text, 
 
 The before/after matrix runs on the same deployment for the same reason, and its commands are unchanged from the ones above; only the deployment is different.
 
+## The thinking budget is native, and it does not bind here
+
+This build accepts `thinking_token_budget` on the chat request and enforces it in the sampler (`v1/worker/gpu/sample/thinking_budget.py`), so a trace cap needs no proxy code and no patch. Measured against the baseline on the same twelve tasks:
+
+| arm | score | completion tokens | reasoning tokens |
+|---|---|---|---|
+| no budget | 12/12 | 2,407 | 1,659 |
+| 512 | 12/12 | 2,333 | 1,665 |
+| 1024 | 12/12 | 2,191 | 1,572 |
+
+The arms are indistinguishable because nothing reaches the cap: the mean trace is **138 tokens** and the longest is **241** (`negation`), so a 512 budget is never hit. That is the prior baked into the checkpoint doing its job.
+
+The ceiling is small anyway. Generated tokens are **3% of the tokens a session spends** — 2,407 against 77,522 prompt tokens in this run, and 320 against 47,168 across the five-turn session above. Removing the trace entirely would move the total by about 3%, while the marginal prefill of one tool result moves it by 2,000.
+
+Verdict: no default to set, and the planned trace-budget work is dropped rather than shipped unmeasured. Reopen only if a real agent trace is observed above the budget, which would show up directly in the accounting line.
+
 ## Duplicate tool output, and per-request accounting
 
 A tool result that repeats verbatim is the one part of an agent transcript that is pure waste: it is paid for in every later turn's prompt. Measured through the proxy with two byte-identical ~30k-token tool results in one conversation:
