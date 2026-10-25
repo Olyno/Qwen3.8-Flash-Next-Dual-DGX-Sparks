@@ -999,7 +999,7 @@ class SkillIndex:
         """[(similarity, name, description, path)] best first, filtered by
         min_sim and capped at top_k; [] on any embedding trouble."""
         skills = self._load()
-        if not skills or not text:
+        if not skills or not text or self.embed_fn is None:
             return []
         try:
             query = self.embed_fn([text[:2000]])[0]
@@ -1481,9 +1481,12 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
             threshold=tool_threshold, force=tool_force,
             top_k=tool_top_k, always=tool_always)
     srv.skill_index = None
-    if skills_dir and srv.router is not None:
+    # A pin needs no embeddings — it reads named files directly — so it must
+    # not be gated on the embedding service being reachable.
+    if skills_dir and (srv.router is not None or skills_pin):
         srv.skill_index = SkillIndex(
-            skills_dir, srv.router.embed, top_k=skills_top_k,
+            skills_dir, srv.router.embed if srv.router else None,
+            top_k=skills_top_k,
             min_sim=skills_min_sim, pin=skills_pin,
             pin_chars=skills_pin_chars)
     srv.keepalive = None

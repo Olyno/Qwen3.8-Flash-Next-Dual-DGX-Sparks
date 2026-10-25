@@ -295,7 +295,32 @@ class SkillWiringTest(unittest.TestCase):
         finally:
             srv.server_close()
 
-    def test_skills_dir_constructs_index_with_router(self):
+    def test_pin_works_without_an_embedding_service(self):
+        with tempfile.TemporaryDirectory() as root:
+            write(root, os.path.join("ponytail", "SKILL.md"),
+                  "---\nname: ponytail\ndescription: Laziest fix.\n---\n\n"
+                  "# Ponytail\n\nAsk if it needs to exist.\n")
+            srv = sp.make_server(0, "http://127.0.0.1:1",
+                                 skills_dir=root, skills_pin=("ponytail",))
+            try:
+                self.assertIsInstance(srv.skill_index, sp.SkillIndex)
+                self.assertIsNone(srv.skill_index.embed_fn)
+                req = {"model": "m", "messages": [
+                    {"role": "user", "content": "fix the failing test"}]}
+                self.assertTrue(srv.skill_index.apply(req)[0])
+                self.assertIn("## ponytail", json.dumps(req["messages"]))
+            finally:
+                srv.server_close()
+
+    def test_listing_still_needs_the_router(self):
+        with tempfile.TemporaryDirectory() as root:
+            srv = sp.make_server(0, "http://127.0.0.1:1", skills_dir=root)
+            try:
+                self.assertIsNone(srv.skill_index)
+            finally:
+                srv.server_close()
+
+
         with tempfile.TemporaryDirectory() as root:
             srv = sp.make_server(0, "http://127.0.0.1:1",
                                  router_url="http://127.0.0.1:1",
