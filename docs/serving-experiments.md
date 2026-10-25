@@ -246,16 +246,21 @@ Verdict: no default to set, and the planned trace-budget work is dropped rather 
 
 ## Duplicate tool output, and per-request accounting
 
-A tool result that repeats verbatim is the one part of an agent transcript that is pure waste: it is paid for in every later turn's prompt. Measured through the proxy with two byte-identical ~30k-token tool results in one conversation:
+A tool result that repeats verbatim is the one part of an agent transcript that is pure waste: it is paid for in every later turn's prompt. The rule that decides what counts as a repeat matters more than the saving, because two cases look identical byte for byte and must be treated differently.
 
-| arm | prompt tokens |
-|---|---|
-| default (off) | 60,172 |
-| `PROXY_DEDUPE_TOOL_OUTPUT=1` | 30,195 |
+A result is collapsed only when **the call itself repeats** — same tool, same arguments — *and* the payload is byte for byte the same. Measured through the proxy on three conversations that each carry two ~30k-token payloads:
 
-The later copy becomes `[identical to the tool result above at message N; B bytes]`, so the model still learns that a repeat happened and how large it was without re-reading it. Only exact bytes, only `role: "tool"`, only above 512 bytes; the first occurrence and every non-tool message stay byte-identical, and the replacement is idempotent across turns.
+| case | gate off | `PROXY_DEDUPE_TOOL_OUTPUT=1` | collapsed |
+|---|---|---|---|
+| same call, file unchanged | 60,161 | **30,191** | yes |
+| same call, file updated between reads | 60,165 | 60,165 | **no** |
+| different path, equal bytes | 60,161 | 60,161 | **no** |
 
-It stays opt-in. That is a meaning change, and this benchmark has no repeated tool results, so nothing here answers the quality question — it needs a task set where the duplicate actually occurs.
+- **An updated file is always delivered in full.** Different bytes are a different payload, so the model never sees a marker standing in for content it has not read. This is the case that would be dangerous if the rule keyed on the path alone.
+- **Two files that happen to hold the same bytes are both delivered.** They are different calls; the model asked for the second path and is not told it already has it. An earlier version of this rule keyed on bytes only and did collapse that case, which is why the measured saving used to read as 49.8% on a conversation that should not have collapsed at all.
+- Only `role: "tool"` results above 512 bytes participate, the first occurrence is never touched, and a result whose originating call cannot be resolved is left alone because sameness cannot be proved.
+
+It stays opt-in. That is still a meaning change, and this benchmark set has no repeated tool results, so nothing here answers the quality question.
 
 Every completed request now also logs its own cost:
 
