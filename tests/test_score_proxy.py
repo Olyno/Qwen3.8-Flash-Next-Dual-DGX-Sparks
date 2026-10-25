@@ -1232,3 +1232,74 @@ class ToolOutputDedupeHttpTest(ProxyTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReasoningEffortTest(ProxyTestBase):
+    """The proxy is the only place that can set reasoning_effort: vLLM has no
+    server-side default for it and ignores a top-level field."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.make_stack(reasoning_effort="low")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.stop_stack()
+
+    def last_body(self):
+        return json.loads(self.upstream.requests[-1][1])
+
+    def test_injects_when_absent(self):
+        self.post_chat({"model": "m", "messages": [
+            {"role": "user", "content": "plain answer"}]})
+        self.assertEqual(
+            self.last_body().get("chat_template_kwargs", {}).get("reasoning_effort"),
+            "low")
+
+    def test_caller_value_wins(self):
+        self.post_chat({"model": "m",
+                        "messages": [{"role": "user", "content": "plain answer"}],
+                        "chat_template_kwargs": {"reasoning_effort": "xhigh"}})
+        kwargs = self.last_body().get("chat_template_kwargs", {})
+        self.assertEqual(kwargs.get("reasoning_effort"), "xhigh")
+
+    def test_keeps_other_kwargs(self):
+        self.post_chat({"model": "m",
+                        "messages": [{"role": "user", "content": "plain answer"}],
+                        "chat_template_kwargs": {"enable_thinking": True}})
+        kwargs = self.last_body().get("chat_template_kwargs", {})
+        self.assertEqual(kwargs.get("reasoning_effort"), "low")
+        self.assertIs(kwargs.get("enable_thinking"), True)
+
+    def test_streaming_path_also_injects(self):
+        body = json.dumps({"model": "m", "stream": True,
+                           "messages": [{"role": "user",
+                                         "content": "stream me"}]}).encode()
+        req = urllib.request.Request(self.url + "/v1/chat/completions",
+                                     data=body,
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req).read()
+        self.assertEqual(
+            self.last_body().get("chat_template_kwargs", {}).get("reasoning_effort"),
+            "low")
+
+
+class ReasoningEffortOffTest(ProxyTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.make_stack()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.stop_stack()
+
+    def test_off_leaves_request_untouched(self):
+        self.post_chat({"model": "m",
+                        "messages": [{"role": "user", "content": "plain answer"}]})
+        body = json.loads(self.upstream.requests[-1][1])
+        self.assertNotIn("chat_template_kwargs", body)
+
+    def test_invalid_value_refused(self):
+        with self.assertRaises(SystemExit):
+            score_proxy.make_server(0, "http://127.0.0.1:1",
+                                    reasoning_effort="highish")

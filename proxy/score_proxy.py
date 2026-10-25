@@ -1473,6 +1473,21 @@ class Handler(BaseHTTPRequestHandler):
 
     def _chat(self, body):
         req = json.loads(body)
+        if self.server.reasoning_effort:
+            # vLLM has no server-side default for this and ignores a top-level
+            # reasoning_effort (only the harmony parser reads one), so the chat
+            # template sees it only through chat_template_kwargs. A caller that
+            # already set it wins.
+            kwargs = dict(req.get("chat_template_kwargs") or {})
+            if "reasoning_effort" not in kwargs:
+                kwargs["reasoning_effort"] = self.server.reasoning_effort
+                req["chat_template_kwargs"] = kwargs
+                body = json.dumps(req).encode()
+                if not getattr(self.server, "_re_logged", False):
+                    self.server._re_logged = True
+                    print(f"score proxy: reasoning_effort="
+                          f"{self.server.reasoning_effort} on requests",
+                          file=sys.stderr)
         if (self.server.canonicalize
                 and isinstance(req.get("messages"), list)):
             messages, changed = canonicalize_messages(
@@ -1659,7 +1674,11 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
                 tool_force=False, tool_top_k=8, tool_always=(),
                 skills_dir=None, skills_top_k=3, skills_min_sim=0.25,
                 skills_pin=(), skills_pin_chars=4000, context_tokens=0,
-                dedupe_tool_output=False, diff_tool_output=False):
+                dedupe_tool_output=False, diff_tool_output=False,
+                reasoning_effort=None):
+    if reasoning_effort not in (None, "", "xhigh", "medium", "low"):
+        raise SystemExit(
+            f"PROXY_REASONING_EFFORT={reasoning_effort!r}: use low, medium or xhigh")
     u = urllib.parse.urlparse(upstream_url)
     srv = ThreadingHTTPServer(("", port), Handler)
     srv.upstream = (u.hostname, u.port or 80)
@@ -1692,6 +1711,7 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
             top_k=skills_top_k,
             min_sim=skills_min_sim, pin=skills_pin,
             pin_chars=skills_pin_chars)
+    srv.reasoning_effort = reasoning_effort or None
     srv.keepalive = None
     if keepalive_s > 0:
         srv.keepalive = CacheKeepalive(srv, keepalive_s)
@@ -1731,7 +1751,8 @@ def main():
         int(os.environ.get("PROXY_SKILLS_PIN_CHARS", 4000)),
         int(os.environ.get("PROXY_CONTEXT_TOKENS", 0) or 0),
         os.environ.get("PROXY_DEDUPE_TOOL_OUTPUT") == "1",
-        os.environ.get("PROXY_DIFF_TOOL_OUTPUT") == "1")
+        os.environ.get("PROXY_DIFF_TOOL_OUTPUT") == "1",
+        reasoning_effort=os.environ.get("PROXY_REASONING_EFFORT") or None)
     print(f"score proxy on :{srv.server_port} -> "
           f"http://{srv.upstream[0]}:{srv.upstream[1]}")
     srv.serve_forever()
