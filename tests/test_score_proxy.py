@@ -1,4 +1,6 @@
+import contextlib
 import copy
+import io
 import json
 import math
 import os
@@ -21,6 +23,15 @@ BASE_LP = {"red": -0.2, "green": -2.0, "blue": -1.0}
 POSITION_BONUS = 0.6  # fake position bias: the label listed first scores higher
 
 SSE_CHUNKS = ('data: {"delta": "a"}\n\n', 'data: {"delta": "b"}\n\n', 'data: [DONE]\n\n')
+
+USAGE_STREAM_CHUNKS = (
+    'data: {"choices": [{"index": 0, "delta": {"content": "hi"}}]}\n\n',
+    'data: {"choices": [], "usage": {"prompt_tokens": 321, '
+    '"completion_tokens": 9, "total_tokens": 330, '
+    '"prompt_tokens_details": {"cached_tokens": 300}, '
+    '"completion_tokens_details": {"reasoning_tokens": 2}}}\n\n',
+    'data: [DONE]\n\n',
+)
 
 LOOP_PIECE = "the same phrase again and again. "
 LOOP_CHUNKS = tuple(
@@ -132,6 +143,17 @@ class FakeUpstream(BaseHTTPRequestHandler):
 
     def _chat(self, req):
         text = json.dumps(req["messages"])
+        if "usage report" in text:
+            self._json(200, {
+                "choices": [{"index": 0,
+                             "message": {"role": "assistant",
+                                         "content": "usage answer"},
+                             "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1234, "completion_tokens": 56,
+                          "total_tokens": 1290,
+                          "prompt_tokens_details": {"cached_tokens": 1000},
+                          "completion_tokens_details": {"reasoning_tokens": 7}}})
+            return
         if "forever think" in text:
             self._json(200, {"choices": [{"index": 0,
                 "message": {"role": "assistant", "content": "",
@@ -177,8 +199,10 @@ class FakeUpstream(BaseHTTPRequestHandler):
                 "message": {"role": "assistant", "content": "thinking answer"}}]})
 
     def _sse(self, req):
-        loop = "loop me" in json.dumps(req["messages"])
-        chunks = LOOP_CHUNKS if loop else SSE_CHUNKS
+        text = json.dumps(req["messages"])
+        loop = "loop me" in text
+        chunks = (USAGE_STREAM_CHUNKS if "usage stream" in text
+                  else LOOP_CHUNKS if loop else SSE_CHUNKS)
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
@@ -892,6 +916,30 @@ class MaxTokensClampTest(unittest.TestCase):
         sp.clamp_max_tokens(with_tools, 1024)
         self.assertLess(with_tools["max_tokens"], without["max_tokens"])
 
+    def test_fits_already_keeps_the_request_byte_identical(self):
+        cases = [
+            ("cap inside the room",
+             {"max_tokens": 10,
+              "messages": [{"role": "user", "content": "x" * 400}]}, 1024),
+            ("no context configured",
+             {"max_tokens": 5000,
+              "messages": [{"role": "user", "content": "x" * 400}]}, 0),
+            ("no cap to lower",
+             {"messages": [{"role": "user", "content": "x" * 400}]}, 1024),
+        ]
+        for name, req, context in cases:
+            with self.subTest(name):
+                before = json.dumps(req)
+                self.assertFalse(sp.clamp_max_tokens(req, context))
+                self.assertEqual(json.dumps(req), before)
+
+    def test_prompt_alone_over_the_context_is_left_alone(self):
+        req = {"max_tokens": 5000,
+               "messages": [{"role": "user", "content": "x" * 4000}]}
+        before = json.dumps(req)
+        self.assertFalse(sp.clamp_max_tokens(req, 100))
+        self.assertEqual(json.dumps(req), before)
+
 
 class RepairHttpTest(ProxyTestBase):
     @classmethod
@@ -995,6 +1043,148 @@ class MaxTokensClampHttpTest(ProxyTestBase):
         sent = json.loads(self.upstream.requests[-1][1])
         self.assertLess(sent["max_tokens"], 100000)
         self.assertGreaterEqual(sent["max_tokens"], 1)
+
+    def test_fits_already_keeps_the_body_byte_identical(self):
+        body, _ = self.post_chat({
+            "model": "m", "max_tokens": 10,
+            "messages": [{"role": "user", "content": "x" * 400}]})
+        self.assertEqual(self.upstream.requests[-1][1], body)
+
+    def test_prompt_alone_over_the_context_is_passed_through(self):
+        body, _ = self.post_chat({
+            "model": "m", "max_tokens": 5000,
+            "messages": [{"role": "user", "content": "x" * 4000}]})
+        self.assertEqual(self.upstream.requests[-1][1], body)
+
+
+class TokenAccountingTest(ProxyTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.make_stack()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.stop_stack()
+
+    def accounting_lines(self, payload):
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            req = urllib.request.Request(
+                self.url + "/v1/chat/completions",
+                data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req).read()
+        return [line for line in buf.getvalue().splitlines()
+                if line.startswith("score proxy: usage")]
+
+    def test_one_line_per_completed_request(self):
+        cases = [
+            ("non-streaming",
+             {"model": "m",
+              "messages": [{"role": "user", "content": "usage report"}]},
+             "score proxy: usage prompt_tokens=1234 cached_tokens=1000 "
+             "completion_tokens=56 reasoning_tokens=7"),
+            ("streaming usage chunk",
+             {"model": "m", "stream": True,
+              "messages": [{"role": "user", "content": "usage stream"}]},
+             "score proxy: usage prompt_tokens=321 cached_tokens=300 "
+             "completion_tokens=9 reasoning_tokens=2"),
+            ("no usage reported",
+             {"model": "m",
+              "messages": [{"role": "user", "content": "plain answer"}]},
+             "score proxy: usage unavailable"),
+        ]
+        for name, payload, expected in cases:
+            with self.subTest(name):
+                self.assertEqual(self.accounting_lines(payload), [expected])
+
+
+def tool_message(content, call_id="call_1"):
+    return {"role": "tool", "tool_call_id": call_id, "content": content}
+
+
+class ToolOutputDedupeTest(unittest.TestCase):
+    LONG = "tool output line\n" * 60
+
+    def messages(self):
+        return [
+            {"role": "user", "content": self.LONG},
+            tool_message(self.LONG, "call_1"),
+            {"role": "assistant", "content": self.LONG},
+            tool_message(self.LONG, "call_2"),
+            tool_message(self.LONG, "call_3"),
+            tool_message("short", "call_4"),
+            tool_message("short", "call_5"),
+        ]
+
+    def test_collapses_later_duplicates_only(self):
+        req = {"messages": self.messages()}
+        size = len(self.LONG.encode())
+        self.assertEqual(sp.collapse_duplicate_tool_output(req), 2)
+        messages = req["messages"]
+        marker = (f"[identical to the tool result above at message 2; "
+                  f"{size} bytes]")
+        self.assertEqual(messages[0]["content"], self.LONG)   # user
+        self.assertEqual(messages[1]["content"], self.LONG)   # first tool
+        self.assertEqual(messages[2]["content"], self.LONG)   # assistant
+        self.assertEqual(messages[3]["content"], marker)      # duplicate 1
+        self.assertEqual(messages[4]["content"], marker)      # duplicate 2
+        self.assertEqual(messages[5]["content"], "short")
+        self.assertEqual(messages[6]["content"], "short")
+
+    def test_short_and_non_string_content_untouched(self):
+        small = "y" * (sp.DEDUPE_MIN_BYTES - 1)
+        blocks = [{"type": "text", "text": "z" * 1024}]
+        req = {"messages": [tool_message(small), tool_message(small),
+                            tool_message(blocks), tool_message(blocks)]}
+        before = copy.deepcopy(req)
+        self.assertEqual(sp.collapse_duplicate_tool_output(req), 0)
+        self.assertEqual(req, before)
+
+    def test_second_pass_is_a_no_op(self):
+        req = {"messages": self.messages()}
+        self.assertEqual(sp.collapse_duplicate_tool_output(req), 2)
+        self.assertEqual(sp.collapse_duplicate_tool_output(req), 0)
+
+
+class ToolOutputDedupeHttpTest(ProxyTestBase):
+    @classmethod
+    def setUpClass(cls):
+        cls.make_stack(dedupe_tool_output=True)
+        cls.proxy_off = score_proxy.make_server(
+            0, f"http://127.0.0.1:{cls.upstream.server_port}")
+        threading.Thread(target=cls.proxy_off.serve_forever,
+                         daemon=True).start()
+        cls.url_off = f"http://127.0.0.1:{cls.proxy_off.server_port}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.proxy_off.shutdown()
+        cls.proxy_off.server_close()
+        cls.stop_stack()
+
+    def payload(self):
+        big = "tool output line\n" * 60
+        return {"model": "m", "messages": [
+            {"role": "user", "content": "plain answer"},
+            tool_message(big, "call_1"),
+            tool_message(big, "call_2")]}
+
+    def test_gate_off_is_byte_identical(self):
+        body, _ = self.post_chat(self.payload(), url=self.url_off)
+        self.assertEqual(self.upstream.requests[-1][1], body)
+
+    def test_gate_on_collapses_the_later_copy(self):
+        payload = self.payload()
+        big = payload["messages"][1]["content"]
+        body, _ = self.post_chat(payload)
+        sent = json.loads(self.upstream.requests[-1][1])
+        self.assertNotEqual(self.upstream.requests[-1][1], body)
+        self.assertEqual(sent["messages"][1]["content"], big)
+        self.assertEqual(
+            sent["messages"][2]["content"],
+            f"[identical to the tool result above at message 2; "
+            f"{len(big.encode())} bytes]")
 
 
 if __name__ == "__main__":

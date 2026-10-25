@@ -130,11 +130,15 @@ mechanisms:
 - **Unclosed wrapper/tail.** A reply that ends inside a JSON object or a
   tool-call wrapper is closed and emitted as a call instead of a truncated
   text turn; `finish_reason` becomes `tool_calls`.
-- **max_tokens clamp.** With `PROXY_CONTEXT_TOKENS` set to the model's
-  context size, an explicit `max_tokens` larger than the room left after the
-  prompt is clamped before generation. The estimate is a conservative
-  4 chars/token (no tokenizer in the proxy). The close-thinking continuation
-  is clamped against the same budget minus what was already generated.
+- **Pre-send fit check (`max_tokens`).** With `PROXY_CONTEXT_TOKENS` set to
+  the model's context size, the prompt is estimated (4 chars/token) and an
+  explicit `max_tokens` larger than the room left after it is lowered to fit
+  — a clamped request still produces an answer, while a rejected one wastes
+  the whole turn and gets retried. When the prompt alone already exceeds the
+  context, the request is forwarded untouched: conversation content is never
+  truncated by the proxy, and the server's own overflow answer is the honest
+  one. The close-thinking continuation is clamped against the same budget
+  minus what was already generated.
 - **Close-thinking retry.** A non-streaming reply with `finish_reason`
   `length` or `stop` that stops inside `<think>`/`<reasoning>` (or with
   `reasoning_content` and no answer) is continued **once** with the thinking
@@ -153,6 +157,49 @@ Repairs add `"x_proxy": {"thinking_retry": "closed"}` to the response; the
 tool-call parse does not add a marker. The continuation is fail-open: if it
 errors or returns no answer, the original response is relayed unchanged.
 Streaming passthrough and escalation gating are unchanged.
+
+## Token accounting
+
+Every completed upstream chat completion logs one line to stderr:
+
+```
+score proxy: usage prompt_tokens=18422 cached_tokens=17920 completion_tokens=412 reasoning_tokens=128
+```
+
+`cached_tokens` comes from `usage.prompt_tokens_details.cached_tokens` and
+`reasoning_tokens` from `usage.completion_tokens_details.reasoning_tokens`
+(flat `usage.cached_tokens` / `usage.reasoning_tokens` are accepted too).
+Only counters the server reported are printed; a response without a usage
+object logs `score proxy: usage unavailable`. Streams are read out of band —
+the SSE bytes relayed to the client are untouched — and the usage chunk is
+picked up when the upstream sends one, so keep `stream_options:
+{"include_usage": true}` on the client side if you want stream accounting.
+This line is what attributes a prompt change (dedupe, layout, skills) to a
+change in prompt or cache-hit tokens on the next turn. Nothing in the
+request or response changes.
+
+## Duplicate tool-output collapse (`PROXY_DEDUPE_TOOL_OUTPUT=1`)
+
+Agent sessions re-send old tool output on every turn, and a harness that
+retries a step can leave two byte-identical results in one transcript. With
+`PROXY_DEDUPE_TOOL_OUTPUT=1`, a repeated `role: "tool"` message is replaced
+before generation by:
+
+```
+[identical to the tool result above at message 7; 412 bytes]
+```
+
+The marker names the first occurrence's position in the message list
+(1-based, as the transcript reads) and the payload's size in bytes, so the
+model can still reason about how much output a step produced and know why it
+is not seeing it again. Only exact byte-identical string content
+participates; the first occurrence, every non-tool message, and anything
+shorter than 512 bytes are left byte-identical. The transform is idempotent
+(a marker cannot match a real payload), applies to streaming and
+non-streaming alike, and runs before the fit check, so the collapsed prompt
+also gets the freed room back. It changes what the model reads, which is why
+it is off unless an operator turns it on. Every firing logs
+`collapsed N duplicate tool result(s)`.
 
 ## Middleware triage (2026-10-10)
 
@@ -276,8 +323,15 @@ cheaper.
   [decision-scoring.md](decision-scoring.md).
 - [Luce-Org/lucebox](https://github.com/Luce-Org/lucebox) — multi-syntax
   tool-call parsing, relaxed-JSON and schema-typed argument recovery, the
-  reply-reserve / close-thinking retry design, and the prefix-cache-safe
-  prompt layout (volatile injected context after the stable transcript).
+  reply-reserve / close-thinking retry design, the prefix-cache-safe prompt
+  layout (volatile injected context after the stable transcript), and
+  byte-accounted tool-output memory (identical tool results share one
+  block, size tracked in bytes).
+- [ashhart/TensorFold](https://github.com/ashhart/TensorFold) — the
+  compaction pre-pass that replaces byte-identical `tool` results after the
+  first with a placeholder before a costly context operation; the gated
+  duplicate tool-output collapse is an independent reimplementation with a
+  position- and byte-count-preserving marker.
 - [zolotukhin/zinc](https://github.com/zolotukhin/zinc) — ChatML
   `<tool_call>` envelope parsing and schema-aware argument decoding.
 - [uv-genai/colibri](https://github.com/uv-genai/colibri) — strict
@@ -286,5 +340,5 @@ cheaper.
   call recovery, reasoning-channel calls, close-thinking retry and
   answer-room reserve.
 
-All four are idea-level credits: the proxy code is an independent
+All five are idea-level credits: the proxy code is an independent
 reimplementation; see `NOTICE`.

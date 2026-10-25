@@ -149,10 +149,22 @@ Ideas and approaches (no code copied)
     Multi-syntax tool-call parsing, relaxed-JSON and schema-typed
     argument recovery (server/src/server/tool_parser.cpp), the
     reply-reserve / close-thinking retry design
-    (docs/specs/thinking-budget.md), and the prefix-cache-safe prompt
+    (docs/specs/thinking-budget.md), the prefix-cache-safe prompt
     layout that floats volatile harness context after the stable
-    transcript (server/docs/PIN_FRIENDLY_PROMPT.md); reimplemented from
+    transcript (server/docs/PIN_FRIENDLY_PROMPT.md), and byte-accounted
+    tool-output memory where identical results share one block with its
+    size kept in bytes (server/src/server/tool_memory.cpp), which informs
+    the size-preserving duplicate tool-output marker; reimplemented from
     scratch for proxy/score_proxy.py. No code copied.
+
+  ashhart/TensorFold (Apache-2.0) — https://github.com/ashhart/TensorFold
+    Agent-context compaction pre-pass
+    (app/electron/agent/compaction-prepass.ts): byte-identical `tool`
+    results after the first are replaced with a placeholder before the
+    expensive summarization call, and summarized results keep their
+    original size. Basis of the opt-in duplicate tool-output collapse and
+    its position- and byte-count-preserving marker in
+    proxy/score_proxy.py; reimplemented from scratch. No code copied.
 
   mw00/project-maya (MIT) — https://github.com/mw00/project-maya
     Prompt-cache hygiene in request normalization: keep the start of

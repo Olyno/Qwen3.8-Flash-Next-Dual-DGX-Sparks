@@ -34,6 +34,15 @@ docs/score-proxy.md:
                               inside thinking is continued once with the
                               thinking closed, and an explicit max_tokens
                               larger than the context is clamped.
+                              Every completed upstream chat completion logs
+                              one token accounting line (prompt/cached/
+                              completion/reasoning) from the usage object;
+                              streams read the usage chunk when one arrives.
+                              Opt-in duplicate tool-output collapse
+                              (PROXY_DEDUPE_TOOL_OUTPUT=1) replaces a repeated
+                              role=tool result with a marker naming the first
+                              occurrence and its byte size, leaving the first
+                              message and every non-tool message untouched.
 
 Env: PROXY_UPSTREAM (default http://localhost:8888), PROXY_PORT (8889),
 PROXY_ESCALATE, PROXY_ESCALATE_THRESHOLD (-0.35),
@@ -50,8 +59,11 @@ directory of <name>/SKILL.md or *.md skills), PROXY_SKILLS_TOP_K (3),
 PROXY_SKILLS_MIN_SIM (0.25, heuristic — calibrate per workload),
 PROXY_SKILLS_PIN (comma-separated skill names whose bodies are inlined
 instead of enumerated), PROXY_SKILLS_PIN_CHARS (4000),
-PROXY_CONTEXT_TOKENS (0 = off; model context size used to clamp an
-oversized max_tokens).
+PROXY_CONTEXT_TOKENS (0 = off; model context size; an explicit max_tokens
+is lowered to the room the prompt leaves, while a prompt that alone
+overflows is left untouched for the server to reject),
+PROXY_DEDUPE_TOOL_OUTPUT (unset = off; collapse byte-identical repeated
+role=tool results into a marker that keeps the earlier position and size).
 Stdlib only.
 """
 import ast
@@ -114,6 +126,26 @@ def _degenerate_tail(text, repeat):
     return False
 
 
+def _sse_objects(pending, chunk):
+    """Split an SSE byte stream into complete events and collect the JSON
+    payloads; returns (objects, remainder). Unparseable events are relayed by
+    the caller untouched, they just contribute nothing here."""
+    *events, pending = (pending + chunk).split(b"\n\n")
+    objects = []
+    for event in events:
+        for line in event.split(b"\n"):
+            if not line.startswith(b"data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload or payload == b"[DONE]":
+                continue
+            try:
+                objects.append(json.loads(payload))
+            except ValueError:
+                continue
+    return objects, pending
+
+
 class LoopGuard:
     """Streaming repetition detector for SSE chat responses. Raw chunks are
     relayed untouched; only delta text is kept (rolling, normalized) for
@@ -129,25 +161,17 @@ class LoopGuard:
 
     def feed(self, chunk):
         """Inspect one raw upstream chunk; True => degenerate loop detected."""
-        *events, self._pending = (self._pending + chunk).split(b"\n\n")
-        for event in events:
-            for line in event.split(b"\n"):
-                if not line.startswith(b"data:"):
-                    continue
-                payload = line[5:].strip()
-                if not payload or payload == b"[DONE]":
-                    continue
-                try:
-                    obj = json.loads(payload)
-                except ValueError:
-                    continue  # unparseable event: relay it, just don't score it
-                delta = ((obj.get("choices") or [{}])[0].get("delta") or {})
-                piece = delta.get("content") or delta.get("reasoning_content") or ""
-                if piece:
-                    self._text = (self._text
-                                  + " ".join(piece.split()).lower())[-WINDOW:]
-                    if _degenerate_tail(self._text, self.repeat):
-                        return True
+        objects, self._pending = _sse_objects(self._pending, chunk)
+        for obj in objects:
+            if not isinstance(obj, dict):
+                continue
+            delta = ((obj.get("choices") or [{}])[0].get("delta") or {})
+            piece = delta.get("content") or delta.get("reasoning_content") or ""
+            if piece:
+                self._text = (self._text
+                              + " ".join(piece.split()).lower())[-WINDOW:]
+                if _degenerate_tail(self._text, self.repeat):
+                    return True
         return False
 
     @staticmethod
@@ -160,6 +184,49 @@ class LoopGuard:
                                         "finish_reason": "stop"}],
                            "x_proxy": {"loop_guard": "cut"}})
         return f"data: {note}\n\ndata: [DONE]\n\n".encode()
+
+
+class StreamUsage:
+    """Collects the `usage` object an SSE stream carries on its last chunk.
+    Relayed bytes are untouched: usage is read out of band and logged once
+    the stream ends, so a server that reports nothing simply logs
+    'unavailable'."""
+
+    def __init__(self):
+        self._pending = b""
+        self.usage = None
+
+    def feed(self, chunk):
+        objects, self._pending = _sse_objects(self._pending, chunk)
+        for obj in objects:
+            if isinstance(obj, dict) and isinstance(obj.get("usage"), dict):
+                self.usage = obj["usage"]
+
+    def log(self):
+        log_usage(self.usage)
+
+
+def log_usage(usage):
+    """One accounting line for a completed upstream chat response. vLLM with
+    prompt-token details reports cache hits under prompt_tokens_details and
+    thinking under completion_tokens_details; flat fields are accepted too.
+    Missing counters are omitted, so the line says exactly what the server
+    reported."""
+    usage = usage if isinstance(usage, dict) else {}
+    prompt = usage.get("prompt_tokens_details") or {}
+    completion = usage.get("completion_tokens_details") or {}
+    fields = (
+        ("prompt_tokens", usage.get("prompt_tokens")),
+        ("cached_tokens", prompt.get("cached_tokens",
+                                     usage.get("cached_tokens"))),
+        ("completion_tokens", usage.get("completion_tokens")),
+        ("reasoning_tokens", completion.get("reasoning_tokens",
+                                            usage.get("reasoning_tokens"))),
+    )
+    reported = " ".join(
+        f"{name}={value}" for name, value in fields
+        if isinstance(value, int) and not isinstance(value, bool))
+    print(f"score proxy: usage {reported or 'unavailable'}", file=sys.stderr)
 
 
 def post_json(upstream, path, body, timeout=300):
@@ -780,7 +847,11 @@ def answer_room(max_tokens):
 
 
 def clamp_max_tokens(req, context_tokens):
-    """Clamp an explicit max_tokens to the context left after the prompt.
+    """Pre-send fit check: lower an explicit max_tokens to the room the
+    prompt leaves. When the prompt alone does not fit, the request is left
+    byte-identical — conversation content is never truncated here, and the
+    server's own overflow answer is more informative than a 1-token reply
+    from a silently shrunk request.
     ponytail: 4 chars/token is a heuristic; without a tokenizer the proxy can
     only under-reserve, which leaves the server's own truncation in place."""
     max_tokens = req.get("max_tokens")
@@ -789,9 +860,11 @@ def clamp_max_tokens(req, context_tokens):
     prompt = estimate_tokens(req.get("messages") or [])
     if req.get("tools"):
         prompt += estimate_tokens(req["tools"])
-    room = max(1, context_tokens - prompt)
+    room = context_tokens - prompt
     if max_tokens <= room:
         return False
+    if room < 1:
+        return False          # prompt alone overflows: let the server answer
     req["max_tokens"] = room
     return True
 
@@ -1155,6 +1228,43 @@ def canonicalize_messages(messages, strip_jitter=False):
     return out, out != messages
 
 
+DEDUPE_MIN_BYTES = 512
+DEDUPE_MARKER = ("[identical to the tool result above at message {position}; "
+                 "{size} bytes]")
+
+
+def collapse_duplicate_tool_output(req, min_bytes=DEDUPE_MIN_BYTES):
+    """Replace the content of a repeated tool result with a marker naming the
+    first occurrence's position in the message list and the payload's size in
+    bytes. Only role="tool" messages with string content of at least
+    min_bytes participate; the first occurrence and every non-tool message
+    stay byte-identical, and positions are 1-based as a transcript reads.
+    Returns how many messages were collapsed.
+    ponytail: exact bytes only — a near-duplicate diff would have to
+    paraphrase the payload, which changes what the model reads."""
+    messages = req.get("messages")
+    if not isinstance(messages, list):
+        return 0
+    first_at = {}
+    collapsed = 0
+    for position, message in enumerate(messages, 1):
+        if not isinstance(message, dict) or message.get("role") != "tool":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        raw = content.encode()
+        if len(raw) < min_bytes:
+            continue
+        earlier = first_at.setdefault(raw, position)
+        if earlier == position:
+            continue
+        message["content"] = DEDUPE_MARKER.format(position=earlier,
+                                                  size=len(raw))
+        collapsed += 1
+    return collapsed
+
+
 class CacheKeepalive(threading.Thread):
     """Re-touch APC recency during idle gaps (arXiv 2607.19214): when a
     client has been silent past the interval AND the proxy saw zero traffic
@@ -1233,19 +1343,19 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
             self._send_json(400, {"error": str(e)})
 
-    def _passthrough(self, body, guard=None):
+    def _passthrough(self, body, guard=None, usage=None):
         conn = http.client.HTTPConnection(*self.server.upstream, timeout=600)
         try:
             headers = {k: v for k, v in self.headers.items()
                        if k.lower() not in HOP_BY_HOP | {"host", "content-length"}}
             conn.request(self.command, self.path, body=body, headers=headers)
-            self._relay(conn.getresponse(), guard)
+            self._relay(conn.getresponse(), guard, usage)
         except (OSError, http.client.HTTPException):
             self._send_json(502, {"error": "upstream unreachable"})
         finally:
             conn.close()  # on a guard cut this aborts upstream generation
 
-    def _relay(self, resp, guard=None):
+    def _relay(self, resp, guard=None, usage=None):
         self.send_response(resp.status)
         for k, v in resp.getheaders():
             if k.lower() not in HOP_BY_HOP:
@@ -1257,10 +1367,14 @@ class Handler(BaseHTTPRequestHandler):
         while chunk := resp.read1(65536):
             self.wfile.write(chunk)
             self.wfile.flush()
+            if usage is not None:
+                usage.feed(chunk)
             if guard is not None and guard.feed(chunk):
                 self.wfile.write(guard.final_chunk())
                 self.wfile.flush()
                 break
+        if usage is not None:
+            usage.log()
 
     def _score(self, body):
         req = json.loads(body)
@@ -1320,6 +1434,15 @@ class Handler(BaseHTTPRequestHandler):
             if prob >= steer.threshold:
                 print(f"score proxy: tool steer prob={prob:.3f} "
                       f"force={steer.force}", file=sys.stderr)
+        if self.server.dedupe_tool_output:
+            # Off by default: this changes what the model reads, so it runs
+            # only when an operator opted in. Positions in the marker are
+            # final because every message insertion has already happened.
+            collapsed = collapse_duplicate_tool_output(req)
+            if collapsed:
+                body = json.dumps(req).encode()
+                print(f"score proxy: collapsed {collapsed} duplicate tool "
+                      f"result(s)", file=sys.stderr)
         router = self.server.router
         if router is not None and req.get("route") is not False:
             text = last_user_text(req.get("messages") or [])
@@ -1339,10 +1462,12 @@ class Handler(BaseHTTPRequestHandler):
                 if req.get("stream"):
                     guard = (LoopGuard(self.server.loop_repeat)
                              if self.server.loop_guard else None)
-                    return self._passthrough(body, guard)
+                    return self._passthrough(body, guard, StreamUsage())
                 status, resp = post_json(self.server.upstream,
                                          "/v1/chat/completions", body)
                 if isinstance(resp, dict):
+                    if status == 200:
+                        log_usage(resp.get("usage"))
                     repair_reply(resp, req, self.server.context_tokens,
                                  allow_retry=False)
                     resp["x_proxy"] = {"route": "trivial",
@@ -1359,7 +1484,7 @@ class Handler(BaseHTTPRequestHandler):
             # only the loop guard watching the deltas
             guard = (LoopGuard(self.server.loop_repeat)
                      if self.server.loop_guard else None)
-            return self._passthrough(body, guard)
+            return self._passthrough(body, guard, StreamUsage())
         if not escalate:
             return self._chat_result(req, body)
         # pass 1: thinking off, logprobs on
@@ -1373,6 +1498,7 @@ class Handler(BaseHTTPRequestHandler):
                                  json.dumps(p1).encode())
         if status != 200:
             return self._send_json(status, resp)
+        log_usage(resp.get("usage") if isinstance(resp, dict) else None)
         tokens = ((resp.get("choices") or [{}])[0].get("logprobs") or {}).get("content") or []
         vals = [t["logprob"] for t in tokens if t.get("logprob") is not None]
         mean = sum(vals) / len(vals) if vals else 0.0
@@ -1404,6 +1530,7 @@ class Handler(BaseHTTPRequestHandler):
             resp = json.loads(raw)
         except ValueError:
             return status, headers, raw, None, False
+        log_usage(resp.get("usage") if isinstance(resp, dict) else None)
         changed, retry = repair_reply(resp, req, self.server.context_tokens)
         if retry is not None:
             rstatus, _, rraw = post_buffered(
@@ -1415,6 +1542,8 @@ class Handler(BaseHTTPRequestHandler):
                     retry_resp = json.loads(rraw)
                 except ValueError:
                     pass
+            if isinstance(retry_resp, dict):
+                log_usage(retry_resp.get("usage"))
             merged = (retry_resp is not None
                       and apply_thinking_retry(resp, retry_resp, retry))
             if merged:
@@ -1458,11 +1587,13 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
                 router_timeout=2.0, tool_steer=False, tool_threshold=0.5,
                 tool_force=False, tool_top_k=8, tool_always=(),
                 skills_dir=None, skills_top_k=3, skills_min_sim=0.25,
-                skills_pin=(), skills_pin_chars=4000, context_tokens=0):
+                skills_pin=(), skills_pin_chars=4000, context_tokens=0,
+                dedupe_tool_output=False):
     u = urllib.parse.urlparse(upstream_url)
     srv = ThreadingHTTPServer(("", port), Handler)
     srv.upstream = (u.hostname, u.port or 80)
     srv.context_tokens = context_tokens
+    srv.dedupe_tool_output = dedupe_tool_output
     srv.escalate_env = escalate_env
     srv.threshold = threshold
     srv.loop_guard = loop_guard
@@ -1526,7 +1657,8 @@ def main():
         tuple(n for n in os.environ.get("PROXY_SKILLS_PIN", "").split(",")
               if n.strip()),
         int(os.environ.get("PROXY_SKILLS_PIN_CHARS", 4000)),
-        int(os.environ.get("PROXY_CONTEXT_TOKENS", 0) or 0))
+        int(os.environ.get("PROXY_CONTEXT_TOKENS", 0) or 0),
+        os.environ.get("PROXY_DEDUPE_TOOL_OUTPUT") == "1")
     print(f"score proxy on :{srv.server_port} -> "
           f"http://{srv.upstream[0]}:{srv.upstream[1]}")
     srv.serve_forever()
