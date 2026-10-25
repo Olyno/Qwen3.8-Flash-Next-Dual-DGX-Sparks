@@ -6,6 +6,7 @@ A repeatable way to find where this checkpoint loses time, as opposed to guessin
 
 - **Same harness.** Both arms run through the agent harness with the same prompt, the same `--auto-approve`, and the same wall-clock cap. One arm is `gx10/Qwen3.8-Flash-Next-NVFP4` (the local box), the other `a hosted reference model` (cloud, stronger per token, used as the reference).
 - **Same copy.** Each arm gets a byte-identical copy of the task directory, a neutral `AGENTS.md`, and no prior transcript.
+- **No artefacts from validation.** Verifying a task bed means running it, which leaves `out.jsonl`, `__pycache__` and `.pytest_cache` in the *template*. Copied into an arm, those are free hints — a stale output file is a partial answer. Clean the template after every validation run and check the copy before starting an arm. This was violated once here: the diagnosis arms were first run with `out.jsonl` from the buggy converter already present, and the runs were repeated clean.
 - **Mechanical acceptance.** `pytest`, exit codes, or a required stdout line. No model judges another model.
 - **Fresh tasks only.** A task whose tooling was built in an earlier session is not an instrument: on the Kimi-import bed, both models "solved" it by running the session importer, so the run measured the tool, not the model.
 - **One variable.** The third task below has two failures in sequence, so the trace shows *how* each model narrows the cause rather than whether it can type.
