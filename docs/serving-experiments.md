@@ -246,6 +246,26 @@ The ceiling is small anyway. Generated tokens are **3% of the tokens a session s
 
 Verdict: no default to set, and the planned trace-budget work is dropped rather than shipped unmeasured. Reopen only if a real agent trace is observed above the budget, which would show up directly in the accounting line.
 
+That condition has now been met on agent-shaped traces — see the next section. Note the two knobs are different things: `thinking_token_budget` is a sampler cap, while the template also reads `reasoning_effort` (xhigh by default, medium, low) as an instruction.
+
+## Reasoning effort does move an agent trace
+
+The same 95 prompt prefixes from a recorded agent session, replayed against the template with two effort settings. Each request is a bounded window of the recorded history (the client's compaction state is not in the transcript, so this is a reproduction, not a byte-for-byte replay); the only variable is `reasoning_effort`.
+
+| arm | completion | reasoning | wall (95 turns) |
+|---|---|---|---|
+| `low` | 65,067 | 37,981 | 2,036 s |
+| `xhigh` (template default) | 73,149 | 48,594 | 2,261 s |
+| difference | +12.4% | +27.9% | +11.1% |
+
+- **The trace shrinks by 28%** on the same prompts, and total output by 12%. On the recorded session, reasoning was 76% of all generated tokens (85,610 of 111,949), so this is the first knob that moves the dominant term rather than a rounding error.
+- **Behaviour is unchanged at the resolution measured.** Both arms chose the same tool at all 95 turns. That is a weak quality signal — it compares which tool, not whether the task succeeded — so it accepts the lever, it does not certify it.
+- **The seconds column is single-box and serial**, with the request stream waiting on each reply. It is not comparable to the decode table above, and it does not transfer to the pair.
+
+Verdict on tokens: a 28% trace reduction for no measured change in tool choice is worth carrying. It still needs an end-to-end session and the task rulers before it becomes a default, because the one thing this arm cannot show is whether a task that needs long reasoning loses accuracy.
+
+Open, and worth saying plainly: the earlier twelve-task result used a cap that never bound (mean trace 138 tokens). The recorded agent session has a **mean trace of 901 tokens**, so a 512 `thinking_token_budget` would bind on roughly half its turns. The sampler cap and the template instruction have not been compared against each other on agent traces.
+
 ## A changed re-read costs a diff, not the file
 
 A coding harness does not re-send a file after an edit; it sends a diff. The proxy can do the same, because it knows the earlier result of the same call. `PROXY_DIFF_TOOL_OUTPUT=1` sends a unified diff against the first result of that call when the content changed, and only when the diff is under half the payload.
