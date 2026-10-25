@@ -275,7 +275,29 @@ The same 95 prompt prefixes from a recorded agent session, replayed against the 
 - **Behaviour is unchanged at the resolution measured.** Both arms chose the same tool at all 95 turns. That is a weak quality signal — it compares which tool, not whether the task succeeded — so it accepts the lever, it does not certify it.
 - **The seconds column is single-box and serial**, with the request stream waiting on each reply. It is not comparable to the decode table above, and it does not transfer to the pair.
 
-Verdict on tokens: a 28% trace reduction for no measured change in tool choice is worth carrying. It still needs an end-to-end session and the task rulers before it becomes a default, because the one thing this arm cannot show is whether a task that needs long reasoning loses accuracy.
+Verdict on tokens: a 28% trace reduction for no measured change in tool choice looked worth carrying. **The agent ruler then contradicted it**, and the correction is below rather than in a footnote — the replay measured mid-session continuations, not a tool loop.
+
+## What the effort setting actually buys, on the agent ruler
+
+Same boot, same proxy, 18 tasks, five passes per arm. The three arms turn out to be three different *system prompts*, because the chat template only writes an instruction for two of the three values:
+
+| effort | system block the template emits |
+|---|---|
+| unset (or `xhigh`) | "Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives…" |
+| `medium` | **none** — the rendered prompt is the user turn only |
+| `low` | "Reasoning effort is set to low. Keep your thinking brief and focused…" |
+
+| arm | scores (5 passes) | mean | turns | reasoning |
+|---|---|---|---|---|
+| unset (xhigh text) | 15, 15, 14, 13, 13 | 14.0 | 57–60 | 1,031–1,725 |
+| `medium` (no text) | 17, 16, 15, 15, 15 | **15.6** | 54–57 | 1,236–1,507 |
+| `low` (brief text) | 13, 13 | 13.0 | 60–62 | 1,682–2,246 |
+
+- **`medium` won every paired pass**, +1 to +2 tasks, and it used the fewest turns. The xhigh instruction tells the model to validate assumptions and weigh alternatives; these tasks fail on turn caps, so that instruction spends exactly the turns the cap withholds.
+- **`low` is the worst arm on every measure**: fewer tasks than the default, and *more* reasoning than either other arm (1,682–2,246 against 1,031–1,725). "Move directly to the conclusion" produces answers that need repair, and the repair costs more than the brevity saved.
+- The 28% saving measured on replayed prompts did **not** transfer: with tools in the loop the brief instruction lengthens traces. A prompt-level effect measured without a tool loop is not a result about agents.
+
+Verdict: the instruction text is a cost, not a control. `medium` is the arm to test further, and any default must be set by the proxy (`PROXY_REASONING_EFFORT=medium`) because neither the client nor the server can express it. Five passes on a ruler that resolves ±2 tasks is a consistent direction, not a certified gain.
 
 Open, and worth saying plainly: the earlier twelve-task result used a cap that never bound (mean trace 138 tokens). The recorded agent session has a **mean trace of 901 tokens**, so a 512 `thinking_token_budget` would bind on roughly half its turns. The sampler cap and the template instruction have not been compared against each other on agent traces.
 
