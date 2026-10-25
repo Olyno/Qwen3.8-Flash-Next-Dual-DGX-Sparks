@@ -338,26 +338,27 @@ TAIL_FRAME = "Context for the request above, not a new request:\n\n"
 EDIT_TOOLS = ("write", "edit", "multiedit", "patch", "apply_patch", "str_replace")
 OBSERVE_TOOLS = ("read", "grep", "glob", "find", "bash", "ls", "list", "webfetch")
 
-EDIT_GUARD = (
-    "Before the next rewrite: no check ran between the previous edits of the "
-    "same file. Measure the failing operation (run it, time it), then make one "
-    "change and prove it does what the old code did."
+EDIT_GUARD_TEMPLATE = (
+    "{path} has been rewritten {n} times. State the hypothesis the next rewrite "
+    "tests and prove it does what the previous version did, or measure the "
+    "failing operation first instead of rewriting it again."
 )
+REWRITE_THRESHOLD = 3
 
 
-def edit_loop_paths(messages):
-    """Paths written at least twice since the last observation call."""
+def rewrite_counts(messages):
+    """How many times each path has been written in this conversation.
+
+    Cumulative on purpose: the measured pattern was four rewrites of one file
+    with a check between each, so a rule that resets on observation misses it.
+    """
     counts = {}
     for message in messages or []:
         if not isinstance(message, dict) or message.get("role") != "assistant":
             continue
         for call in message.get("tool_calls") or []:
             fn = (call or {}).get("function") or {}
-            name = (fn.get("name") or "").lower()
-            if name in OBSERVE_TOOLS:
-                counts.clear()
-                continue
-            if name not in EDIT_TOOLS:
+            if (fn.get("name") or "").lower() not in EDIT_TOOLS:
                 continue
             try:
                 args = json.loads(fn.get("arguments") or "{}")
@@ -366,7 +367,13 @@ def edit_loop_paths(messages):
             path = args.get("path") or args.get("file_path") or args.get("file")
             if isinstance(path, str) and path:
                 counts[path] = counts.get(path, 0) + 1
-    return {path: n for path, n in counts.items() if n >= 2}
+    return counts
+
+
+def edit_loop_paths(messages):
+    """Paths rewritten at least REWRITE_THRESHOLD times, with their count."""
+    return {p: n for p, n in rewrite_counts(messages).items()
+            if n >= REWRITE_THRESHOLD}
 
 
 def _append_user_tail(messages, block):
@@ -1563,16 +1570,17 @@ class Handler(BaseHTTPRequestHandler):
         if self.server.edit_guard:
             messages = req.get("messages") or []
             loops = edit_loop_paths(messages)
-            if loops and not any(isinstance(m, dict) and m.get("role") == "user"
-                                 and EDIT_GUARD[:40] in (m.get("content") or "")
-                                 for m in messages):
-                busiest = max(loops, key=loops.get)
-                _append_user_tail(messages, f"{EDIT_GUARD} ({busiest}: "
-                                            f"{loops[busiest]} rewrites)")
+            already = " ".join(str(m.get("content") or "") for m in messages
+                               if isinstance(m, dict) and m.get("role") == "user")
+            for path, count in loops.items():
+                if f"{path} has been rewritten" in already:
+                    continue
+                _append_user_tail(messages, EDIT_GUARD_TEMPLATE.format(
+                    path=path, n=count))
                 req["messages"] = messages
                 body = json.dumps(req).encode()
-                print(f"score proxy: edit-loop guard fired on {busiest} "
-                      f"({loops[busiest]} rewrites)", file=sys.stderr)
+                print(f"score proxy: edit-loop guard fired on {path} "
+                      f"({count} rewrites)", file=sys.stderr)
         if self.server.dedupe_tool_output or self.server.diff_tool_output:
             # Off by default: this changes what the model reads, so it runs
             # only when an operator opted in. Positions in the marker are

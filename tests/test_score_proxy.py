@@ -1310,27 +1310,44 @@ class EditLoopUnitTest(unittest.TestCase):
         return {"role": "assistant", "tool_calls": [
             {"function": {"name": n, "arguments": json.dumps(a)}} for n, a in calls]}
 
-    def test_two_writes_without_a_check(self):
+    def test_three_rewrites_flagged(self):
         msgs = [self.msg(("write", {"path": "q.py"})),
+                self.msg(("edit", {"path": "q.py"})),
                 self.msg(("edit", {"path": "q.py"}))]
-        self.assertEqual(score_proxy.edit_loop_paths(msgs), {"q.py": 2})
+        self.assertEqual(score_proxy.edit_loop_paths(msgs), {"q.py": 3})
 
-    def test_a_check_resets_the_streak(self):
+    def test_checks_between_rewrites_do_not_reset(self):
         msgs = [self.msg(("write", {"path": "q.py"})),
                 self.msg(("bash", {"command": "pytest -q"})),
+                self.msg(("edit", {"path": "q.py"})),
+                self.msg(("read", {"path": "q.py"})),
+                self.msg(("write", {"path": "q.py"}))]
+        self.assertEqual(score_proxy.edit_loop_paths(msgs), {"q.py": 3})
+
+    def test_two_rewrites_below_threshold(self):
+        msgs = [self.msg(("write", {"path": "q.py"})),
                 self.msg(("edit", {"path": "q.py"}))]
         self.assertEqual(score_proxy.edit_loop_paths(msgs), {})
 
     def test_different_files_do_not_count(self):
         msgs = [self.msg(("write", {"path": "a.py"})),
-                self.msg(("write", {"path": "b.py"}))]
+                self.msg(("write", {"path": "b.py"})),
+                self.msg(("write", {"path": "c.py"}))]
         self.assertEqual(score_proxy.edit_loop_paths(msgs), {})
 
-    def test_read_counts_as_a_check(self):
-        msgs = [self.msg(("write", {"path": "a.py"})),
-                self.msg(("read", {"path": "a.py"})),
-                self.msg(("edit", {"path": "a.py"}))]
-        self.assertEqual(score_proxy.edit_loop_paths(msgs), {})
+
+def three_rewrite_messages():
+    messages = [{"role": "user", "content": "fix it"}]
+    for i, name in enumerate(("write", "edit", "edit"), start=1):
+        messages.append({"role": "assistant", "tool_calls": [
+            {"id": str(i), "function": {"name": name,
+                                        "arguments": json.dumps({"path": "q.py"})}}]})
+        messages.append({"role": "tool", "tool_call_id": str(i), "content": "ok"})
+        messages.append({"role": "assistant", "tool_calls": [
+            {"id": f"b{i}", "function": {"name": "bash",
+                                         "arguments": json.dumps({"command": "pytest -q"})}}]})
+        messages.append({"role": "tool", "tool_call_id": f"b{i}", "content": "1 failed"})
+    return messages
 
 
 class EditGuardHttpTest(ProxyTestBase):
@@ -1343,23 +1360,24 @@ class EditGuardHttpTest(ProxyTestBase):
         cls.stop_stack()
 
     def test_guard_adds_one_tail(self):
-        messages = [
-            {"role": "user", "content": "fix it"},
-            {"role": "assistant", "tool_calls": [
-                {"id": "1", "function": {"name": "write",
-                                         "arguments": json.dumps({"path": "q.py"})}}]},
-            {"role": "tool", "tool_call_id": "1", "content": "ok"},
-            {"role": "assistant", "tool_calls": [
-                {"id": "2", "function": {"name": "edit",
-                                         "arguments": json.dumps({"path": "q.py"})}}]},
-            {"role": "tool", "tool_call_id": "2", "content": "ok"},
-        ]
-        self.post_chat({"model": "m", "messages": messages})
+        self.post_chat({"model": "m", "messages": three_rewrite_messages()})
         sent = json.loads(self.upstream.requests[-1][1])
         tails = [m for m in sent["messages"]
-                 if m.get("role") == "user" and "Measure the failing" in (m.get("content") or "")]
+                 if m.get("role") == "user"
+                 and "has been rewritten" in (m.get("content") or "")]
         self.assertEqual(len(tails), 1)
-        self.assertIn("q.py: 2 rewrites", tails[0]["content"])
+        self.assertIn("q.py has been rewritten 3 times", tails[0]["content"])
+
+    def test_guard_fires_once_per_path(self):
+        messages = three_rewrite_messages()
+        self.post_chat({"model": "m", "messages": messages})
+        sent = json.loads(self.upstream.requests[-1][1])
+        self.post_chat({"model": "m", "messages": sent["messages"]})
+        again = json.loads(self.upstream.requests[-1][1])
+        tails = [m for m in again["messages"]
+                 if m.get("role") == "user"
+                 and "has been rewritten" in (m.get("content") or "")]
+        self.assertEqual(len(tails), 1)
 
 
 class EditGuardOffTest(ProxyTestBase):
@@ -1372,17 +1390,7 @@ class EditGuardOffTest(ProxyTestBase):
         cls.stop_stack()
 
     def test_off_by_default(self):
-        messages = [
-            {"role": "user", "content": "fix it"},
-            {"role": "assistant", "tool_calls": [
-                {"id": "1", "function": {"name": "write",
-                                         "arguments": json.dumps({"path": "q.py"})}}]},
-            {"role": "tool", "tool_call_id": "1", "content": "ok"},
-            {"role": "assistant", "tool_calls": [
-                {"id": "2", "function": {"name": "edit",
-                                         "arguments": json.dumps({"path": "q.py"})}}]},
-            {"role": "tool", "tool_call_id": "2", "content": "ok"},
-        ]
-        self.post_chat({"model": "m", "messages": messages})
+        self.post_chat({"model": "m", "messages": three_rewrite_messages()})
         sent = json.loads(self.upstream.requests[-1][1])
-        self.assertEqual(len(sent["messages"]), 5)
+        self.assertFalse(any("has been rewritten" in str(m.get("content") or "")
+                             for m in sent["messages"]))
