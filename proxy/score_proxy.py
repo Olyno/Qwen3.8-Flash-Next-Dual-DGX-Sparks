@@ -64,9 +64,13 @@ is lowered to the room the prompt leaves, while a prompt that alone
 overflows is left untouched for the server to reject),
 PROXY_DEDUPE_TOOL_OUTPUT (unset = off; collapse byte-identical repeated
 role=tool results into a marker that keeps the earlier position and size).
+PROXY_DIFF_TOOL_OUTPUT (unset = off; when the same call returns *changed*
+content, send a unified diff against its first result instead of the whole
+payload, and only when that diff is under half the payload's size).
 Stdlib only.
 """
 import ast
+import difflib
 import hashlib
 import http.client
 import json
@@ -1235,6 +1239,11 @@ DEDUPE_MARKER = ("[identical to the tool result above at message {position}; "
 
 DEDUPE_MARKER = ("[identical to the {call} result at message {position}; "
                  "{size} bytes]")
+DIFF_HEADER = ("[diff against the {call} result at message {position}; "
+               "{old} -> {new} bytes]\n")
+DIFF_CONTEXT = 2
+DIFF_MAX_CHARS = 200_000     # above this the cost is CPU, not tokens
+DIFF_MAX_SHARE = 0.5         # a diff this large is not a saving
 
 
 def _tool_call_index(messages):
@@ -1255,28 +1264,37 @@ def _tool_call_index(messages):
     return calls
 
 
-def collapse_duplicate_tool_output(req, min_bytes=DEDUPE_MIN_BYTES):
-    """Replace a repeated *identical call*'s result with a marker naming the
-    first occurrence. A result collapses only when the call that produced it
-    is the same call — same tool, same arguments — and the payload is byte
-    for byte the same. That distinction matters twice:
+def _unified_diff(old, new):
+    return "".join(difflib.unified_diff(
+        old.splitlines(keepends=True), new.splitlines(keepends=True),
+        fromfile="before", tofile="after", n=DIFF_CONTEXT))
 
-    - A file that was updated between two reads returns different bytes, so
-      it never collapses and the model always sees the current content.
-    - Two different paths that happen to hold the same bytes are different
-      calls, so the second is delivered in full: the model asked for that
-      path and must not be told it already has it.
 
-    A result whose originating call cannot be resolved is left untouched,
-    because sameness cannot be proved. Only role="tool" messages with string
-    content of at least min_bytes participate; the first occurrence and every
-    non-tool message stay byte-identical. Returns how many were collapsed."""
+def collapse_duplicate_tool_output(req, min_bytes=DEDUPE_MIN_BYTES, diff=False):
+    """Replace a later result of the same call with a marker, or with a diff.
+
+    A result is touched only when the call that produced it repeats — same
+    tool, same arguments. What it becomes depends on the payload:
+
+    - byte-identical to the first result of that call: a marker naming it;
+    - changed, and `diff` is on: a unified diff against the first result, when
+      that diff is smaller than half the new payload. This is what a coding
+      harness gets from `git diff`, and it is the whole point: a one-line edit
+      to a 30k-token file should not cost 30k tokens again;
+    - otherwise: delivered in full.
+
+    The reference is always the *first* result of that call, which always
+    keeps its full content, so the marker and the diff both point at a message
+    the model can still read. A result whose originating call cannot be
+    resolved is left untouched, because sameness cannot be proved. Only
+    role="tool" messages with string content of at least min_bytes take part.
+    Returns how many messages were replaced."""
     messages = req.get("messages")
     if not isinstance(messages, list):
         return 0
     calls = _tool_call_index(messages)
-    first_at = {}
-    collapsed = 0
+    roots = {}
+    replaced = 0
     for position, message in enumerate(messages, 1):
         if not isinstance(message, dict) or message.get("role") != "tool":
             continue
@@ -1289,15 +1307,32 @@ def collapse_duplicate_tool_output(req, min_bytes=DEDUPE_MIN_BYTES):
         signature = calls.get(message.get("tool_call_id"))
         if signature is None:
             continue
-        earlier = first_at.setdefault((signature, raw), position)
-        if earlier == position:
-            continue
         name, arguments = signature
-        message["content"] = DEDUPE_MARKER.format(
-            call=f"{name}({arguments[:60]})", position=earlier,
-            size=len(raw))
-        collapsed += 1
-    return collapsed
+        call = f"{name}({arguments[:60]})"
+        root = roots.get(signature)
+        if root is None:
+            roots[signature] = (position, raw)
+            continue
+        root_position, root_raw = root
+        if raw == root_raw:
+            message["content"] = DEDUPE_MARKER.format(
+                call=call, position=root_position, size=len(raw))
+            replaced += 1
+            continue
+        if not diff:
+            continue
+        if len(raw) > DIFF_MAX_CHARS or len(root_raw) > DIFF_MAX_CHARS:
+            continue
+        patch = _unified_diff(root_raw.decode("utf-8", "replace"), content)
+        if not patch:
+            continue
+        blob = DIFF_HEADER.format(call=call, position=root_position,
+                                  old=len(root_raw), new=len(raw)) + patch
+        if len(blob.encode()) > DIFF_MAX_SHARE * len(raw):
+            continue
+        message["content"] = blob
+        replaced += 1
+    return replaced
 
 
 class CacheKeepalive(threading.Thread):
@@ -1469,11 +1504,12 @@ class Handler(BaseHTTPRequestHandler):
             if prob >= steer.threshold:
                 print(f"score proxy: tool steer prob={prob:.3f} "
                       f"force={steer.force}", file=sys.stderr)
-        if self.server.dedupe_tool_output:
+        if self.server.dedupe_tool_output or self.server.diff_tool_output:
             # Off by default: this changes what the model reads, so it runs
             # only when an operator opted in. Positions in the marker are
             # final because every message insertion has already happened.
-            collapsed = collapse_duplicate_tool_output(req)
+            collapsed = collapse_duplicate_tool_output(
+                req, diff=self.server.diff_tool_output)
             if collapsed:
                 body = json.dumps(req).encode()
                 print(f"score proxy: collapsed {collapsed} duplicate tool "
@@ -1623,12 +1659,13 @@ def make_server(port, upstream_url, escalate_env=False, threshold=-0.35,
                 tool_force=False, tool_top_k=8, tool_always=(),
                 skills_dir=None, skills_top_k=3, skills_min_sim=0.25,
                 skills_pin=(), skills_pin_chars=4000, context_tokens=0,
-                dedupe_tool_output=False):
+                dedupe_tool_output=False, diff_tool_output=False):
     u = urllib.parse.urlparse(upstream_url)
     srv = ThreadingHTTPServer(("", port), Handler)
     srv.upstream = (u.hostname, u.port or 80)
     srv.context_tokens = context_tokens
     srv.dedupe_tool_output = dedupe_tool_output
+    srv.diff_tool_output = diff_tool_output
     srv.escalate_env = escalate_env
     srv.threshold = threshold
     srv.loop_guard = loop_guard
@@ -1693,7 +1730,8 @@ def main():
               if n.strip()),
         int(os.environ.get("PROXY_SKILLS_PIN_CHARS", 4000)),
         int(os.environ.get("PROXY_CONTEXT_TOKENS", 0) or 0),
-        os.environ.get("PROXY_DEDUPE_TOOL_OUTPUT") == "1")
+        os.environ.get("PROXY_DEDUPE_TOOL_OUTPUT") == "1",
+        os.environ.get("PROXY_DIFF_TOOL_OUTPUT") == "1")
     print(f"score proxy on :{srv.server_port} -> "
           f"http://{srv.upstream[0]}:{srv.upstream[1]}")
     srv.serve_forever()

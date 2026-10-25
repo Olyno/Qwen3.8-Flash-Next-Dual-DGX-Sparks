@@ -1135,6 +1135,29 @@ class ToolOutputDedupeTest(unittest.TestCase):
             f'message 3; {size} bytes]')
         self.assertEqual(messages[6]["content"], self.LONG)
 
+    def test_updated_file_becomes_a_diff_when_enabled(self):
+        updated = self.LONG.replace("tool output line\n",
+                                    "tool output LINE\n", 1)
+        req = {"messages": [
+            call_message("call_1"), tool_message(self.LONG, "call_1"),
+            call_message("call_2"), tool_message(updated, "call_2")]}
+        self.assertEqual(sp.collapse_duplicate_tool_output(req, diff=True), 1)
+        content = req["messages"][3]["content"]
+        self.assertTrue(content.startswith(
+            '[diff against the read_file({"path": "a.log"}) result at '
+            'message 2;'), content[:120])
+        self.assertIn("@@", content)
+        self.assertIn("+tool output LINE", content)
+        self.assertLess(len(content.encode()), len(updated.encode()) // 2)
+
+    def test_a_change_to_everything_stays_full(self):
+        replaced = "".join(f"rewritten line {i}\n" for i in range(60))
+        req = {"messages": [
+            call_message("call_1"), tool_message(self.LONG, "call_1"),
+            call_message("call_2"), tool_message(replaced, "call_2")]}
+        self.assertEqual(sp.collapse_duplicate_tool_output(req, diff=True), 0)
+        self.assertEqual(req["messages"][3]["content"], replaced)
+
     def test_updated_file_is_not_collapsed(self):
         req = {"messages": [
             call_message("call_1"), tool_message(self.LONG, "call_1"),

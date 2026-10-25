@@ -178,6 +178,20 @@ This line is what attributes a prompt change (dedupe, layout, skills) to a
 change in prompt or cache-hit tokens on the next turn. Nothing in the
 request or response changes.
 
+## Duplicate and changed tool output
+
+`PROXY_DIFF_TOOL_OUTPUT=1` extends the collapse below to a result that
+*changed*: a second `read_file` of the same path after an edit is sent as a
+unified diff against the first result, headed by
+`[diff against the read_file({...}) result at message N; old -> new bytes]`.
+This is what a coding harness gets from `git diff` — a one-line edit to a
+30k-token file costs the diff, not the file. The diff is emitted only when it
+is smaller than half the payload, and the reference is always the first result
+of that call, which keeps its full content, so the header always points at a
+message the model can read. Off by default: it changes what the model reads,
+and the `updated_file` task exists to measure whether the model still answers
+from a diff.
+
 ## Duplicate tool-output collapse (`PROXY_DEDUPE_TOOL_OUTPUT=1`)
 
 Agent sessions re-send old tool output on every turn, and a harness that
