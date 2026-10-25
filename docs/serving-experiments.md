@@ -196,6 +196,19 @@ Two more arms were run against the same hypothesis, both negative:
 
 The conclusion the four arms support: this is not a prompting problem that a proxy can reach. The model calls tools readily and in volume; it picks the wrong one on a large file, and neither describing the right tool in the system message nor removing tools from the list changes that. The levers that remain are the tool *definitions* the client sends (names and descriptions, which the harness owns) and the model itself. Spending more proxy tokens on this is not supportable by the measurements.
 
+## The turn contract is inert on short tasks
+
+A short behavioural block (a short behavioural preamble) was measured on two scratch tasks, one run per arm, identical inputs, the only difference being whether the block was in the project's `AGENTS.md`:
+
+| bed | arm off | arm on |
+|---|---|---|
+| task states "write convert.py" | 7 turns, 6 calls, 30 s, pass | 6 turns, 6 calls, 26 s, pass |
+| task states only the goal | 5 turns, 4 calls, 17 s, pass | 5 turns, 4 calls, 16 s, pass |
+
+Nothing to gain: on a five-turn task the model already writes one script and never revisits a passed check, with or without being told. The first bed was also malformed as an experiment — its wording prescribed the one-script method, which is the behaviour the block asks for.
+
+So the block is not refuted, it is unaddressed: the session that motivated it ran 95 turns with 45 of them reconnaissance or re-verification, and nothing at five turns can distinguish. The bed that can is a long-horizon task with a real converter-and-verify loop; until that runs, no claim is made in either direction.
+
 ## Prefix caching is quantised to 1,680 tokens
 
 The engine sets its attention block size to **1,680** tokens on this configuration (`Setting attention block size to 1680` in the boot log), because one block has to hold one GDN page and the page geometry follows the draft depth (`scripts/mtp_block.py`). Prefix caching works in whole blocks, so the hit is always an integer multiple of 1,680:
