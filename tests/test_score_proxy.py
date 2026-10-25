@@ -175,8 +175,8 @@ class FakeUpstream(BaseHTTPRequestHandler):
                 "message": {"role": "assistant", "content": "thinking answer"}}]})
 
     def _sse(self, req):
-        chunks = (LOOP_CHUNKS if "loop me" in json.dumps(req["messages"])
-                  else SSE_CHUNKS)
+        loop = "loop me" in json.dumps(req["messages"])
+        chunks = LOOP_CHUNKS if loop else SSE_CHUNKS
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
@@ -184,6 +184,12 @@ class FakeUpstream(BaseHTTPRequestHandler):
             try:
                 self.wfile.write(chunk.encode())
                 self.wfile.flush()
+                # The loop-guard assertion counts events that reach the client,
+                # which is whatever one read returns. Loopback coalesces
+                # back-to-back writes, so space the loop frames out and let the
+                # guard decide on one frame at a time.
+                if loop:
+                    time.sleep(0.002)
             except (BrokenPipeError, ConnectionResetError):
                 break  # proxy loop guard cut the stream mid-write
 
