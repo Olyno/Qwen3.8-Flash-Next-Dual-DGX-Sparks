@@ -175,6 +175,8 @@ The before/after matrix runs on the same deployment for the same reason, and its
 |---|---|---|---|
 | direct to the server | **10/12** | 34,892 | `edit_value` (wrong bytes), `large_output` (turn cap) |
 | proxy, tool nudge on | **10/12** | 37,396 | `large_output`, **`count_matches`** (turn cap) |
+| proxy, nudge aimed at tool choice | **10/12** | 37,408 | `edit_value`, `large_output` |
+| proxy, tools pruned to two | **9/12** | 38,719 | `edit_value`, `large_output`, `count_matches` |
 | proxy, policy skill pinned | **11/12** | 62,947 | `large_output` |
 
 What each arm actually says:
@@ -185,7 +187,12 @@ What each arm actually says:
 
 `edit_value` fails because the write dropped the file's trailing newline while every other byte matched. That is a real defect, not a checker artefact, and it is recorded as such rather than relaxed.
 
-Next experiment, already scoped by this result: replace the "use a tool" nudge with one that names the narrowest tool, and score it on the same set. `large_output` is the task it has to move.
+Two more arms were run against the same hypothesis, both negative:
+
+- **A nudge that names the narrowest tool** ("read a file with the file-reading tool instead of executing it, search instead of reading everything") changed nothing: same score, same failure, and the trace opens identically with `run_python` pointed at a path that is a directory.
+- **Pruning the tool list to two choices** made it worse — 9/12, losing `count_matches` as well — and `large_output` still starts with `run_python`.
+
+The conclusion the four arms support: this is not a prompting problem that a proxy can reach. The model calls tools readily and in volume; it picks the wrong one on a large file, and neither describing the right tool in the system message nor removing tools from the list changes that. The levers that remain are the tool *definitions* the client sends (names and descriptions, which the harness owns) and the model itself. Spending more proxy tokens on this is not supportable by the measurements.
 
 ## Prefix caching is quantised to 1,680 tokens
 
