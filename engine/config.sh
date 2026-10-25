@@ -191,6 +191,15 @@ LOAD_DROP_CACHE="${LOAD_DROP_CACHE:-false}"
 # parallelises the host reads. Both ship in the image.
 LOAD_FORMAT="${LOAD_FORMAT:-safetensors}"
 [[ "$LOAD_FORMAT" =~ ^(safetensors|fastsafetensors|runai_streamer)$ ]] || err "load_format must be safetensors, fastsafetensors or runai_streamer (got '$LOAD_FORMAT')"
+
+# runai_streamer read threads and its buffer ceiling in MiB. More threads read
+# faster but buffer more in RAM, which on a unified-memory device competes with
+# the weights; memory_limit is the guard that a bulk-copying loader lacked.
+LOAD_CONCURRENCY="${LOAD_CONCURRENCY:-}"
+LOAD_MEMORY_LIMIT="${LOAD_MEMORY_LIMIT:-}"
+[[ -z "$LOAD_CONCURRENCY" || "$LOAD_CONCURRENCY" =~ ^[0-9]+$ ]] || err "load_concurrency must be an integer (got '$LOAD_CONCURRENCY')"
+[[ -z "$LOAD_MEMORY_LIMIT" || "$LOAD_MEMORY_LIMIT" =~ ^-?[0-9]+$ ]] || err "load_memory_limit must be an integer (got '$LOAD_MEMORY_LIMIT')"
+[[ -z "$LOAD_CONCURRENCY$LOAD_MEMORY_LIMIT" || "$LOAD_FORMAT" == "runai_streamer" ]] || err "load_concurrency/load_memory_limit only apply to load_format: runai_streamer"
 # NVFP4 per-channel activation hooks (v0.30 lane only, debug tooling,
 # patches/patch_nvfp4_act_hooks.py): captures per-channel absmax of every
 # MoE layer's gate_up/down_proj inputs. Only fires with moe_backend:

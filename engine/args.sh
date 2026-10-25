@@ -28,6 +28,16 @@
     # lazy maps each tensor instead of reading it eagerly; it only applies to
     # the safetensors loader.
     [[ "$LOAD_FORMAT" == "safetensors" ]] && VLLM_ARGS+=("--safetensors-load-strategy" "lazy")
+    if [[ "$LOAD_FORMAT" == "runai_streamer" && -n "$LOAD_CONCURRENCY$LOAD_MEMORY_LIMIT" ]]; then
+        _loader_cfg="{"
+        [[ -n "$LOAD_CONCURRENCY" ]] && _loader_cfg+="\"concurrency\": $LOAD_CONCURRENCY"
+        if [[ -n "$LOAD_MEMORY_LIMIT" ]]; then
+            [[ "$_loader_cfg" != "{" ]] && _loader_cfg+=", "
+            _loader_cfg+="\"memory_limit\": $LOAD_MEMORY_LIMIT"
+        fi
+        _loader_cfg+="}"
+        VLLM_ARGS+=("--model-loader-extra-config" "$_loader_cfg")
+    fi
     VLLM_ARGS+=("--enable-chunked-prefill")
     VLLM_ARGS+=("--reasoning-parser" "qwen3")
     VLLM_ARGS+=("--enable-auto-tool-choice")
