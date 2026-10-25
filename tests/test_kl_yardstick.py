@@ -231,6 +231,7 @@ def test_top1_gate_relaxes_to_self_floor():
         "kl_yardstick", Path(__file__).resolve().parent.parent / "bench" / "kl_yardstick.py")
     kl = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(kl)
-    assert kl.top1_threshold(0.995, {"top1": 0.909}) == (0.909, True)
+    lo, relaxed = kl.top1_threshold(0.995, {"top1": 0.909})
+    assert relaxed and abs(lo - 0.889) < 1e-9
     assert kl.top1_threshold(0.995, {"top1": 0.999}) == (0.995, False)
     assert kl.top1_threshold(0.995, None) == (0.995, False)

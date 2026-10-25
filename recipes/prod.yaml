@@ -193,10 +193,16 @@ qsa_rope_clamp: true
 # fadvise(DONTNEED) each checkpoint shard as the loader finishes it, keeping
 # the page cache one shard deep during the load.
 load_drop_cache: true
-# Loader for the weight files. fastsafetensors copies shards on the device and
-# runai_streamer parallelises host reads; both are unmeasured here, so the
-# default stays the one every number below was taken with.
-load_format: safetensors
+# Weight loader. This checkpoint holds ~300k tensors (weight + weight_scale +
+# weight_scale_2 + input_scale per expert per layer), and the per-tensor path
+# is CPU-bound on a single core: 713-727 s of loading against a disk that
+# reads at 3.4 GB/s with iowait at zero. runai_streamer parallelises the read
+# path and measured 281-326 s on the same checkpoint (2.2x), with the 18-task
+# ruler at parity (15/14 against 15,15,14,13,13) and a larger KV pool
+# (8.5-10.2 GiB against 4.3-5.3) because it retains fewer host buffers.
+# fastsafetensors was rejected: it bulk-copies whole shards and rebooted the
+# host. Revert with load_format: safetensors.
+load_format: runai_streamer
 # Free-list block-id sort (vllm#31371 RFC port, patches/free_block_sort/):
 # freed KV blocks go back onto the free list sorted by block_id, so pops hand
 # out address-sequential blocks — contiguous ids coalesce into larger DMA

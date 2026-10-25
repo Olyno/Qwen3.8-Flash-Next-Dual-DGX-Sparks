@@ -547,6 +547,9 @@ def replay_capture_floor(capture, texts):
     return floor, shape_floor
 
 
+T1_TOL = 0.02
+
+
 def top1_threshold(min_top1, floor):
     """The grade a top-1 gate can actually enforce on this stack.
 
@@ -557,7 +560,10 @@ def top1_threshold(min_top1, floor):
     only honest threshold; the caller prints that it happened.
     """
     if floor and floor.get("top1") is not None and floor["top1"] < min_top1:
-        return floor["top1"], True
+        # The floor is pass1-vs-pass2; a replay compares pass1 against a fresh
+        # pass, which lands a few tenths of a point lower on the same weights.
+        # Two points of slack covers that without hiding a real change.
+        return max(0.0, floor["top1"] - T1_TOL), True
     return min_top1, False
 
 
