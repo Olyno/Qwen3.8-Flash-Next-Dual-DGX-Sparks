@@ -35,9 +35,21 @@ It also explains a hazard: any loader that buffers whole shards on this device c
 | `runai_streamer` | **281 s, 326 s** | **8.54–10.21 GiB** (388,174 tokens) | 15, 14 | **adopted** |
 | `fastsafetensors` | — | — | — | **rejected: rebooted the host** |
 
-- **`runai_streamer` is 2.2× faster** on the same checkpoint, and the streaming phase itself runs at 8,000–28,000 tensors/s across two cores where the default does ~400/s.
-- **It also leaves more memory for KV** — 8.5–10.2 GiB against 4.3–5.3 GiB, i.e. 388,174 tokens of cache instead of ~180–240k. Available KV is computed as `total × utilization − peak_allocated`, so this is the streamer retaining fewer host buffers, not loading fewer weights (77.04 GiB in both cases).
+- **`runai_streamer` is 2.2–2.5× faster** on the same checkpoint, and the streaming phase itself runs at 8,000–28,000 tensors/s across two cores where the default does ~400/s.
+- **It also leaves more memory for KV** — 8.5–10.2 GiB against 4.3–5.3 GiB, i.e. 388k–462k tokens of cache instead of ~180–240k. Available KV is computed as `total × utilization − peak_allocated`, so this is the streamer retaining fewer host buffers, not loading fewer weights (77.04 GiB in both cases).
 - **`fastsafetensors` took the machine down.** It bulk-copies shards on the device; with 77 GiB of weights resident and a largest shard of 51 GB, the host stopped answering ssh within two minutes and came back after a reboot. No load-time number is worth that.
+
+### Concurrency is already saturated
+
+`concurrency` maps to `RUNAI_STREAMER_CONCURRENCY`, and the loader also accepts a `memory_limit` — both are exposed as `load_concurrency` / `load_memory_limit`:
+
+| threads | load | KV after |
+|---|---|---|
+| default | 281.3 s, 283.9 s, 325.9 s | 8.5–10.2 GiB |
+| 8 (explicit) | 283.9 s | 9.74 GiB |
+| 16 | 355.3 s | 8.75 GiB |
+
+The default is already ~8 threads, and doubling them makes it **slower**. What remains is not the read: ~284 s is the per-tensor hand-off to `load_weights` after each tensor arrives.
 
 ## Does a loader change the model?
 
