@@ -101,6 +101,27 @@ def ask(url, model, prompt, max_tokens, timeout):
     return content, reasoning, time.time() - t0, d.get("usage", {})
 
 
+TOKEN_FIELDS = ("prompt_tokens", "cached_tokens", "completion_tokens",
+                "reasoning_tokens")
+
+
+def token_totals(results):
+    """Sum the token counters. A field no server reported is left out rather
+    than counted as zero, so an older result file still totals correctly."""
+    totals = {}
+    for field in TOKEN_FIELDS:
+        values = [r[field] for r in results.values() if r.get(field) is not None]
+        totals[field] = sum(values) if values else None
+    return totals
+
+
+def token_line(totals):
+    return (f"prompt {totals['prompt_tokens']} "
+            f"(cached {totals['cached_tokens'] or 0}), "
+            f"completion {totals['completion_tokens']} "
+            f"(reasoning {totals['reasoning_tokens'] or 0})")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="http://localhost:8888/v1/chat/completions")
@@ -138,6 +159,13 @@ def main():
             "seconds": round(dt, 1),
             "prompt_tokens": usage.get("prompt_tokens"),
             "completion_tokens": usage.get("completion_tokens"),
+            # The token counts are the transferable part of this run: they do
+            # not change when the model is split across ranks, so a before and
+            # after here says what a task costs even when the seconds do not.
+            "cached_tokens": (usage.get("prompt_tokens_details") or {}).get(
+                "cached_tokens"),
+            "reasoning_tokens": (usage.get("completion_tokens_details") or {}).get(
+                "reasoning_tokens"),
             "reasoning_chars": len(reasoning),
         }
         print(f"  {name:<14} {'PASS' if ok else 'FAIL'}  {dt:6.1f}s  "
@@ -147,8 +175,10 @@ def main():
 
     total = len(tasks)
     print(f"\nscore: {passed}/{total}")
+    print(f"tokens: {token_line(token_totals(results))}")
     if args.out:
-        json.dump({"passed": passed, "total": total, "results": results},
+        json.dump({"passed": passed, "total": total,
+                   "tokens": token_totals(results), "results": results},
                   open(args.out, "w"), indent=2)
         print(f"wrote {args.out}")
 
@@ -162,6 +192,14 @@ def main():
                 regressions.append(name)
             elif was is False and cur["ok"]:
                 fixes.append(name)
+        if base.get("tokens"):
+            now = token_totals(results)
+            changed = [f"{field} {now[field] - base['tokens'][field]:+d}"
+                       for field in TOKEN_FIELDS
+                       if base["tokens"].get(field) is not None
+                       and now.get(field) is not None
+                       and now[field] != base["tokens"][field]]
+            print(f"token delta: {', '.join(changed) or 'unchanged'}")
         print(f"regressions: {regressions or 'none'}")
         print(f"newly passing: {fixes or 'none'}")
         if regressions:
