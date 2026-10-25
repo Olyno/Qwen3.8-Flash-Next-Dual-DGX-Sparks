@@ -123,6 +123,25 @@ then `ABLIT=1 ./download.sh`.
 | `scripts/build_draft_vocab.py` | build a reduced MTP draft vocabulary from a corpus |
 | `bench/` | decode/prefill/long-context/MTP-acceptance benchmarks |
 
+## Measured
+
+Single box, `tensor_parallel_size = 1`, the committed recipe. Each row is reproducible from `bench/`, and each is written up in [`docs/serving-experiments.md`](docs/serving-experiments.md) with its method, its scope and its negative results.
+
+| What | Result |
+|---|---|
+| Decode, prose | 27.8 / 30.2 / 28.1 tok/s at 1k / 32k / 65k |
+| Decode, code | 37.0 / 39.7 / 38.6 tok/s |
+| Decode, copy-heavy | 61.7 / 65.7 / 62.0 tok/s |
+| TTFT | 0.53 s / 11.3 s / 22.9 s |
+| Concurrent streams | 59.9 tok/s aggregate at 4 streams, 95.1 at 8 |
+| Prefix cache, repeated prompt | 98.9% of the prompt served from cache |
+| Prefix cache, five-turn session | 64% overall, 80% by the fifth turn |
+| Tool use, 12 scored tasks | 10 of 12 |
+| Reasoning and long-context, 12 tasks | 12 of 12 |
+| Knowledge, 600 questions | 31.7% accuracy, 63.9% hallucination |
+
+Two-rank numbers are deliberately absent, and they are not extrapolations of these: step time, TTFT and concurrency all change with the second rank, while token counts do not. `docs/serving-experiments.md` states which side of that line each measurement sits on.
+
 ## Tests
 
 ```bash
