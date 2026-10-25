@@ -123,13 +123,15 @@ def fit_needle(depth, secret, url, model, max_len, max_tokens, margin=64):
     return None, None, None
 
 
-def ask(url, model, prompt, max_tokens, timeout):
-    body = json.dumps({
+def ask(url, model, prompt, max_tokens, timeout, extra=None):
+    payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": 0,
-    }).encode()
+    }
+    payload.update(extra or {})
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=body,
                                  headers={"Content-Type": "application/json"})
     t0 = time.time()
@@ -170,6 +172,10 @@ def main():
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--out")
     ap.add_argument("--compare")
+    ap.add_argument("--thinking-budget", type=int,
+                    help="cap the reasoning trace with the engine's "
+                         "thinking_token_budget; the trace is reserved before "
+                         "the answer, so this is the completion-token lever")
     ap.add_argument("--needles", default="8000,64000",
                     help="comma-separated approximate context depths, or empty to skip")
     args = ap.parse_args()
@@ -198,7 +204,9 @@ def main():
     for name, prompt, accepted in tasks:
         try:
             content, reasoning, dt, usage = ask(
-                args.url, args.model, prompt, args.max_tokens, args.timeout)
+                args.url, args.model, prompt, args.max_tokens, args.timeout,
+                {"thinking_token_budget": args.thinking_budget}
+                if args.thinking_budget is not None else None)
         except Exception as exc:                        # noqa: BLE001
             print(f"  {name:<14} ERROR {type(exc).__name__}: {exc}")
             results[name] = {"ok": False, "error": str(exc)}
@@ -228,6 +236,8 @@ def main():
 
     total = len(tasks)
     print(f"\nscore: {passed}/{total}")
+    if args.thinking_budget is not None:
+        print(f"thinking budget: {args.thinking_budget} tokens")
     print(f"tokens: {token_line(token_totals(results))}")
     if args.out:
         json.dump({"passed": passed, "total": total,
