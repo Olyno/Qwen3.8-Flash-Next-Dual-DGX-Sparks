@@ -144,6 +144,35 @@ Every shipped mechanism has its source recorded in [`docs/provenance.md`](docs/p
 
 Two-rank numbers are deliberately absent, and they are not extrapolations of these: step time, TTFT and concurrency all change with the second rank, while token counts do not. `docs/serving-experiments.md` states which side of that line each measurement sits on.
 
+## How this recipe compares to the vendor one
+
+`recipes/mia.yaml` is the vendor contract (MiaAI-Lab) shipped as-is; `recipes/prod.yaml` is this repo's default. What differs, and what the differences buy, in two tables — configuration first, then measured effect.
+
+| | `mia` (vendor contract) | `prod` (this repo) |
+|---|---|---|
+| topology | 2 nodes, TP=2 | 1 node, TP=1; at `NODES=2` the same recipe derives 262,144 context, TP=2 and 8 seqs |
+| checkpoint | `nvidia/Qwen3.8-Flash-Next-NVFP4` | local NVFP4 lean bake |
+| `max_model_len` | 262,144 | 65,536 |
+| `gpu_memory_utilization` | 0.80 | 0.72 |
+| `max_num_seqs` | 8 | 4 |
+| MTP drafts | 3 | 4 |
+| PLE n-gram table | resident on device | host mmap over ATS |
+| FP8 draft head | off | **on** |
+| FP8 target head | off | **on** |
+| reduced draft vocab (47k) | on | on |
+
+Measured on this box as A/B against the same recipe with the mechanism off, so the deltas hold regardless of topology. ms/step is the currency: under speculation `tok/s = steps/s × tokens/step`, and tokens/step moves with the *text*, not the configuration.
+
+| Change over the vendor contract | Measured | Written up in |
+|---|---|---|
+| FP8 target lm_head | **−4.0% ms/step** on copy (14.2 against 13.5-13.7 steps/s, no overlap); p99 KL 1.660 under a 1.730 self-noise floor | [serving-experiments](docs/serving-experiments.md) |
+| FP8 draft head | **−9.3 to −10.1%** ms/step at 1k, −4.9 to −9.3 at 32k, −3.1 to −5.7 at 65k | [bench-gates](docs/bench-gates.md) |
+| Adaptive verify width | **−3.1 to −4.1%** ms/step in every bucket | [bench-gates](docs/bench-gates.md) |
+| Draft head read per draft step | **1.18 GiB → 0.22 GiB** with the 47k slice | boot log, [serving-experiments](docs/serving-experiments.md) |
+| `runai_streamer` loader | load **281-326 s**, against 683-727 s for the previous loader | [load-time](docs/load-time.md) |
+
+Two things this table cannot say, and does not pretend to. It cannot give a vendor-vs-ours **absolute** throughput row, because the vendor figures are two-rank and every number here is one box — the honest single-rank/both-rank statement is that ours is the same serving lane plus the deltas above, and the two-rank record is absent until the pair is measured. And a faster step is not automatically a better model: each mechanism above passed a distribution gate first (p99 KL inside the self-noise floor), and a mechanism that fails it is recorded as rejected in [bench-gates](docs/bench-gates.md) instead of shipping.
+
 ## Tests
 
 ```bash
