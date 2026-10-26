@@ -135,6 +135,7 @@ Single box, `tensor_parallel_size = 1`, the committed recipe. Each row is reprod
 | Decode step rate, copy | 13.5-14.2 steps/s at 1k (70-74 ms/step), the row that repeats to 2% |
 | Real session, 24 spread turns (every prefix cold) | 23.0 s per turn = 19.4 s prefill + 3.6 s decode (552 s, 301k prompt tokens) |
 | Real session, 8 consecutive turns | **2.5 s per turn warm** (95% of the prompt cached, prefill 0.47 s) against 6.8 s on a cold first pass |
+| First prompt of a new content region | +13.5 to +24 s once (490-714 tok/s against a 2,271 tok/s steady cold rate); five regions in one boot each paid it |
 | TTFT | 0.53 s / 11.3 s / 22.9 s |
 | Concurrent streams | 59.9 tok/s aggregate at 4 streams, 95.1 at 8 |
 | Prefix cache, repeated prompt | 98.9% of the prompt served from cache |

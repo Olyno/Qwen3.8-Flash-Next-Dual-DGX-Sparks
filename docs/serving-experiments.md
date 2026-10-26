@@ -327,6 +327,38 @@ never-seen content. The remaining measurable lever is the cold path — the ~13 
 one-off first-prefill penalty and the ~2.1k tok/s steady-state cold prefill
 against the engine's 3.8k bench rate.
 
+### The cold penalty is per content region, not per boot
+
+Five regions, four far-apart blocks plus a single probe, all sent once in four and
+a half minutes on a boot whose warmup had finished nine minutes earlier, with
+`running` and `waiting` at 0 at every boundary:
+
+| block | first turn | first prefill | first cold tok/s | later cold turns in the block |
+|---|---|---|---|---|
+| A, turns 200-207 | 200 | 19.62 s | 643 | 2,191 / 2,611 / 2,471 |
+| B, turns 1000-1007 | 1000 | 20.45 s | 714 | 2,271 / 2,327 / 2,509 / 2,336 / 2,144 / 1,817 |
+| C, turns 2400-2407 | 2400 | 30.68 s | 490 | 2,391 / 1,919 / 1,937 / 1,972 |
+| D, turns 3300-3307 | 3300 | 18.65 s | 540 | none further cold |
+| E, turn 1500 alone | 1500 | 19.41 s | 690 | — |
+
+A boot-time warmup can only be paid once; this was paid five times. Across the 13
+non-first cold turns the median is **2,271 tok/s** (range 1,817-2,611), so each new
+region carries **+13.5 to +24 s** over the steady rate. The probe rules out
+"first request of a process": it was alone in its invocation and still cost 690
+tok/s. A control sending four *different* regions inside one invocation gives
+656 / 787 / 740 / 712 tok/s — four payments, one process.
+
+The mechanism that fits is the PLE n-gram table: 51.2 GB, mmapped with
+`MADV_RANDOM`, roughly a 4 KB fault per miss, ~19.8 MB/s at queue depth 1. A new
+region touches rows nothing has read since boot; that region's later turns reuse
+them, so they are fast even when their prefix cache misses (turns 202-204 report
+`cached 0` and still run at 2,191-2,611 tok/s). This run has no fault counters, so
+the mechanism is the leading explanation, not a measurement.
+
+For a real session the penalty lands once, at the first prompt: an in-order
+session's turns share their history, so they stay inside one region. The number
+worth measuring next is how often a real 40-turn stretch crosses a boundary.
+
 The extractor was the blocker until now. It rebuilt the transcript with
 `json.loads(json.dumps(history))` at every assistant turn — quadratic — so a 22 MB
 session ran for minutes and produced nothing. With a shallow snapshot of a history
