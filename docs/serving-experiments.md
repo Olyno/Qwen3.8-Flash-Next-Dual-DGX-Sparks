@@ -204,11 +204,37 @@ mean KL and perplexity, and the +1 task is inside a ruler that flips five of
 eighteen tasks between repeats. It stays a measured alternative, not the default:
 it also needs a second 120 GB checkpoint and a pinned image.
 
-Two instrument notes. The KL gate could not run at first because this recipe
+One instrument note. The KL gate could not run at first because this recipe
 never declared `max_logprobs`, and the engine's default of 20 refuses the
 yardstick's 64-wide request — prod carries that declaration for the same reason;
 `recipes/fp8.yaml` now does too. The fourth gate (replay of a recorded session)
-did not run: it needs an agent transcript, and none is present on the box.
+is measured on the default above; the hybrid has no replay row yet.
+
+### Composed draft vocabulary at one node: rejected by the memory envelope
+
+The 47k draft vocabulary could not be combined with the FP8-dense draft head
+before: both rewrite the same `mtp.py`, and the slice assumed BF16 rows. The
+composition now works — the slice reads the quantized head and carries its
+per-row scale, and the arm's own log confirms it:
+
+```
+MTP draft vocab: torch.float8_e4m3fn rows dequantized with their scale for the draft head.
+MTP draft vocab: 47149 of 248320 tokens (19.0%); draft lm_head shard 0.59 -> 0.22 GiB per draft step
+```
+
+It has no numbers, because it did not finish. After the weights loaded (73.2 GiB
+in 624.7 s) the engine core logged `No available shared memory broadcast block
+found in 60 seconds` five times over four minutes, then the driver returned
+`NV_ERR_NO_MEMORY` sixteen times in twenty-six seconds, the container exited 255,
+and the host rebooted. The log never reached `GPU KV cache size`, so neither
+decode nor acceptance could be measured, and the boot after the reboot restored
+the default.
+
+This is a rejection on the envelope, not on quality: the hybrid needs a second
+120 GB checkpoint and is built for the pair, and adding the slice changes the
+draft head's residency at TP=1 without buying back the dense-projection memory.
+A repeat needs either two nodes or a lower `gpu_memory_utilization`, and it costs
+another reboot if it is wrong — so it waits for the pair.
 
 ## Real-session replay, the gate whose unit is a turn
 
@@ -229,6 +255,36 @@ That is 539 prompt tokens per wall-second once the decode is included, so at the
 sizes a turn is dominated by prefill: the 669-token turn finishes in 5.5 s, the
 16k one takes 35 s. This is the row a change has to move, and the row the other
 gates' ms/step deltas get translated through.
+
+### Where the 23 s goes
+
+`send` now streams each reply, so a turn splits where the engine splits it: the
+first token marks the end of prefill, the rest is decode, and the per-request
+`cached_tokens` says how much of the prompt the prefix cache served.
+
+| | per turn | share | rate |
+|---|---|---|---|
+| prefill (time to first token) | 19.4 s | 84% | 647 prompt tok/s over 465.6 s |
+| decode | 3.6 s | 16% | 34.5 tok/s on 128 tokens |
+| wall | 23.0 s | | 552.4 s for 24 turns |
+| prefix cache | 0 of 301,344 tokens | 0% | |
+
+Prefill is the cost, and it is 4-6x slower than the same engine's measured bench
+prefill (2,550-3,850 tok/s at 100k): a 669-token turn still costs 2.1 s of prefill,
+and the per-turn prefill grows with the prompt at roughly 550 tok/s. Since decode
+lands where the arithmetic says it should, the gap is entirely in what happens
+before the first token. Named candidates, none yet separated: no prefix reuse, the
+cold PLE n-gram gathers (the 158x first-pass penalty documented under concurrency,
+which applies to every genuinely new prompt), and the 4,800-token chunk boundary
+with its per-chunk host gather.
+
+The zero cache share is a property of **this sample**, not of the server: the 24
+requests are spread across a 3,842-turn session, so they share only the system
+prefix. A consecutive window is the measurement that separates "prefill is slow"
+from "these prompts never reuse anything", and it is the next run.
+
+Sampling is even, not random (`--sample 24`), so the mix of prompt sizes is
+representative while any adjacency effect is not.
 
 The extractor was the blocker until now. It rebuilt the transcript with
 `json.loads(json.dumps(history))` at every assistant turn — quadratic — so a 22 MB

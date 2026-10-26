@@ -133,7 +133,7 @@ Single box, `tensor_parallel_size = 1`, the committed recipe. Each row is reprod
 | Decode, code | 37.0 / 39.7 / 38.6 tok/s |
 | Decode, copy-heavy | 61.7 / 65.7 / 62.0 tok/s |
 | Decode step rate, copy | 13.5-14.2 steps/s at 1k (70-74 ms/step), the row that repeats to 2% |
-| Real session, 24 replayed turns | 23.3 s per turn (5.5-35.3 s), 559 s total, 301k prompt tokens |
+| Real session, 24 replayed turns | 23.0 s per turn = **19.4 s prefill + 3.6 s decode** (552 s total, 301k prompt tokens, prefill 647 tok/s) |
 | TTFT | 0.53 s / 11.3 s / 22.9 s |
 | Concurrent streams | 59.9 tok/s aggregate at 4 streams, 95.1 at 8 |
 | Prefix cache, repeated prompt | 98.9% of the prompt served from cache |
