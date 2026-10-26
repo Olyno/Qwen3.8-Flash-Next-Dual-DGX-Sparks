@@ -24,6 +24,9 @@ yarn_enable: false
 yarn_factor: 4.0
 gpu_memory_utilization: 0.72
 max_num_batched_tokens: 8192
+# The engine caps logprobs at 20 by default, which refuses the p99-KL yardstick's
+# 64-wide request. prod.yaml declares the same value for the same reason.
+max_logprobs: 64
 long_prefill_token_threshold: 4800
 port: 8888
 master_port: 50000
