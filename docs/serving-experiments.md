@@ -119,11 +119,18 @@ engine state during it:
 - `MemAvailable` about 5.2 GB and falling
 
 That rules out KV exhaustion, preemption, admission queueing and a CUDA-graph
-fallback — none of them move. It points at the host paging under memory
-pressure, which is consistent with the pair's own dashboard (11 GPU memory
-allocation errors since boot, memory-pressure warning). Naming the exact loop
-needs a stack from a stalled worker: `py-spy` is refused here because
-`ptrace_scope` is 1 and there is no passwordless sudo, so this stays open.
+fallback — none of them move. Two explanations remain open: host paging under
+memory pressure, and something inside a single long prefill. The evidence does
+not yet separate them. Six runs of the same scenario afterwards — three at 4
+streams, three at 3 streams plus a prefill — finished in 7-24 s with disk reads
+of 1-13 MB/s, including runs with 21k major faults, so a high fault count alone
+does not predict the stall. Disk and stack sampling were added after the stalled
+runs, so neither theory has been tested against a stalled sample.
+
+Naming the loop needs a stack from a stalled worker. `py-spy` is refused here
+because `ptrace_scope` is 1 and there is no passwordless sudo, so this stays
+open; the watchdog and the per-second trace (`kv`, `running`, `waiting`,
+`MemAvailable`, major faults, disk reads) are in place for the next occurrence.
 
 ## Comparison with the published single-node reference
 
