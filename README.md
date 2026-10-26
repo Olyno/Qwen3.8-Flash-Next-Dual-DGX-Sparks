@@ -133,9 +133,9 @@ Single box, `tensor_parallel_size = 1`, the committed recipe. Each row is reprod
 | Decode, code | 37.0 / 39.7 / 38.6 tok/s |
 | Decode, copy-heavy | 61.7 / 65.7 / 62.0 tok/s |
 | Decode step rate, copy | 13.5-14.2 steps/s at 1k (70-74 ms/step), the row that repeats to 2% |
-| Real session, 24 spread turns (every prefix cold) | 23.0 s per turn = 19.4 s prefill + 3.6 s decode (552 s, 301k prompt tokens) |
+| Real session, 24 spread turns (every prefix cold) | **13.4 s per turn** = 9.7 s prefill + 3.7 s decode (321 s, 301k prompt tokens); was 23.0 s before the prefill prefetch shipped |
 | Real session, 8 consecutive turns | **2.5 s per turn warm** (95% of the prompt cached, prefill 0.47 s) against 6.8 s on a cold first pass |
-| First prompt of a new content region | +13.5 to +24 s once (490-714 tok/s against a 2,271 tok/s steady cold rate); five regions in one boot each paid it |
+| First prompt of a new content region (before the prefetch) | +13.5 to +24 s once (490-714 tok/s against a 2,271 tok/s steady cold rate); five regions in one boot each paid it. With the prefetch, the same 40-turn window has no cold turn above 7.9 s |
 | Real session, 40 consecutive turns | 9.6 s per turn; **6 turns paid the cold penalty, 28% of the wall**; at the steady cold rate the same forty would cost 275 s instead of 383 s |
 | Cold prefill with the prefetch on (same 40-turn window) | wall 284.1 → **233.3 s**, prefill −22.5%, the three 250-1,000 tok/s turns 45.6 → 20.7 s, worst prefill 17.1 → 7.9 s, major faults 121k → 40k |
 | TTFT | 0.53 s / 11.3 s / 22.9 s |

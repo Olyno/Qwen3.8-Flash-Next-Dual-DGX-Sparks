@@ -430,6 +430,28 @@ one turn had a 3,360-token prefix hit in the off arm against none in the on arm 
 both of which work against the prefetch. One run per arm, no error bars; per-turn
 jitter is about ±0.5 s, well under the effects claimed.
 
+Re-measured on the shipped default (same tree that boots), the 24-turn spread
+sample — twenty-four requests whose prefixes the server has never seen — moves the
+same way and in the mean, not only the tail:
+
+| | before the prefetch | shipped default |
+|---|---|---|
+| wall | 552.4 s | **320.8 s (−41.9%)** |
+| wall per turn | 23.0 s | **13.4 s** |
+| mean prefill | 19.4 s | **9.71 s (−50.0%)** |
+| prefill rate | 647 tok/s | **1,294 tok/s (2.0x)** |
+| mean decode | 3.6 s | 3.66 s (unchanged) |
+
+One turn in that run reported an 11,760-token cache hit because the immediately
+preceding run had served its prefix; excluding it the sample is 13.7 s per turn
+and 10.10 s mean prefill, so the conclusion does not rest on it.
+
+The tail survives as a smaller tail: the worst turn still spends 23.1 s in prefill
+for 13,107 tokens (567 tok/s), and four of twenty-four exceed 13 s while the bulk
+runs at 1.4-1.9k tok/s. On entirely cold content the path is therefore about
+1.3k tok/s against the engine's 2.3k-3.8k bench rate — that gap, and the residual
+~20 s outlier, are what is left of the cold-path problem.
+
 The extractor was the blocker until now. It rebuilt the transcript with
 `json.loads(json.dumps(history))` at every assistant turn — quadratic — so a 22 MB
 session ran for minutes and produced nothing. With a shallow snapshot of a history
