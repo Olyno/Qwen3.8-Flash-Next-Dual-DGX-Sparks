@@ -159,9 +159,9 @@ fp8_draft_head: true
 # marlin, w8a8. ON since the gate passed: p99 KL 1.660 against a 1.730
 # self-noise floor, top-1 89.60% (relaxed threshold 88.09%), perplexity
 # +0.005; decode 14.2 steps/s on copy in each of three runs against 13.5 /
-# 13.7 / 13.7 on the stock boot, so -4.0% ms/step. Its boot reported KV
-# 444,636 tokens, inside the 414-499k spread across the five clean 65,536
-# boots measured here, so no pool gain is claimed for it.
+# 13.7 / 13.7 on the stock boot, so -4.0% ms/step. Pool size is not evidence of
+# anything here: it reads 414k-579k across clean boots of the same recipe, so no
+# KV gain is claimed for the head.
 target_head_fp8: true
 # SketchSSM (arXiv 2609.33051) and SuffixReplay (arXiv 2609.33477) assessed,
 # both SKIPPED: approximate methods that fail the quality bar by design

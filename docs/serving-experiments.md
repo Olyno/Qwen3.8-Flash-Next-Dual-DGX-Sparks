@@ -63,12 +63,12 @@ loader moved bytes, not the decode loop.
 Those are inside the spread of the earlier boot, so the loader did not change
 decode throughput.
 
-**Pool-size correction.** The 368,009 above is what a container restart reports,
-not what the recipe allocates. A restart skips the launch-time checkpoint
-page-cache release, so less memory is free when the pool is sized. A clean
-`./start.sh` boot of the same recipe reports **414,389** tokens (6.32x at 65,536
-per request). Quote the clean-boot figure; the restart figure only describes a
-restarted container.
+**Pool size is not a measurement.** The figure quoted above is what a container
+restart reports, and a restart also skips the launch-time checkpoint page-cache
+release. But clean `./start.sh` boots of the *same* recipe are no more stable:
+they have reported 414,389, 422,455, 444,636, 462,784, 499,081 and 578,733 tokens
+(6.32x to 8.83x at 65,536). A 40% swing on identical configuration means pool
+size cannot rank two configurations, and no claim in this file rests on it.
 
 **The `entropy` row is not a comparable measurement.** Its content is regenerated
 per run, and three runs on one boot gave 30.0, 44.1 and 38.6 tok/s at 1k
@@ -130,9 +130,10 @@ live process.
 | prod | 65,536 | 414,389 | 6.32x |
 | gate | 131,072 | 701,991 | 5.36x |
 
-The pool grew 1.7x when the cap doubled, which is the opposite of what a
-reservation argument predicts. It is recorded as measured, not explained. A
-100k-token request is served:
+Both pool figures are single readings, and the same recipe alone swings 414-579k
+across boots, so the larger pool here is **not** attributable to the cap and is
+not claimed as one. What the gate establishes is that a 100k-token request is
+served:
 
 | run | prompt tokens | TTFT | prefill | decode | needles found |
 |---|---|---|---|---|---|
@@ -168,11 +169,10 @@ ms/step is its reciprocal and steps/s is what the engine emits:
 Copy is the row that repeats, and it moved by the same amount in every run with
 no overlap between the arms: **-4.0% ms/step**. The prose row is inside its own
 16% spread and cannot corroborate anything. The arm's boot reported KV 444,636
-tokens, inside the 414-499k spread across the five clean 65,536 boots measured
-here, so no pool gain is claimed. On the boot served by the committed recipe the
-same replay gives p99 KL 1.671 and top-1 89.72%, and copy runs 14.0 / 14.2
-steps/s, so the shipped boot reproduces the arm at +3.4 to +4.2% against the
-stock 13.5-13.7.
+tokens, but pool size swings 414-579k across clean boots of one recipe, so no
+pool gain is claimed. On the boot served by the committed recipe the same replay
+gives p99 KL 1.671 and top-1 89.72%, and copy runs 14.0 / 14.2 steps/s, so the
+shipped boot reproduces the arm at +3.4 to +4.2% against the stock 13.5-13.7.
 
 Both conditions met, so `target_head_fp8: true` is committed. The arm was booted
 from a one-key variant of the same recipe, and `engine/recipe.py` resolves the
@@ -183,7 +183,8 @@ that passed is the boot that ships.
 
 A second checkpoint, `~/models/q38-lean-hyb`: NVFP4 routed experts with FP8
 per-channel dense projections, served from its own pinned image, MTP 3 instead of
-4. Boot 863 s, no errors, KV 457,677 tokens (6.98x at 65,536).
+4. Boot 863 s, no errors. Pool size is not comparable across boots (see above), so
+the hybrid is ranked on the gates alone.
 
 | gate | shipped default | q38 |
 |---|---|---|
