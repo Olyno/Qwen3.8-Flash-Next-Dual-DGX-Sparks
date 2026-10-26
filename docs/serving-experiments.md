@@ -215,7 +215,7 @@ did not run: it needs an agent transcript, and none is present on the box.
 Three of the four gates score a bench. This one replays the prompts of a recorded
 agent session unchanged, so the unit is a turn of real work at real prompt sizes.
 
-Source: a 3,842-request agent-harness session, extracted with
+Source: a 3,842-request agent session, extracted with
 `bench/session_replay.py extract --window-tokens 12000 --sample 24`, which keeps
 the start, the middle and the end rather than the first 24 turns whose prompts all
 look alike. Prompts total 301,344 tokens (p50 13,543, range 669-16,245); every

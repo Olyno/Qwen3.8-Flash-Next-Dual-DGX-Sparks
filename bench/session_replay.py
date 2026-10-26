@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay the prompts of a recorded agent-harness session against a live endpoint.
+"""Replay the prompts of a recorded agent session against a live endpoint.
 
 Purpose: one paired instrument for the reasoning-effort question. The knob is the
 chat template's `reasoning_effort` (xhigh default, medium, low) — prompt text, not a
@@ -42,7 +42,7 @@ def _text(parts):
         if part.get("type") == "text":
             out.append(part.get("text") or "")
         elif part.get("type") == "thinking":
-            continue  # the agent harness's internal thinking parts are not valid input
+            continue  # the client's internal thinking parts are not valid input
     return "\n".join(t for t in out if t)
 
 
@@ -63,7 +63,7 @@ def _tool_calls(parts):
 def extract(path):
     """One request per recorded assistant turn, in OpenAI message shape.
 
-    the agent harness stores content as parts (thinking / text / toolCall) and tool results as
+    The session format stores content as parts (thinking / text / toolCall) and tool results as
     their own records; the endpoint wants plain assistant messages plus
     tool_calls and tool_call_id. Thinking parts are dropped: they are not valid
     input, and the point is to measure how much the model *chooses* to think.
