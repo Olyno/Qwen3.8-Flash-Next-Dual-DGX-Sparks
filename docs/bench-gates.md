@@ -50,6 +50,32 @@ moving the same way, not on that one row.
 `ple_staged_lookup` never reached a measurement: the staged forward collapsed
 the profiled KV memory, so the matrix does not exist and a SKIP is not a pass.
 
+## Each arm must prove which proxy it hit
+
+An arm that cannot name its configuration is not an arm. A stale proxy still
+holding the port, or a restart that kept the previous environment, produces two
+identical arms and a null delta that reads like evidence — this happened once
+already, when a guard arm's log was never written and its setting could not be
+confirmed after the fact.
+
+`scripts/ab_proxy_arm.sh` makes that loud. It writes the requested environment
+to `/tmp/ab/<arm>.log` **before** starting anything, starts the proxy with
+exactly that environment, then reads the environment of the process that owns
+the port (`/proc/<pid>/environ`, resolved via `ss`) and fails with exit 2 if any
+requested `KEY=VALUE` is absent or different. `--assert-only` performs the check
+against a running proxy without restarting it, which is the cheap way to
+validate an arm before a long run:
+
+```
+./scripts/ab_proxy_arm.sh guard PROXY_EDIT_GUARD=1 PROXY_REASONING_EFFORT=medium \
+    -- python3 bench/tool_tasks.py --repeat 2
+./scripts/ab_proxy_arm.sh guard PROXY_EDIT_GUARD=1 --port 8899 --assert-only
+```
+
+The negative paths are covered by `tests/test_ab_proxy_arm.py`: an unset key and
+a wrong value must both exit 2, and the log must exist with its header before
+the assertion runs.
+
 ## Report ms/step, not tok/s (A/B under speculation)
 
 Under MTP/spec decode, `tok/s = steps/s × tok/step`, and `tok/step` moves with
