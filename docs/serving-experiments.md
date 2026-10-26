@@ -106,7 +106,7 @@ shows. A `/compact` submits exactly this shape, and on two nodes
 `max_model_len` is 262,144, so one compaction can queue a prefill much larger
 than the one measured here.
 
-### An intermittent full stall (observed, cause not yet named)
+### A full stall: cold PLE n-gram rows faulted one page at a time
 
 Twice, a scenario that normally finishes in 7-10 s ran for 512 s and 315 s.
 Both times the per-second series was mostly zeros with a single small burst
@@ -119,18 +119,55 @@ engine state during it:
 - `MemAvailable` about 5.2 GB and falling
 
 That rules out KV exhaustion, preemption, admission queueing and a CUDA-graph
-fallback — none of them move. Two explanations remain open: host paging under
-memory pressure, and something inside a single long prefill. The evidence does
-not yet separate them. Six runs of the same scenario afterwards — three at 4
-streams, three at 3 streams plus a prefill — finished in 7-24 s with disk reads
-of 1-13 MB/s, including runs with 21k major faults, so a high fault count alone
-does not predict the stall. Disk and stack sampling were added after the stalled
-runs, so neither theory has been tested against a stalled sample.
+fallback — none of them move. What does move is host paging, and specifically
+the PLE n-gram table.
 
-Naming the loop needs a stack from a stalled worker. `py-spy` is refused here
-because `ptrace_scope` is 1 and there is no passwordless sudo, so this stays
-open; the watchdog and the per-second trace (`kv`, `running`, `waiting`,
-`MemAvailable`, major faults, disk reads) are in place for the next occurrence.
+The table is a 51.2 GB file mapped over ATS (`VLLM_PLE_MMAP_DIR`, with
+`MADV_RANDOM` + `FADV_RANDOM` when `VLLM_PLE_MMAP_ADVICE=1`). The GPU
+dereferences that mapping during the step, so a miss is not background work: the
+step waits for the page. Readahead is deliberately off — the patch's own comment
+says readahead comes out of the pool the GPU allocates from on GB10 — so each
+miss is a single 4 KB read. Measured on the table file: 19.8 MB/s and 4,836 IOPS
+at queue depth 1, 144.1 MB/s at 8 threads, 358.9 MB/s and 87,621 IOPS at 32. The
+stalled runs read 30-44 MB/s, which is the single-page path, not the disk's
+limit.
+
+The same scenario, same boot, same content, four passes back to back — four
+streams, 32,000-token prompt, 192 tokens each:
+
+| pass | wall | aggregate | major faults | longest decoder blackout |
+|---|---|---|---|---|
+| 1st, cold | 949.4 s | 0.7 tok/s | 2,083,194 | 528 s |
+| 2nd | 177.5 s | 6.5 tok/s | 427,385 | 89 s |
+| 3rd | 6.8 s | 152.6 tok/s | 2,554 | 0 s |
+| 4th | 6.0 s | 172.7 tok/s | 139 | 0 s |
+
+2.08 M faults is about 8 GB of pages touched; by the fourth pass the same work
+is 158× cheaper. Engine state never moved: `running` 4, `waiting` 0, preemptions
+0, `kv_cache_usage_perc` flat. A prompt whose rows were already resident ran at
+98.6 / 115.7 / 145.0 tok/s on the same boot.
+
+So the stall is not intermittent and not a scheduling artefact: it is a function
+of how cold the prompt's n-gram rows are. That also rescues the runs that were
+fine with 21k major faults — 21k is two orders of magnitude below the cold case,
+and those rows were already resident. `/compact` is the reliable trigger because
+it submits a large body of never-seen n-grams at once; any first pass over new
+content does the same, which is what an agent does constantly.
+
+This is the one-node PLE-offload lane. At two nodes `ple_offload` is off and the
+table is not routed through the mmap, so the same dashboard signature there
+still needs its own attribution — the prefill-budget arithmetic above is the
+candidate, and that lane keeps `waiting` at 0 here where the dashboard shows 7.
+
+Two fixes remain unmeasured against these numbers: `ple_staged_lookup` (host
+gather through a pinned staging buffer, so the GPU never touches the mapping;
+documented as failing three capture paths) and more page-cache headroom. The
+latter is not available on one node — `gpu_memory_utilization` 0.72 is already
+what it takes to fit weights plus pool, which is why the table is offloaded at
+all; at two nodes the halved per-rank weights leave room for it. The measured
+mitigation available today is content locality: a first pass over 32k tokens of
+new text costs roughly 8 GB of page faults at 20-40 MB/s.
+
 
 ## Comparison with the published single-node reference
 
