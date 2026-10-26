@@ -70,6 +70,61 @@ than any change worth measuring, so entropy rows from single runs — including
 the ones in the table above it — should not be used to compare configurations.
 Prose, code and copy are stable across runs and are the rows to use.
 
+## Concurrency: the stream cap, and what a long prefill does to every stream
+
+### The cap is `max_num_seqs`, not KV
+
+`max_num_seqs` is derived from the topology — 4 on one node, 8 on two — because
+the PLE offload that makes the model fit at TP=1 halves the per-rank footprint
+when a second node arrives. It is not a KV ceiling:
+
+| observation | value |
+|---|---|
+| single node, 8 concurrent requests | 4 running, the rest queued |
+| single node, 4 streams x 32k, KV peak | 0.45-0.49 of the pool |
+| two nodes, 8 running + 7 waiting | 26% of a 2.7M-token pool |
+
+Throughput at the cap is not the problem either: eight runs of four streams at
+32k prompt landed between 91 and 154 tok/s aggregate, against 27.8 tok/s for a
+single prose stream. Batching buys about 4.5x aggregate for about 1.1x per
+stream, which is what a weights-bound decode loop should do.
+
+### A long prefill starves decode (systematic)
+
+Three decoders each 32k into their turn, plus one 60k-token prefill arriving
+three seconds later. Decoder-only throughput, per second:
+
+`22 83 154 48` then `0 0 0 20 0 0 0 16 ...` for about 250 s, then `66 80 94 95
+78 76 83 118` once the prefill drains.
+
+The arithmetic is exact. A step spends its whole `max_num_batched_tokens`
+budget (8,192) on prefill, and prefill runs at about 3,850 tok/s, so that step
+takes about 2.1 s. Each decoding stream advances only its verify tokens (1 + 4
+drafts) in that step. Eight streams therefore produce roughly 40 tokens per
+2.1 s — about 19 tok/s, which is the "drops to 15 tok/s" that a busy session
+shows. A `/compact` submits exactly this shape, and on two nodes
+`max_model_len` is 262,144, so one compaction can queue a prefill much larger
+than the one measured here.
+
+### An intermittent full stall (observed, cause not yet named)
+
+Twice, a scenario that normally finishes in 7-10 s ran for 512 s and 315 s.
+Both times the per-second series was mostly zeros with a single small burst
+every few seconds — one decode step taking about 5 s instead of 77 ms. The
+engine state during it:
+
+- `num_requests_running` 4, `num_requests_waiting` 0, `num_preemptions_total` 0
+- `kv_cache_usage_perc` frozen at 0.4917 across the whole window
+- worker at 67% CPU in state R, major faults ~2,500/s against ~490/s in a healthy run
+- `MemAvailable` about 5.2 GB and falling
+
+That rules out KV exhaustion, preemption, admission queueing and a CUDA-graph
+fallback — none of them move. It points at the host paging under memory
+pressure, which is consistent with the pair's own dashboard (11 GPU memory
+allocation errors since boot, memory-pressure warning). Naming the exact loop
+needs a stack from a stalled worker: `py-spy` is refused here because
+`ptrace_scope` is 1 and there is no passwordless sudo, so this stays open.
+
 ## Comparison with the published single-node reference
 
 The upstream single-node project reports, on the same class of hardware: **48.7 tok/s, 61.5 ms per engine step, 3.00 tokens/step** for prose at one stream, with MTP 3, `MAX_NUM_SEQS=8`, BF16 recurrent state and a FULL decode graph.
