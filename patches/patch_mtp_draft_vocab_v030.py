@@ -25,7 +25,11 @@ Each delta is gated by its own env at runtime, so the two compose
 independently: draft vocab only, FP8 only, or both.
 
 Inputs:  patches/mtp_v030_patched.py.orig   (nvidia/mtp.py from the image)
-Outputs: patches/mtp_v030_patched.py
+         --input overrides it: with fp8_dense the input is the FP8-dense
+         overlay's mtp.py, whose draft lm_head is already quantized (per-row
+         scale), so the slice reads that file and not the stock extract.
+Outputs: patches/mtp_v030_patched.py (--output overrides it; the input is
+         never rewritten, so the FP8-dense overlay output stays intact)
 """
 import argparse
 import ast
@@ -280,12 +284,21 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--fp8", action="store_true",
                     help="also apply the FP8 draft-head delta (VLLM_MTP_DRAFT_HEAD_FP8)")
+    ap.add_argument("-i", "--input", default=ORIG,
+                    help="mtp.py to patch (default: the stock extract; with "
+                         "fp8_dense the FP8-dense overlay's mtp.py)")
+    ap.add_argument("-o", "--output", default=OUT,
+                    help="patched file to write (default: patches/mtp_v030_patched.py)")
     args = ap.parse_args()
-    if not os.path.isfile(ORIG):
-        sys.exit(f"ERROR: missing {ORIG} (start.sh extracts it from the image)")
-    src = open(ORIG).read()
+    if not os.path.isfile(args.input):
+        sys.exit(f"ERROR: missing {args.input} (start.sh extracts it from the image)")
+    src = open(args.input).read()
     if "_attach_draft_vocab" in src:
-        sys.exit(f"ERROR: {ORIG} is already patched")
+        sys.exit(
+            f"ERROR: {args.input} is already sliced - refusing to double-apply. "
+            "The supported order is fp8_dense (it rewrites the draft lm_head to "
+            "a quantized head) first, then mtp_draft_vocab on that output."
+        )
     draft_vocab_block, get_top_tokens = _blocks()
     if args.fp8:
         get_top_tokens = _fp8_get_top_tokens(get_top_tokens)
@@ -319,8 +332,9 @@ def main() -> None:
         ast.parse(src)
     except SyntaxError as exc:
         sys.exit(f"mtp_v030_patched: patched source does not parse: {exc}")
-    open(OUT, "w").write(src)
-    print("patched mtp_v030_patched.py" + (" (draft vocab + FP8 head)" if args.fp8 else ""))
+    open(args.output, "w").write(src)
+    print(f"patched {os.path.basename(args.output)}"
+          + (" (draft vocab + FP8 head)" if args.fp8 else ""))
 
 
 if __name__ == "__main__":

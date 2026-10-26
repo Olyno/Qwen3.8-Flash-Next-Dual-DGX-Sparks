@@ -58,8 +58,14 @@ if $DO_LAUNCH && [[ "$FP8_DENSE" == "true" && "$V030" != "true" ]]; then
     add_overlay "$OV/modelopt.py"        "$VLLM_PKG/model_executor/layers/quantization/modelopt.py"
     add_overlay "$OV/model.py"           "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/model.py"
     add_overlay "$OV/hyperconnection.py" "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/hyperconnection.py"
-    add_overlay "$OV/mtp.py"             "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/mtp.py"
-    ok "FP8-dense overlay: 4 files"
+    if [[ -n "$MTP_DRAFT_VOCAB" ]]; then
+        # Step 4e slices this quantized draft head and mounts its own output;
+        # a second overlay on the same container path would trip add_overlay.
+        ok "FP8-dense overlay: 3 files (mtp.py chains into the draft-vocab slice)"
+    else
+        add_overlay "$OV/mtp.py"         "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/mtp.py"
+        ok "FP8-dense overlay: 4 files"
+    fi
 fi
 if $DO_LAUNCH && [[ "$QSA_PROFILE" != "stock" ]]; then
     info "=== Step 4d: QSA profile overlay ($QSA_PROFILE) ==="
@@ -92,9 +98,10 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
         # FP8_PER_CHANNEL_PER_TOKEN / FP8_PB_WO natively (LINEAR_ALGOS +
         # resolve()), so its only delta is the "model." prefix candidate the
         # text-only entry point needs. All four diffs apply to the stock
-        # extracted files. MTP_DRAFT_VOCAB / FP8_DRAFT_HEAD are refused in
-        # Step 4e: their reduced head assumes a BF16 draft lm_head and this
-        # checkpoint's draft head is FP8.
+        # extracted files. MTP_DRAFT_VOCAB chains off the patched mtp.py in
+        # Step 4e (the slice reads this quantized draft head's weight rows and
+        # per-row scale); FP8_DRAFT_HEAD stays refused there, since this
+        # overlay already quantizes the draft head.
         FD="$SCRIPT_DIR/overlays/fp8dense_v030"
         NVIDIA_V030="$VLLM_PKG/models/qwen4_exp/nvidia"
         mkdir -p "$FD/orig"
@@ -107,9 +114,17 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
             cp "$FD/orig/$f.py" "$FD/$f.py"
             (cd "$FD" && git apply -p2 "$f.diff") \
                 || err "fp8dense v030: git apply $f.diff failed (image layout changed?)"
+            if [[ "$f" == "mtp" && -n "$MTP_DRAFT_VOCAB" ]]; then
+                # Step 4e slices this file and mounts the chained output.
+                continue
+            fi
             add_overlay "$FD/$f.py" "$fsrc"
         done
-        ok "FP8-dense overlay (v030): 4 files"
+        if [[ -n "$MTP_DRAFT_VOCAB" ]]; then
+            ok "FP8-dense overlay (v030): 3 files (mtp.py chains into the draft-vocab slice)"
+        else
+            ok "FP8-dense overlay (v030): 4 files"
+        fi
     fi
     info "=== Step 4c: Mamba drop_eagle_block cache-hit fix (vllm#57128, vLLM 0.32) ==="
     # Backport of vllm#57128 (patches/mamba_eagle_drop/): MambaManager's
@@ -338,25 +353,38 @@ fi
 if $DO_LAUNCH && [[ "$V030" == "true" ]] && { [[ -n "$MTP_DRAFT_VOCAB" ]] || [[ "$FP8_DRAFT_HEAD" == "true" ]]; }; then
     info "=== Step 4e: MTP draft head (vLLM 0.32) ==="
     [[ "$MTP_NUM_SPECULATIVE_TOKENS" == "0" ]] && err "MTP_DRAFT_VOCAB/FP8_DRAFT_HEAD is set but MTP_NUM_SPECULATIVE_TOKENS=0 - nothing drafts."
-    # The fp8dense checkpoint's draft lm_head is FP8; the reduced/FP8 draft
-    # head paths here assume BF16 rows (a bare F.linear on the slice dies with
-    # "addmm_cuda not implemented for Float8_e4m3fn"). Refuse the combination.
-    [[ "$FP8_DENSE" != "true" ]] || err "MTP_DRAFT_VOCAB/FP8_DRAFT_HEAD and FP8_DENSE both touch the qwen4_exp draft head, and the reduced/FP8 draft head assumes a BF16 lm_head - pick one."
     if [[ -n "$MTP_DRAFT_VOCAB" ]]; then
         [[ -f "$MTP_DRAFT_VOCAB" ]] || err "MTP_DRAFT_VOCAB file not found: $MTP_DRAFT_VOCAB"
     fi
-    extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/mtp.py" \
-                       "$SCRIPT_DIR/patches/mtp_v030_patched.py.orig"
+    # With FP8_DENSE the draft lm_head is already a quantized head (per-row
+    # scale), so the slice reads the FP8-dense overlay's mtp.py rather than the
+    # stock extract: the supported order is fp8_dense first, then the slice.
+    # FP8_DRAFT_HEAD goes the other way (it quantizes the slice itself), so it
+    # stays refused with fp8_dense instead of quantizing a quantized head.
+    DRAFT_IN="$SCRIPT_DIR/patches/mtp_v030_patched.py.orig"
+    if [[ "$FP8_DENSE" == "true" ]]; then
+        [[ "$FP8_DRAFT_HEAD" != "true" ]] \
+            || err "FP8_DRAFT_HEAD and FP8_DENSE both quantize the draft lm_head; the supported order is fp8_dense (quantized head) then mtp_draft_vocab (slice), with fp8_draft_head off - pick one."
+        DRAFT_IN="$SCRIPT_DIR/overlays/fp8dense_v030/mtp.py"
+        [[ -f "$DRAFT_IN" ]] \
+            || err "MTP_DRAFT_VOCAB + FP8_DENSE: $DRAFT_IN is missing - the supported order is fp8_dense first, then the draft-vocab slice."
+    else
+        extract_from_image "$VLLM_PKG/models/qwen4_exp/nvidia/mtp.py" \
+                           "$SCRIPT_DIR/patches/mtp_v030_patched.py.orig"
+    fi
     if [[ "$FP8_DRAFT_HEAD" == "true" ]]; then
         # One patched mtp.py carries both deltas, each gated by its own env
         # (VLLM_MTP_DRAFT_VOCAB / VLLM_MTP_DRAFT_HEAD_FP8) so they compose
         # independently. With no draft vocab the FP8 head covers the full
         # shard and hooks compute_logits; with one it quantizes the slice.
         python3 "$SCRIPT_DIR/patches/patch_mtp_draft_vocab_v030.py" --fp8 \
+            --input "$DRAFT_IN" --output "$SCRIPT_DIR/patches/mtp_v030_patched.py" \
             || err "patch_mtp_draft_vocab_v030.py --fp8 failed"
         OVERLAY_ENV+=("-e VLLM_MTP_DRAFT_HEAD_FP8=1")
     else
-        python3 "$SCRIPT_DIR/patches/patch_mtp_draft_vocab_v030.py" || err "patch_mtp_draft_vocab_v030.py failed"
+        python3 "$SCRIPT_DIR/patches/patch_mtp_draft_vocab_v030.py" \
+            --input "$DRAFT_IN" --output "$SCRIPT_DIR/patches/mtp_v030_patched.py" \
+            || err "patch_mtp_draft_vocab_v030.py failed"
     fi
     # With MTP_SKIP_PREFIX the prefix-skip block below chains off this output
     # and mounts the chained file itself (two overlays on one container path
@@ -377,12 +405,21 @@ elif $DO_LAUNCH && [[ -n "$MTP_DRAFT_VOCAB" ]]; then
     fi
     [[ -f "$MTP_DRAFT_VOCAB" ]] || err "MTP_DRAFT_VOCAB file not found: $MTP_DRAFT_VOCAB
        Build one with: python3 scripts/build_draft_vocab.py <corpus.jsonl> --out draft_vocab.txt --size 65536"
+    # Supported order: FP8-dense rewrites the draft lm_head to a quantized head
+    # first; the slice then reads that file (weight rows plus the per-row
+    # scale) and writes its own output, leaving the overlay file untouched.
+    DRAFT_IN="$SCRIPT_DIR/patches/mtp_patched.py.orig"
     if [[ "$FP8_DENSE" == "true" ]]; then
-        err "MTP_DRAFT_VOCAB and FP8_DENSE both overlay nvidia/mtp.py - pick one."
+        DRAFT_IN="$SCRIPT_DIR/overlays/fp8dense/mtp.py"
+        [[ -f "$DRAFT_IN" ]] \
+            || err "MTP_DRAFT_VOCAB + FP8_DENSE: $DRAFT_IN is missing - the supported order is fp8_dense first, then the draft-vocab slice."
+    else
+        extract_from_image "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/mtp.py" \
+                           "$SCRIPT_DIR/patches/mtp_patched.py.orig"
     fi
-    extract_from_image "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/mtp.py" \
-                       "$SCRIPT_DIR/patches/mtp_patched.py.orig"
-    python3 "$SCRIPT_DIR/patches/patch_mtp_draft_vocab.py"
+    python3 "$SCRIPT_DIR/patches/patch_mtp_draft_vocab.py" \
+        --input "$DRAFT_IN" --output "$SCRIPT_DIR/patches/mtp_patched.py" \
+        || err "patch_mtp_draft_vocab.py failed"
     add_overlay "$SCRIPT_DIR/patches/mtp_patched.py" \
                 "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/mtp.py"
     add_overlay "$MTP_DRAFT_VOCAB" "/etc/vllm-draft-vocab.txt"
