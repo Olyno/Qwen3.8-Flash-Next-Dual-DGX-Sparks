@@ -452,6 +452,48 @@ runs at 1.4-1.9k tok/s. On entirely cold content the path is therefore about
 1.3k tok/s against the engine's 2.3k-3.8k bench rate — that gap, and the residual
 ~20 s outlier, are what is left of the cold-path problem.
 
+### What the residual is, and why 16 threads is not enough
+
+First, a method correction that invalidates the "dropped cache" phrasing above for
+future work: `drop_caches` skips pages with present page-table entries, and the
+engine holds a live mmap of the 47.7 GiB table, so a drop removes only the
+unmapped part (measured: 313 MB of 7.9 GB) and a 13k request immediately after
+takes 333-912 major faults, not the ~100k a genuinely cold read costs. The tool
+that does force a miss is the per-request `cache_salt` field, which makes the
+prefix cache miss deterministically while leaving the pages alone; the dev-mode
+`POST /reset_prefix_cache` is not mounted on this build.
+
+With that instrument, the two arms of the question are 9.6x apart on an identical
+prompt — same 13,105 tokens, same routing, same gather, only page residency
+different:
+
+| run (same prompt, same tokens) | prefill | tok/s | major faults | device read |
+|---|---|---|---|---|
+| first send, rows not resident | 51.85 s | 253 | 98,132 | 1,074.8 MiB |
+| second send, rows resident | 5.39 s | 2,431 | 629 | 2.8 MiB |
+| another text, first send | 71.40 s | 184 | 232,965 | 1,901.1 MiB |
+| another text, second send | 5.38 s | 2,436 | 964 | 4.9 MiB |
+
+So the residual is (a) I/O, not the gather: whenever the rows are resident the
+engine runs at 2,430-2,770 tok/s, which is its own bench rate, and the cost tracks
+faults exactly. Cold rows cost 184-253 tok/s, or 3.9-4.3 ms per token at ~10 rows
+per token.
+
+The important number is the fault rate: 98,132 pages in 46.5 s is **2,110 faults
+per second**, and 232,965 in 66 s is 3,530 — i.e. 21-29 MB/s of device read at 16
+threads, with 0.28-0.47 ms per page. The same file measured 87,621 random-4K IOPS
+and 358 MB/s at 32 threads. The prefetch is therefore running 25-40x below what
+the device can do, and the reason is visible in its own engagement line: 131,048
+rows in 129,627 ranges, so almost every range is a single 2,560-byte row and the
+pool is latency-bound, not bandwidth-bound. The plan cannot coalesce because the
+hash scatters the rows.
+
+Two consequences. Raising the thread count is the cheap next test, since the knob
+is clamped to 32 today. And the ceiling is bounded anyway: of the 51.2 GB table
+only 7.5-10.7 GB (15-21%) can ever be resident next to a 124 GB checkpoint on
+121 GiB, so a real fix has to raise queue depth or read wider spans, not rely on
+warmth.
+
 The extractor was the blocker until now. It rebuilt the transcript with
 `json.loads(json.dumps(history))` at every assistant turn — quadratic — so a 22 MB
 session ran for minutes and produced nothing. With a shallow snapshot of a history
