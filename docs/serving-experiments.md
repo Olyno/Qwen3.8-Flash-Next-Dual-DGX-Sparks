@@ -312,6 +312,31 @@ Two numbers matter downstream:
 - **Prompt tokens outnumber generated tokens 147 to 1** over the session. Any work on the prompt side moves more than any work on the decode side, and unlike decode it behaves the same on one rank or two.
 - **The marginal prefill is 2.7-3.7k tokens per turn**, and about 2k of that is the new tool output. That is the target: a tool result is paid for once when it arrives and again in every later turn's prompt, so shrinking or de-duplicating it attacks the only part of the prompt the cache cannot absorb.
 
+## Where the wall clock goes, from the engine's own counters
+
+The harness times a task from outside; the engine's Prometheus counters say what
+it spent. One full pass of the 18-task ruler through the proxy, with a snapshot
+before and after (`bench/engine_trace.py snapshot` / `report`):
+
+| stage | mean per request | share of end to end |
+|---|---|---|
+| queue | 0.0 ms | 0.0% |
+| prefill | 520.7 ms | 21.1% |
+| decode | 1,897.7 ms | 76.8% |
+| TTFT | 575.0 ms | 23.3% |
+| inter-token | 96.7 ms | 3.9% |
+| end to end | 2,472.3 ms | 100% |
+
+55 requests, 1,079 generated tokens, 48,726 prompt tokens. The window adds up:
+55 x 2.47 s = 136 s against a harness wall time of 137.1 s with 0.2 s in tools,
+and TTFT equals queue plus prefill (575 against 520.7) to within a sample.
+
+Two things follow. Nothing waited — queue time is zero at one stream, so on this
+path the wall clock is the engine, and decode is three quarters of it; acceptance
+and step time are the levers, not scheduling. And the prompt side pays in prefill
+at about a fifth of each request even when the calls are short, which is the
+reason the per-turn marginal prefill above is worth attacking.
+
 ## Running the open question on the pair
 
 The depth question is the only entry here that needs the two-rank deployment. It is a sequential A/B, one recipe change, no code:
