@@ -388,6 +388,48 @@ forty turns would cost about **275 s instead of 383 s**. The threshold used here
 eight of those are warm turns whose small uncached remainder cannot absorb fixed
 per-request overhead — the six fully cold turns are the real set.
 
+### Prefetching the cold rows: the tail, not the plateau
+
+`ple_prefill_prefetch` (default on) has a host thread pool pread a prefill
+chunk's distinct n-gram rows before the GPU gather reads them. It is the
+capture-safe half of the staged lookup: prefill is eager, so there is no pinned
+allocation inside a device context, no side-stream join and no graph to upset. It
+joins before returning, so the pages are resident when the gather is enqueued, and
+it fails closed to the serial path on any exception.
+
+Same window (turns 1140-1179, 490,751 prompt tokens), both runs opened on a
+dropped page cache:
+
+| | off | on |
+|---|---|---|
+| wall | 284.1 s | **233.3 s** |
+| prefill total | 198.1 s | 153.6 s (−22.5%) |
+| mean prefill | 4.95 s | 3.84 s |
+| fully-cold turns | 23 | 24 |
+| cold tokens/s, whole set | 1,889 | 2,333 (1.235x) |
+| worst prefill | 17.09 s | **7.93 s** |
+| major faults during the run | +121,360 | **+40,026** |
+
+The gain is not uniform, and the split is the interesting part. Three turns that
+had fallen to 250-1,000 tok/s (1149, 1166, 1168) go from 45.64 s to 20.72 s —
+**2.20x**. The other twenty cold-in-both turns go from 2,266 to 2,445 tok/s —
+**1.079x**. So the mechanism removes the pathological tail and leaves the steady
+cold rate where it was: after this, no cold turn exceeds 7.9 s, and the
+"six cold turns carry 28% of the wall" shape is gone.
+
+The mechanism is confirmed by the fault counters rather than by the timings: the
+same content, same cold start, 121,360 major faults without the prefetch against
+40,026 with it. Prefetching into a buffer does not take major faults; the gather
+then finds the pages resident.
+
+Confounds, stated because they matter: the two runs are different boots, and
+decode moved 29.8 to 32.1 tok/s (−6.3 s of the 50.8 s wall gain), so the
+attributable figure is the **prefill delta of −44.5 s**. The two arms' starting
+page-cache floors differ (7.4 GB against 1.2 GB, both dropped the same way), and
+one turn had a 3,360-token prefix hit in the off arm against none in the on arm —
+both of which work against the prefetch. One run per arm, no error bars; per-turn
+jitter is about ±0.5 s, well under the effects claimed.
+
 The extractor was the blocker until now. It rebuilt the transcript with
 `json.loads(json.dumps(history))` at every assistant turn — quadratic — so a 22 MB
 session ran for minutes and produced nothing. With a shallow snapshot of a history

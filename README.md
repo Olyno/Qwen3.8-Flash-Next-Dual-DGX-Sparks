@@ -137,6 +137,7 @@ Single box, `tensor_parallel_size = 1`, the committed recipe. Each row is reprod
 | Real session, 8 consecutive turns | **2.5 s per turn warm** (95% of the prompt cached, prefill 0.47 s) against 6.8 s on a cold first pass |
 | First prompt of a new content region | +13.5 to +24 s once (490-714 tok/s against a 2,271 tok/s steady cold rate); five regions in one boot each paid it |
 | Real session, 40 consecutive turns | 9.6 s per turn; **6 turns paid the cold penalty, 28% of the wall**; at the steady cold rate the same forty would cost 275 s instead of 383 s |
+| Cold prefill with the prefetch on (same 40-turn window) | wall 284.1 → **233.3 s**, prefill −22.5%, the three 250-1,000 tok/s turns 45.6 → 20.7 s, worst prefill 17.1 → 7.9 s, major faults 121k → 40k |
 | TTFT | 0.53 s / 11.3 s / 22.9 s |
 | Concurrent streams | 59.9 tok/s aggregate at 4 streams, 95.1 at 8 |
 | Prefix cache, repeated prompt | 98.9% of the prompt served from cache |

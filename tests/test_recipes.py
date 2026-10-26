@@ -38,14 +38,17 @@ class TestRecipes(unittest.TestCase):
         self.assertNotIn("V030", env)
         self.assertNotIn("MODEL_PATH", env)
 
-    def test_ple_prefill_prefetch_is_off_for_every_recipe(self):
-        # The knob is derived in config.sh and no shipped recipe turns it on:
-        # the overlay's prefetch stays a deliberate arm, not a default.
+    def test_ple_prefill_prefetch_is_on_only_in_prod(self):
+        # Measured on a real 40-turn window (docs/serving-experiments.md): it
+        # removes the cold tail, so prod carries it; elsewhere it stays an arm.
         config = (REPO / "engine" / "config.sh").read_text()
         self.assertIn(
             'PLE_PREFILL_PREFETCH="${PLE_PREFILL_PREFETCH:-false}"', config
         )
+        self.assertEqual(load("prod").get("PLE_PREFILL_PREFETCH"), "true")
         for path in sorted((REPO / "recipes").glob("*.yaml")):
+            if path.stem == "prod":
+                continue
             env = load(path.stem)
             self.assertEqual(
                 env.get("PLE_PREFILL_PREFETCH", "false"),
