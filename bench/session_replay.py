@@ -77,8 +77,13 @@ def extract(path):
         role = msg.get("role")
         if role == "assistant":
             if history:
+                # Shallow list copy: every entry is a fresh dict whose payload
+                # is never mutated afterwards, so this is the whole snapshot the
+                # window needs. Serialising the history per turn instead made
+                # extraction quadratic — a 22 MB transcript spent minutes in
+                # json.dumps and produced nothing.
                 out.append({"turn": len(out) + 1,
-                            "messages": json.loads(json.dumps(history))})
+                            "messages": list(history)})
             entry = {"role": "assistant", "content": _text(msg.get("content"))}
             calls = _tool_calls(msg.get("content"))
             if calls:
