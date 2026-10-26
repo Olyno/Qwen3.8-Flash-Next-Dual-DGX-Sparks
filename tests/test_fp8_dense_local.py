@@ -79,20 +79,11 @@ class TestFp8DenseLocal(unittest.TestCase):
                                cwd=tmp, capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, f"{n}: {r.stderr}")
 
-    def test_v030_composes_draft_vocab_but_refuses_fp8_draft_head(self):
+    def test_v030_mtp_draft_head_combo_refused(self):
         sh = (REPO / "engine" / "patches.sh").read_text()
-        # fp8_dense + mtp_draft_vocab compose: the slice reads the fp8dense
-        # mtp.py (its draft head is already quantized) and mounts its output.
-        self.assertIn('DRAFT_IN="$SCRIPT_DIR/overlays/fp8dense_v030/mtp.py"', sh)
-        self.assertIn(
-            '--input "$DRAFT_IN" --output "$SCRIPT_DIR/patches/mtp_v030_patched.py"',
-            sh,
-        )
-        # the self-quantizing FP8 draft head still cannot stack on fp8_dense,
-        # and the refusal names the one supported order
-        self.assertIn('FP8_DRAFT_HEAD and FP8_DENSE both quantize the draft lm_head', sh)
-        self.assertIn("the supported order is fp8_dense (quantized head) then mtp_draft_vocab (slice)", sh)
-        # and the fp8dense block still mounts its other three files from the loop
+        # the draft-vocab/FP8 draft-head block must fail fast with fp8_dense
+        self.assertIn('[[ "$FP8_DENSE" != "true" ]] || err "MTP_DRAFT_VOCAB/FP8_DRAFT_HEAD', sh)
+        # and the fp8dense block mounts all four files from its own loop
         self.assertIn('add_overlay "$FD/$f.py" "$fsrc"', sh)
 
 

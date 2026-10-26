@@ -34,13 +34,8 @@ identically on every rank, so skipping them leaves both the local argmax and
 the cross-rank comparison unchanged.
 
 Inputs:  patches/mtp_patched.py.orig   (nvidia/mtp.py from the image)
-         --input overrides it: with fp8_dense the input is the FP8-dense
-         overlay's mtp.py (its draft lm_head is already quantized, with a
-         per-row scale), and the slice reads that file instead.
-Outputs: patches/mtp_patched.py (--output overrides it; the input file is
-         never rewritten, so the FP8-dense overlay output stays intact)
+Outputs: patches/mtp_patched.py
 """
-import argparse
 import ast
 import os
 import sys
@@ -193,7 +188,8 @@ GET_TOP_TOKENS = '''
 '''
 
 
-def patch(edits, src, out_path):
+def patch(edits):
+    src = open(ORIG).read()
     for i, (old, new) in enumerate(edits):
         count = src.count(old)
         if count != 1:
@@ -204,26 +200,16 @@ def patch(edits, src, out_path):
         ast.parse(src)
     except SyntaxError as exc:
         sys.exit(f"mtp_patched: patched source does not parse: {exc}")
-    open(out_path, "w").write(src)
-    print(f"patched {os.path.basename(out_path)}")
+    open(OUT, "w").write(src)
+    print("patched mtp_patched.py")
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("-i", "--input", default=ORIG,
-                    help="mtp.py to slice (default: the stock extract)")
-    ap.add_argument("-o", "--output", default=OUT,
-                    help="patched file to write (default: patches/mtp_patched.py)")
-    args = ap.parse_args()
-    if not os.path.isfile(args.input):
-        sys.exit(f"ERROR: missing {args.input} (start.sh extracts it from the image)")
-    src = open(args.input).read()
-    if "_attach_draft_vocab" in src:
-        sys.exit(
-            f"ERROR: {args.input} is already sliced - refusing to double-apply. "
-            "The supported order is fp8_dense (it rewrites the draft lm_head to "
-            "a quantized head) first, then mtp_draft_vocab on that output."
-        )
+    if not os.path.isfile(ORIG):
+        sys.exit(f"ERROR: missing {ORIG} (start.sh extracts it from the image)")
+    if os.path.isfile(OUT) and "_attach_draft_vocab" in open(OUT).read():
+        print("mtp_patched.py already patched")
+        return
     patch([
         # os, a logger, and the all-gather primitive the reduction needs.
         (
@@ -265,7 +251,7 @@ def main():
             "        _attach_draft_vocab(self)\n"
             "        return loaded\n",
         ),
-    ], src, args.output)
+    ])
 
 
 if __name__ == "__main__":
