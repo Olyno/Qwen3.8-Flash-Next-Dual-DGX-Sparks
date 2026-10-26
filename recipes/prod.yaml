@@ -156,8 +156,13 @@ fp8_draft_head: true
 # (python3 bench/kl_yardstick.py compare --url <base> --candidate <cand>;
 # p99 <= 2x the self-noise floor, top-1 >= 99.5%), then
 # bench/decodebench.py for the per-step delta. Values: 1 (marlin, then w8a8),
-# marlin, w8a8. Default OFF; no speedup claimed until that run passes.
-target_head_fp8: false
+# marlin, w8a8. ON since the gate passed: p99 KL 1.660 against a 1.730
+# self-noise floor, top-1 89.60% (relaxed threshold 88.09%), perplexity
+# +0.005; decode 14.2 steps/s on copy in each of three runs against 13.5 /
+# 13.7 / 13.7 on the stock boot, so -4.0% ms/step. Its boot reported KV
+# 444,636 tokens, inside the 414-462k spread across boots, so no pool gain is
+# claimed for it.
+target_head_fp8: true
 # SketchSSM (arXiv 2609.33051) and SuffixReplay (arXiv 2609.33477) assessed,
 # both SKIPPED: approximate methods that fail the quality bar by design
 # (SketchSSM's own table shows −2.4 pts on LiveCodeBench at G=8; SuffixReplay

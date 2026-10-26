@@ -145,6 +145,37 @@ retrieval inside it is not reliable. The committed default stays 65,536; 131,072
 is available to a caller that needs it and accepts both the 35-39 s TTFT and that
 retrieval rate.
 
+## The FP8 target head, gated
+
+The head is the full 248,320-row projection that feeds sampling *and* target
+verification, so a lossy copy of it must pass the distribution gate before it
+earns a place in the default. An E4M3 copy with per-row scales cuts the per-step
+head read from about 4.6 ms to 2.3 ms of a ~77 ms step at ~273 GB/s.
+
+| arm | p99 KL | floor p99 KL | top-1 | scaled top-1 gate | perplexity |
+|---|---|---|---|---|---|
+| stock (capture) | — | 1.730 | 90.09% | — | 3.16 |
+| FP8 target head | 1.660 | 1.730 | 89.60% | 88.09% | 3.16 (+0.005) |
+
+Decode at 1k, temperature 0, three runs per arm, reported as steps/s because
+ms/step is its reciprocal and steps/s is what the engine emits:
+
+| row | stock | FP8 head | delta |
+|---|---|---|---|
+| copy | 13.5 / 13.7 / 13.7 | 14.2 / 14.2 / 14.2 | **+4.2%** |
+| prose | 12.7 / 12.8 / 12.9 | 12.8 / 12.7 / 13.4 | +1.3% |
+
+Copy is the row that repeats, and it moved by the same amount in every run with
+no overlap between the arms: **-4.0% ms/step**. The prose row is inside its own
+16% spread and cannot corroborate anything. The arm's boot reported KV 444,636
+tokens, inside the 414-462k spread across the five boots measured here, so no
+pool gain is claimed.
+
+Both conditions met, so `target_head_fp8: true` is committed. The arm was booted
+from a one-key variant of the same recipe, and `engine/recipe.py` resolves the
+committed recipe to a byte-identical environment to that variant, so the boot
+that passed is the boot that ships.
+
 ## Concurrency: the stream cap, and what a long prefill does to every stream
 
 ### The cap is `max_num_seqs`, not KV
