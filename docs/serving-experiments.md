@@ -68,7 +68,48 @@ per run, and three runs on one boot gave 30.0, 44.1 and 38.6 tok/s at 1k
 (acceptance 47.1%, 66.2%, 57.1%). A single sample differs from another by more
 than any change worth measuring, so entropy rows from single runs — including
 the ones in the table above it — should not be used to compare configurations.
-Prose, code and copy are stable across runs and are the rows to use.
+Copy repeats to within 2% and is the row to judge a small change on; prose does
+not repeat as tightly as the sentence this replaces assumed — see below.
+
+## Which rows actually repeat
+
+The corpus is stable across runs: `--salt` only prepends a one-line nonce to a
+shared filler body, so every run serves the same text and the same n-grams. The
+rows are nevertheless not equally repeatable. Three runs of the same 1k matrix on
+one boot, nothing else running:
+
+| run | prose | code | copy |
+|---|---|---|---|
+| 1 | 15.5 | 28.9 | 67.4 |
+| 2 | 19.0 | 31.0 | 64.3 |
+| 3 (inside the 1k/48k pass) | 21.6 | 31.2 | 66.0 |
+
+Copy repeats to about 2%, code to about 4%, prose to about 16% — and the prose
+step rate moved with it, 8.4 to 11.5 steps/s at a fixed acceptance near 40%, so
+this is whole-engine jitter rather than text. A single prose row cannot decide a
+configuration; copy can. That also bounds the numbers above: three samples on
+this boot span 15.5-21.6 and all sit below the earlier boot's single 27.1, which
+is either a real regression or a high draw on the other side. Copy shows no such
+change (67.4 / 64.3 / 66.0 against 65.4 recorded), which argues against a general
+decode regression.
+
+Baseline on the boot that runs `runai_streamer`, 1k and 48k, both temperatures
+(`--temps 0 0.8`, 600 decode tokens):
+
+| context | content | temp 0 | temp 0.8 |
+|---|---|---|---|
+| 1k | prose | 21.6 | 19.4 |
+| 1k | code | 31.2 | 16.7 |
+| 1k | copy | 66.0 | 59.6 |
+| 48k | prose | 14.5 | 15.6 |
+| 48k | code | 22.0 | 22.7 |
+| 48k | copy | 62.8 | 63.7 |
+
+TTFT was 0.52-1.17 s at 1k and 16.9-41.8 s at 48k; acceptance held at 39-40%
+(prose), 58-64% (code) and 97-99% (copy) in every bucket, so the acceptance lever
+moved the same way as before. The 1k code row at temp 0.8 (16.7 against 31.2) is
+one sample each and falls in the jitter measured above; repeat it before reading
+anything into that pair.
 
 ## Concurrency: the stream cap, and what a long prefill does to every stream
 
