@@ -4,6 +4,26 @@ Where each shipped mechanism comes from, and what was evaluated and deliberately
 
 Every measurement referenced here is written up in `docs/serving-experiments.md`.
 
+## Checkpoint lineages
+
+Three NVFP4 builds of this model circulate, and they are not interchangeable as
+measurement subjects:
+
+| lineage | PLE dtype declaration | role here |
+|---|---|---|
+| `nvidia/Qwen3.8-Flash-Next-NVFP4` | absent from `text_config`; declared only in `quantization_config.config_groups` | base of the served checkpoint (`…-NVFP4-lean`), whose `REPRODUCTION.md` starts from `serve/serve_tp1_nvidia.sh` |
+| `RadixArk/Qwen3.8-Flash-Next-NVFP4` | `float8_e4m3fn` | default `SRC_REPO` of `scripts/fp8dense/build.sh`; the snapshot the FP8-dense converter was written and measured against |
+| `local-inference-lab/Qwen3.8-Flash-Next-NVFP4` | `nvfp4` | not present here |
+
+Two consequences. A number produced on one lineage is not a number about another:
+the FP8-dense hybrid (`q38-lean-hyb`) is built from the RadixArk snapshot by
+`scripts/fp8dense/build.sh`, so its results belong to that artifact, not to the
+served lean bake. And because the served checkpoint does not declare its PLE
+dtype at all, `scripts/detect_ple_dtype.py` recovers it from the config group
+that lists the table and passes it back as `--hf-overrides`; the boot line
+"PLE table dtype not declared by checkpoint — overriding to float8_e4m3fn" is
+that path firing.
+
 ## Adopted
 
 | Mechanism | Where it lives | Source |
