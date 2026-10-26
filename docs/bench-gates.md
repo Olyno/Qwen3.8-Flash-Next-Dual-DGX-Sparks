@@ -76,6 +76,21 @@ The negative paths are covered by `tests/test_ab_proxy_arm.py`: an unset key and
 a wrong value must both exit 2, and the log must exist with its header before
 the assertion runs.
 
+## Switching an arm is a recipe change, not an environment change
+
+`engine/config.sh` sources `.env`, then the recipe, and states the rule in its
+own header: a recipe wins over `.env` for every key it sets, and only `ABLIT` and
+`HF_TOKEN` are taken from the shell. So `TARGET_HEAD_FP8=true ./start.sh` flips
+nothing — the recipe's committed value wins and the boot comes up as the default.
+That was caught here only because the patch logs its own step
+(`=== Step 4c: FP8 target lm_head`), which never appeared in the log.
+
+The procedure: copy the recipe byte-identically, change the one key, boot with
+`RECIPE=<variant>`, then confirm the arm from the boot log's step line rather
+than from the variable that was passed. Keys a recipe does *not* set are derived
+in `config.sh` as `${VAR:-default}`, so an environment value does apply to those:
+`MAX_MODEL_LEN=131072` was verified on the live process's `--max-model-len`.
+
 ## Report ms/step, not tok/s (A/B under speculation)
 
 Under MTP/spec decode, `tok/s = steps/s × tok/step`, and `tok/step` moves with
