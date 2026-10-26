@@ -39,6 +39,31 @@ class Fp8DraftHeadAnchors(unittest.TestCase):
         self.assertIn('logger.info(\n        "MTP FP8 draft head (draft vocab):', self.src)
 
 
+class ScaleAwareSlice(unittest.TestCase):
+    """The 47k slice must carry a quantized head's per-row scale with it."""
+
+    def setUp(self):
+        self.block = (FILES / "patch_mtp_draft_vocab.py").read_text()
+
+    def test_float8_counts_as_quantized(self):
+        # float8 dtypes report is_floating_point() True, which silently made the
+        # slice keep raw FP8 rows with no scale attached.
+        self.assertIn('startswith("torch.float8")', self.block)
+        self.assertNotIn("not weight.is_floating_point()", self.block)
+
+    def test_scale_sliced_with_the_same_rows(self):
+        self.assertIn("wscale.data.index_select(0, rows)", self.block)
+        self.assertIn("wscale.shape[0] != weight.shape[0]", self.block)
+
+    def test_quantized_head_without_scale_is_refused(self):
+        self.assertIn("without a per-row", self.block)
+        self.assertIn("skipping.", self.block)
+
+    def test_slice_materialised_in_bfloat16(self):
+        self.assertIn("slice_weight.to(torch.bfloat16)", self.block)
+        self.assertIn("unsqueeze(1)", self.block)
+
+
 @unittest.skipUnless(ORIG.is_file(), "no extracted v0.32 mtp.py; boot the prod recipe once (RECIPE=prod ./start.sh)")
 class DraftVocabV030(unittest.TestCase):
     def setUp(self):

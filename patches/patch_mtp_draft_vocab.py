@@ -91,9 +91,39 @@ def _attach_draft_vocab(model: nn.Module) -> None:
     local_ids = [i for i in ids if start <= i < end]
     rows = torch.tensor([i - start for i in local_ids], dtype=torch.long,
                         device=weight.device)
+    # A quantized head keeps a per-row scale beside the rows. Slicing the weight
+    # without it yields a shard that dequantizes wrong, so the scale is sliced by
+    # the same rows; a quantized head with no usable scale is refused instead of
+    # sliced into something that cannot be interpreted.
+    # float8 dtypes report is_floating_point() == True, so classify by dtype.
+    quantized = (str(weight.dtype).startswith("torch.float8")
+                 or weight.dtype in (torch.uint8, torch.int8))
+    wscale = getattr(lm_head, "weight_scale", None)
+    if quantized:
+        if wscale is None or wscale.dim() < 1 or wscale.shape[0] != weight.shape[0]:
+            logger.warning(
+                "MTP draft vocab: quantized %s draft head without a per-row "
+                "weight_scale (%s); skipping.",
+                weight.dtype,
+                "absent" if wscale is None else f"shape {tuple(wscale.shape)}",
+            )
+            return
+    slice_weight = weight.data.index_select(0, rows).contiguous()
+    if quantized:
+        # Materialise the reduced rows in BF16 once. At 47k x hidden that is
+        # ~240 MiB, still a fifth of the full head, and it leaves the draft
+        # path below identical for quantized and BF16 checkpoints.
+        slice_weight = (
+            slice_weight.to(torch.bfloat16)
+            * wscale.data.index_select(0, rows).to(torch.bfloat16).unsqueeze(1)
+        ).contiguous()
+        logger.info(
+            "MTP draft vocab: %s rows dequantized with their scale for the draft head.",
+            weight.dtype,
+        )
     model.register_buffer(
         "_draft_lm_head_weight",
-        weight.data.index_select(0, rows).contiguous(),
+        slice_weight,
         persistent=False,
     )
     model.register_buffer(
@@ -102,9 +132,10 @@ def _attach_draft_vocab(model: nn.Module) -> None:
         persistent=False,
     )
     tp_size = int(getattr(lm_head, "tp_size", 1))
-    esize = weight.element_size()
+    esize = weight.element_size()  # the full head as stored, for the ratio
     full_gib = weight.numel() * esize / 2**30
-    cut_gib = model._draft_lm_head_weight.numel() * esize / 2**30
+    cut_gib = (model._draft_lm_head_weight.numel()
+               * model._draft_lm_head_weight.element_size() / 2**30)
     logger.info(
         "MTP draft vocab: %d of %d tokens (%.1f%%), %d on this rank of %d; "
         "draft lm_head shard %.2f -> %.2f GiB per draft step",
