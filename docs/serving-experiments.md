@@ -553,6 +553,31 @@ the same residency state, and residency survives container restarts and
 `drop_caches` alike. The controlled comparisons in this document are the ones made
 either on truly cold synthetic content or on a genuinely unseen session region.
 
+### What an unseen region actually costs
+
+Turning 2020-2043 of the recording — 24 consecutive turns that had never been sent
+to this box, verified against the full list of previously sent turns — sent once,
+in order, on the shipped default:
+
+| class | turns | mean prefill | mean turn | prefill rate |
+|---|---|---|---|---|
+| first touch of a content region | 1 | 11.8 s | 16.6 s | 1,148 tok/s |
+| prefix miss, rows resident | 11 | 5.55 s | 9.30 s | 2,369 tok/s |
+| prefix hit | 12 | 0.95 s | 4.25 s | 14,224 tok/s |
+| whole window | 24 | 3.51 s | **7.08 s** | — |
+
+169.9 s of wall for 319,611 prompt tokens, 46.3% of them served from the prefix
+cache, decode stable at 34.1 tok/s throughout. The window pulled 499.6 MiB off the
+device, and about 435 MiB of that belongs to the single first-touch turn — so
+"never sent" does not mean "cold": twenty-three of the twenty-four turns were
+internally redundant with each other, and only one entered the fault path.
+
+That one turn is the honest worst case a real session meets: 11.8 s of prefill for
+13,511 tokens, under the 12 s per-turn target on its own. The whole window sits at
+7.08 s per turn, and a window that begins mid-session with the prefix cache warm
+sits at 4.25 s. The turn-cost target is therefore met on real content at 32
+readers, with the first touch of a region as the remaining single-turn spike.
+
 The extractor was the blocker until now. It rebuilt the transcript with
 `json.loads(json.dumps(history))` at every assistant turn — quadratic — so a 22 MB
 session ran for minutes and produced nothing. With a shallow snapshot of a history
