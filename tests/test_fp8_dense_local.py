@@ -95,6 +95,37 @@ class TestFp8DenseLocal(unittest.TestCase):
         # and the fp8dense block still mounts its other three files from the loop
         self.assertIn('add_overlay "$FD/$f.py" "$fsrc"', sh)
 
+    def test_legacy_lane_composes_the_same_way(self):
+        """The non-v030 lane has its own wiring; a mutation there is silent."""
+        sh = (REPO / "engine" / "patches.sh").read_text()
+        # the slice reads the fp8dense mtp.py, never the stock extract: slicing
+        # the stock file would leave the draft head unquantized while the boot
+        # reports the composed arm
+        self.assertIn('DRAFT_IN="$SCRIPT_DIR/overlays/fp8dense/mtp.py"', sh)
+        self.assertIn(
+            '--input "$DRAFT_IN" --output "$SCRIPT_DIR/patches/mtp_patched.py"',
+            sh,
+        )
+        self.assertIn(
+            "MTP_DRAFT_VOCAB + FP8_DENSE: $DRAFT_IN is missing", sh)
+
+        # exactly one mount of the legacy mtp.py, and it sits in the else branch
+        # of the draft-vocab guard so the composed run never double-mounts
+        self.assertEqual(sh.count('add_overlay "$OV/mtp.py"'), 1)
+        guard = '''    if [[ -n "$MTP_DRAFT_VOCAB" ]]; then
+        # Step 4e slices this quantized draft head and mounts its own output;
+        # a second overlay on the same container path would trip add_overlay.
+        ok "FP8-dense overlay: 3 files (mtp.py chains into the draft-vocab slice)"
+    else
+        add_overlay "$OV/mtp.py"         "$VLLM_PKG/models/qwen3_8_flash_next/nvidia/mtp.py"'''
+        self.assertIn(guard, sh)
+
+        # the v030 loop suppresses only the mount, after regenerating the file
+        skip = '''            if [[ "$f" == "mtp" && -n "$MTP_DRAFT_VOCAB" ]]; then
+                # Step 4e slices this file and mounts the chained output.
+                continue'''
+        self.assertIn(skip, sh)
+
 
 if __name__ == "__main__":
     unittest.main()
