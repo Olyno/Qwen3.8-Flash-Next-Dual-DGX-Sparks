@@ -583,8 +583,16 @@ The decode row confirms the prefetch costs nothing elsewhere: three passes of
 13.9 / 14.4 / 14.1 steps/s (mean 14.13, spread 3.5%), which is the FP8-head
 reference band of 14.0-14.2 and still 3-6% above the 13.5-13.7 stock band. The
 mechanism only changes page residency, and the row that decides decode configs
-does not move. The KL gate was not re-run: it needs a stock-boot capture, and no
-capture on the box postdates the last reboot; it belongs to the next boot pair.
+does not move. The quality gate now exists too: two boots of the same tree, one
+with the prefetch off (proved by an absent engagement line and an absent container
+env) and one on, with the yardstick replaying the off-capture against the on-arm —
+p99 KL **1.3453 against a 1.6660 self-noise floor**, mean KL 0.1189 against
+0.1343, top-1 91.06% against the floor's 90.82%, overall PASS. Every pooled figure
+sits inside the noise the same session makes against itself. Copy decode is
+identical to one decimal across the pair: 14.1 / 14.3 steps/s in both arms, mean
+14.2. The prefetch is inert. One per-text note, recorded rather than smoothed:
+`math_md`'s p99 sits 0.06 nats above its own floor while its top-1 rises 92.57 to
+94.86 — the shape of noise, not of an arm effect.
 
 The extractor was the blocker until now. It rebuilt the transcript with
 `json.loads(json.dumps(history))` at every assistant turn — quadratic — so a 22 MB
