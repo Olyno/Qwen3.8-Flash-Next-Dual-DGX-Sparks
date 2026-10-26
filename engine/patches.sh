@@ -168,6 +168,15 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
             # The staged path also installs the per-replay run_fullgraph hook.
             OVERLAY_ENV+=("-e VLLM_PLE_STAGED_LOOKUP=1")
         fi
+        if [[ "$PLE_PREFILL_PREFETCH" == "true" ]]; then
+            # Parallel host read of each eager prefill chunk's distinct rows
+            # before the gather: the table measures 19.8 MB/s at queue depth
+            # 1 and 358 MB/s at 32. Prefill only; decode and capture never
+            # reach it, and the overlay logs the first engagement.
+            info "  prefill PLE row prefetch: $PLE_PREFETCH_THREADS reader threads"
+            OVERLAY_ENV+=("-e VLLM_PLE_PREFILL_PREFETCH=1")
+            OVERLAY_ENV+=("-e VLLM_PLE_PREFETCH_THREADS=$PLE_PREFETCH_THREADS")
+        fi
     fi
     if [[ "$QSA_FUSED_DRAFT" == "true" ]]; then
         info "=== Step 4c: QSA fused multi-step draft metadata (vLLM 0.32) ==="

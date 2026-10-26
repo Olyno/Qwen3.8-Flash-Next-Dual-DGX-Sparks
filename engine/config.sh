@@ -242,6 +242,15 @@ VERIFY_WIDTH_ADAPTIVE="${VERIFY_WIDTH_ADAPTIVE:-false}"
 # file-backed mmap (UVM faulting, and wrong bytes under reclaim pressure).
 # Off = the device kernel reads the mapping over ATS, byte-identical stock.
 PLE_STAGED_LOOKUP="${PLE_STAGED_LOOKUP:-false}"
+# Prefill PLE row prefetch (v0.32 lane, PLE_OFFLOAD only, patches/v030_ple):
+# each eager prefill chunk's distinct n-gram rows are read from the table fd
+# through a host thread pool before the gather reads them, so cold rows cost
+# queue depth instead of one 4 KiB page at a time (the table measures
+# 19.8 MB/s at depth 1, 358 MB/s at 32). Prefill only -- decode and graph
+# capture never reach it. Off = on-demand faults, as before.
+PLE_PREFILL_PREFETCH="${PLE_PREFILL_PREFETCH:-false}"
+# Host reader threads for that prefetch (clamped to [1, 32] in the overlay).
+PLE_PREFETCH_THREADS="${PLE_PREFETCH_THREADS:-16}"
 # Direct GDN prefill output (v0.32 lane only,
 # patches/patch_gdn_direct_out.py): pass core_attn_out[:num_actual_tokens]
 # to the same flashinfer prefill kernel as its output= buffer and skip the
@@ -268,6 +277,9 @@ GDN_DIRECT_OUT="${GDN_DIRECT_OUT:-false}"
 [[ "$VERIFY_WIDTH_ADAPTIVE" != "true" || "$CHUNK_EQUAL_SPLIT" != "true" ]] || err "verify_width_adaptive and chunk_equal_split both overlay v1/core/sched/scheduler.py - pick one."
 [[ "$PLE_STAGED_LOOKUP" != "true" || "$V030" == "true" ]] || err "ple_staged_lookup is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$PLE_STAGED_LOOKUP" != "true" || "$PLE_OFFLOAD" == "true" ]] || err "ple_staged_lookup needs ple_offload: it only applies to the file-backed mmap table."
+[[ "$PLE_PREFILL_PREFETCH" != "true" || "$V030" == "true" ]] || err "ple_prefill_prefetch is only supported on the vLLM 0.32 lane (v030: true)."
+[[ "$PLE_PREFILL_PREFETCH" != "true" || "$PLE_OFFLOAD" == "true" ]] || err "ple_prefill_prefetch needs ple_offload: it only applies to the file-backed mmap table."
+[[ "$PLE_PREFETCH_THREADS" =~ ^[0-9]+$ ]] || err "ple_prefetch_threads must be an integer (got: '$PLE_PREFETCH_THREADS')"
 [[ "$MTP_ADAPTIVE_DEPTH" != "true" || "$V030" == "true" ]] || err "mtp_adaptive_depth is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$MTP_SKIP_PREFIX" != "true" || "$V030" == "true" ]] || err "mtp_skip_prefix is only supported on the vLLM 0.32 lane (v030: true)."
 [[ "$MTP_SKIP_PREFIX" != "true" || "${FP8_DENSE:-false}" != "true" ]] || err "mtp_skip_prefix and fp8_dense both overlay qwen4_exp/nvidia/mtp.py - pick one."

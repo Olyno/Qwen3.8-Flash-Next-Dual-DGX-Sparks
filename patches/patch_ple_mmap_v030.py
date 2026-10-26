@@ -39,6 +39,17 @@ VLLM_PLE_STAGED_LOOKUP (default 0) host-gathers each batch's rows through a
     the one host hook a FULL graph replay still passes through; start_prefetch
     only stages on eager/prefill steps and returns untouched under capture.
     Off keeps the device kernel and is byte-identical to the stock path.
+VLLM_PLE_PREFILL_PREFETCH (default 0) reads each eager prefill chunk's
+    distinct n-gram rows from the table fd through a host thread pool before
+    the gather reads them (VLLM_PLE_PREFETCH_THREADS, clamped to [1, 32],
+    default 16). The gather is disk-latency-bound on cold rows: the table
+    serves 19.8 MB/s at queue depth 1 and 358 MB/s at 32 threads, so the
+    depth is the whole problem. Prefill only -- a captured forward, a decode
+    step, a table without a file-backed fd or a knob left off returns before
+    any host work, and any failure logs once and leaves the serial warm path
+    in charge. No pinned memory, no stream, no device synchronisation. It
+    rides the advice hook above, so VLLM_PLE_MMAP_ADVICE=0 (the page-cache
+    kill switch) removes it too.
 
 The eager prefetch hook (start_prefetch) additionally warms the page-cache
 pages of each batch's rows through coalesced preads planned by
@@ -197,6 +208,213 @@ def _ple_stage_rows(
 
 '''
 
+PREFETCH_HELPERS = '''_PLE_PREFETCH_LOG: set[tuple] = set()
+_PLE_PREFETCH_POOL = None
+_PLE_PREFETCH_POOL_THREADS = 0
+_PLE_PREFETCH_LOCK = threading.Lock()
+_PLE_PREFETCH_THREADS_MAX = 32
+_PLE_PREFETCH_SCRATCH = 1 << 18  # 256 KiB per reader, reused across ranges
+_PLE_PREFETCH_BUFFERS = threading.local()
+_PLE_MINCORE = None
+_PLE_MINCORE_MISSING = False
+
+
+def _ple_prefill_prefetch_enabled() -> bool:
+    """VLLM_PLE_PREFILL_PREFETCH: touch a prefill chunk's rows from the host.
+
+    Off by default -- the gather faults the rows in page by page. On, the
+    distinct rows of each eager prefill chunk are read from the table fd
+    through a host thread pool before the gather reads them, so the disk
+    sees queue depth instead of one 4 KiB page at a time.
+    """
+    value = os.environ.get("VLLM_PLE_PREFILL_PREFETCH", "").strip().lower()
+    return value not in ("", "0", "false", "no", "off")
+
+
+def _ple_prefetch_threads() -> int:
+    """VLLM_PLE_PREFETCH_THREADS: host readers, clamped to [1, 32].
+
+    The table measures 19.8 MB/s at queue depth 1 and 358 MB/s at 32, so the
+    depth is the whole knob; 16 leaves the device's own demand faults room.
+    """
+    try:
+        threads = int(os.environ.get("VLLM_PLE_PREFETCH_THREADS", "16"))
+    except ValueError:
+        threads = 16
+    return max(1, min(threads, _PLE_PREFETCH_THREADS_MAX))
+
+
+def _ple_prefetch_pool():
+    """The process-wide reader pool, rebuilt when the thread knob changes."""
+    global _PLE_PREFETCH_POOL, _PLE_PREFETCH_POOL_THREADS
+    threads = _ple_prefetch_threads()
+    pool = _PLE_PREFETCH_POOL
+    if pool is not None and _PLE_PREFETCH_POOL_THREADS == threads:
+        return pool, threads
+    with _PLE_PREFETCH_LOCK:
+        if _PLE_PREFETCH_POOL is None or _PLE_PREFETCH_POOL_THREADS != threads:
+            if _PLE_PREFETCH_POOL is not None:
+                _PLE_PREFETCH_POOL.shutdown(wait=False)
+            _PLE_PREFETCH_POOL = ThreadPoolExecutor(
+                max_workers=threads, thread_name_prefix="ple-prefetch"
+            )
+            _PLE_PREFETCH_POOL_THREADS = threads
+        return _PLE_PREFETCH_POOL, threads
+
+
+def _ple_prefill_step() -> bool:
+    """Whether this forward carries prefill requests.
+
+    A decode step must stay untouched, and the one prefill signal that costs
+    nothing is the step's attention metadata: vLLM sets num_prefills on it,
+    chunked prefill included. Anything unreadable -- a profiling batch, a
+    layout without that metadata -- reads as decode.
+    """
+    try:
+        attn_metadata = get_forward_context().attn_metadata
+    except Exception:
+        return False
+    groups = (
+        attn_metadata
+        if isinstance(attn_metadata, (list, tuple))
+        else (attn_metadata,)
+    )
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        for metadata in group.values():
+            if getattr(metadata, "num_prefills", 0) > 0:
+                return True
+    return False
+
+
+def _ple_prefetch_rows(ids, lo: int, hi: int) -> list:
+    """The distinct table rows an id sequence references, ascending.
+
+    Ids outside [lo, hi) belong to another ETP shard and are not read; a
+    repeated id is one row, so the disk sees each row once per chunk.
+    """
+    rows = set()
+    for value in set(ids):
+        if lo <= value < hi:
+            rows.add(value - lo)
+    return sorted(rows)
+
+
+def _ple_mincore():
+    """libc's mincore, resolved once; None when the platform lacks it."""
+    global _PLE_MINCORE, _PLE_MINCORE_MISSING
+    if _PLE_MINCORE is None and not _PLE_MINCORE_MISSING:
+        try:
+            _PLE_MINCORE = ctypes.CDLL("libc.so.6", use_errno=True).mincore
+        except Exception:
+            _PLE_MINCORE_MISSING = True
+    return _PLE_MINCORE
+
+
+def _ple_resident_pages(addr: int, length: int) -> bool:
+    """Whether every page of [addr, addr + length) is in the page cache.
+
+    One mincore syscall over the mapping's own pages, bitmap sized to them.
+    False when the probe is unavailable or the range is unmapped, so
+    residency only ever skips work -- it never changes what the gather reads.
+    """
+    if not addr or length <= 0:
+        return False
+    mincore = _ple_mincore()
+    if mincore is None:
+        return False
+    page = mmap.PAGESIZE
+    start = addr - addr % page
+    span = (addr + length - start + page - 1) // page * page
+    pages = span // page
+    vector = (ctypes.c_ubyte * pages)()
+    if mincore(ctypes.c_void_p(start), ctypes.c_size_t(span), vector):
+        return False
+    return all(vector[index] & 1 for index in range(pages))
+
+
+def _ple_scratch(size: int):
+    """A writable byte view of at least ``size`` bytes, per reader thread."""
+    view = getattr(_PLE_PREFETCH_BUFFERS, "view", None)
+    if view is None or len(view) < size:
+        view = memoryview(bytearray(size))
+        _PLE_PREFETCH_BUFFERS.view = view
+    return view
+
+
+def _ple_prefetch_slice(
+    fd, part, table_addr: int, row_bytes: int, scratch: int
+) -> None:
+    """Read one slice of planned ranges into the page cache, skipping hits.
+
+    The payload is discarded: what the gather needs is the page-cache entry.
+    A short read stops its range -- the gather falls back to its own fault.
+    """
+    view = _ple_scratch(max(scratch, row_bytes))
+    for start, length in part:
+        if _ple_resident_pages(table_addr + start, length):
+            continue
+        done = 0
+        while done < length:
+            want = min(len(view), length - done)
+            got = os.preadv(fd, [view[:want]], start + done)
+            if got <= 0:
+                break
+            done += got
+
+
+def _ple_split_ranges(ranges, parts: int) -> list:
+    """Split ordered ranges into at most ``parts`` contiguous slices."""
+    if not ranges:
+        return []
+    if parts <= 1 or len(ranges) <= 1:
+        return [ranges]
+    size = max(1, -(-len(ranges) // parts))
+    return [ranges[index : index + size] for index in range(0, len(ranges), size)]
+
+
+def _ple_prefetch_ranges(rows, row_bytes: int) -> list:
+    """The (start, length) table reads for ``rows``, coalesced by page."""
+    offsets = [row * row_bytes for row in rows]
+    return [
+        (start, length)
+        for start, length, _rows in _ple_gather_plan(offsets, row_bytes)
+    ]
+
+
+def _ple_prefetch_table(fd, ranges, table_addr: int, row_bytes: int) -> int:
+    """Touch every range from the reader pool; return the slices dispatched.
+
+    Blocks until every slice finished, so the caller can rely on the pages
+    being in cache before it enqueues the gather. Host threads only: no
+    pinned memory, no stream, no device synchronisation.
+    """
+    pool, threads = _ple_prefetch_pool()
+    pending = [
+        pool.submit(
+            _ple_prefetch_slice,
+            fd,
+            part,
+            table_addr,
+            row_bytes,
+            _PLE_PREFETCH_SCRATCH,
+        )
+        for part in _ple_split_ranges(ranges, threads)
+    ]
+    error = None
+    for future in pending:
+        try:
+            future.result()
+        except Exception as exc:  # every slice ends before we fall back
+            if error is None:
+                error = exc
+    if error is not None:
+        raise error
+    return len(pending)
+
+'''
+
 HELPERS = (
     inspect.getsource(_ple_gather_plan)
     + "\n\n"
@@ -350,10 +568,21 @@ def _ple_mmap_commit(path: str, weight: torch.Tensor, fingerprint: dict) -> None
 '''
     + "\n\n"
     + STAGED_HELPERS
+    + "\n"
+    + PREFETCH_HELPERS
 )
 
 STAGED_INIT_TAIL = '''        self._num_ngram_heads = num_ngram_heads
         self._output_dim = num_ngram_heads * self.embedding_dim
+        self._prefill_prefetch_on = (
+            self._mmap_path is not None and _ple_prefill_prefetch_enabled()
+        )
+        if _ple_prefill_prefetch_enabled() and self._mmap_path is None:
+            logger.warning(
+                "PLE %s: prefill prefetch not armed (the table has no "
+                "file-backed mapping); nothing to prefetch",
+                prefix,
+            )
         self._staged_lookup = (
             self._mmap_path is not None
             and _ple_staged_lookup_enabled()
@@ -431,7 +660,9 @@ STAGED_METHODS = '''    _PLE_MMAP_WARM_MAX = 1 << 23
 
         Ranges over _PLE_MMAP_WARM_MAX are skipped in the warm-only path;
         the staged path splits them instead, since a skipped range would
-        leave stale rows in the output.
+        leave stale rows in the output. With VLLM_PLE_PREFILL_PREFETCH a
+        prefill chunk's rows are touched in parallel first and the serial
+        warm below is skipped; a decode step never reaches that branch.
         """
         if torch.cuda.is_current_stream_capturing():
             # Host reads cannot run under capture: the ids D2H needs a
@@ -442,6 +673,10 @@ STAGED_METHODS = '''    _PLE_MMAP_WARM_MAX = 1 << 23
             self._stage_rows(ids.reshape(-1).to("cpu"))
             return
         values = ids.reshape(-1).to("cpu").tolist()
+        if self._ple_prefill_touch(values):
+            # The pool already touched this chunk's rows; the serial warm
+            # would only read them again.
+            return
         row_bytes = self._row_bytes
         lo = self.shard_indices.org_vocab_start_index
         hi = self.shard_indices.org_vocab_end_index
@@ -537,11 +772,75 @@ STAGED_METHODS = '''    _PLE_MMAP_WARM_MAX = 1 << 23
         )
 '''
 
+PREFETCH_METHODS = '''    def _ple_prefill_touch(self, ids: list) -> bool:
+        """Touch this prefill chunk's rows from a host thread pool.
+
+        VLLM_PLE_PREFILL_PREFETCH (default off). A cold prefill pays the
+        table's gather one 4 KiB page at a time at queue depth 1; spreading
+        the chunk's distinct rows over the reader pool turns that into the
+        measured multi-queue bandwidth (19.8 MB/s at depth 1, 358 MB/s at
+        32 threads). Rows this ETP rank does not own are not read, and a
+        row already in the page cache is skipped.
+
+        ``ids`` is the batch's flat id list, already on the host because the
+        caller's warm path needed it, so this path adds no device copy.
+
+        Prefill only. A captured forward, a decode step, a table without a
+        backing fd, a knob left off -- each returns False and leaves the
+        serial warm path untouched. Failures do the same, after one warning.
+        Host threads only: no pinned memory, no stream, no device sync.
+        """
+        if not self._prefill_prefetch_on or self._mmap_fd is None:
+            return False
+        if torch.cuda.is_current_stream_capturing():
+            return False
+        try:
+            if not _ple_prefill_step():
+                return False
+            rows = _ple_prefetch_rows(
+                ids,
+                self.shard_indices.org_vocab_start_index,
+                self.shard_indices.org_vocab_end_index,
+            )
+            if not rows:
+                return False
+            ranges = _ple_prefetch_ranges(rows, self._row_bytes)
+            slices = _ple_prefetch_table(
+                self._mmap_fd,
+                ranges,
+                self.weight.data_ptr(),
+                self._row_bytes,
+            )
+        except Exception as exc:
+            if (self._mmap_path, "error") not in _PLE_PREFETCH_LOG:
+                _PLE_PREFETCH_LOG.add((self._mmap_path, "error"))
+                logger.warning(
+                    "PLE %s: prefill prefetch fell back to the serial warm "
+                    "path (%s)",
+                    self._mmap_path,
+                    exc,
+                )
+            return False
+        if (self._mmap_path, "engaged") not in _PLE_PREFETCH_LOG:
+            _PLE_PREFETCH_LOG.add((self._mmap_path, "engaged"))
+            logger.info(
+                "PLE %s: prefill prefetch touched %d rows in %d ranges "
+                "(%d slices)",
+                self._mmap_path,
+                len(rows),
+                len(ranges),
+                slices,
+            )
+        return True
+
+'''
+
 EDITS_COMMON = [
     (
         "from abc import ABC, abstractmethod\n",
         "import ctypes\nimport hashlib\nimport json\nimport mmap\nimport os\n"
         "from abc import ABC, abstractmethod\n"
+        "from concurrent.futures import ThreadPoolExecutor\n"
         "from vllm.config import get_current_vllm_config\n",
     ),
     (
@@ -662,6 +961,8 @@ EDITS_COMMON = [
         "        logger.info(\"PLE %s: built persistent table\", self._mmap_path)\n"
         "\n"
         + STAGED_METHODS
+        + "\n"
+        + PREFETCH_METHODS
         + "\n"
         "    def _lookup(\n        self,\n        input_ids: torch.Tensor,\n",
     ),

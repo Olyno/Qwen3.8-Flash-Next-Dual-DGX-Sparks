@@ -5,6 +5,7 @@ the patcher now consumes two extracted originals and emits two overlay
 files. Runs against the extracted origs once present (boot stages them);
 the fail-closed check uses a copy so the origs stay pristine."""
 import ast
+import re
 import shutil
 import subprocess
 import sys

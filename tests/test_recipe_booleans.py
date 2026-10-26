@@ -33,6 +33,12 @@ class TestRecipeBooleans(unittest.TestCase):
         self.assertEqual(env["SKIP_PLE_PATCH"], "true")
         self.assertEqual(env["NFS_SHARE"], "false")
 
+    def test_ple_prefill_prefetch_renders_as_a_shell_boolean(self):
+        # `true` must come out as `true`: config.sh compares strings, and the
+        # off default is pinned by tests/test_recipes.py.
+        env = self.emit("ple_prefill_prefetch: true\n")
+        self.assertEqual(env["PLE_PREFILL_PREFETCH"], "true")
+
     def test_numeric_aliases_still_accepted(self):
         env = self.emit("v030: 1\n")
         self.assertEqual(env["V030"], "true")

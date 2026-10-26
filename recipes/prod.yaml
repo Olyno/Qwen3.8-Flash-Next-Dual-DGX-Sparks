@@ -121,6 +121,11 @@ mtp_skip_prefix: false
 # is unresolved — likely capture-pool accounting). The unpinned-read hazard
 # analysis stands; do not enable without a dedicated profiling session.
 ple_staged_lookup: false
+# ple_prefill_prefetch (default off): read each eager prefill chunk's distinct
+# PLE rows from the table file through a host thread pool before the gather,
+# so cold rows cost queue depth (19.8 MB/s at depth 1, 358 MB/s at 32 threads)
+# instead of one page at a time. Prefill only; decode and capture are untouched.
+ple_prefill_prefetch: false
 qsa_profile: stock
 fp8_dense: false
 # The SM12x skinny-GEMM plan table (vllm#59632/#59753, strided-A fix
