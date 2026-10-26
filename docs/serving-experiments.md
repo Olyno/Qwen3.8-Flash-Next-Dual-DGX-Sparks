@@ -150,9 +150,11 @@ is 158× cheaper. Engine state never moved: `running` 4, `waiting` 0, preemption
 So the stall is not intermittent and not a scheduling artefact: it is a function
 of how cold the prompt's n-gram rows are. That also rescues the runs that were
 fine with 21k major faults — 21k is two orders of magnitude below the cold case,
-and those rows were already resident. `/compact` is the reliable trigger because
-it submits a large body of never-seen n-grams at once; any first pass over new
-content does the same, which is what an agent does constantly.
+and those rows were already resident. `/compact` should be the reliable trigger
+because it submits a large body of never-seen n-grams at once; any first pass
+over new content does the same, which is what an agent does constantly. That
+link rests on the content-locality measurement above rather than on an injected
+compaction — the injected run was not completed.
 
 This is the one-node PLE-offload lane. At two nodes `ple_offload` is off and the
 table is not routed through the mmap, so the same dashboard signature there
