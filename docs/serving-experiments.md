@@ -355,9 +355,38 @@ them, so they are fast even when their prefix cache misses (turns 202-204 report
 `cached 0` and still run at 2,191-2,611 tok/s). This run has no fault counters, so
 the mechanism is the leading explanation, not a measurement.
 
-For a real session the penalty lands once, at the first prompt: an in-order
-session's turns share their history, so they stay inside one region. The number
-worth measuring next is how often a real 40-turn stretch crosses a boundary.
+That suggested a real in-order session would pay the penalty once, at its first
+prompt. It does not.
+
+### A real 40-turn stretch crosses the boundary six times
+
+Window 1100-1139 sent once, in order, on a live boot: 382.8 s of wall, 9.57 s per
+turn (median 7.51), mean prefill 7.63 s, mean decode 1.93 s, cache share 32.5%.
+
+| turn | prompt | cached | prefill | cold tok/s |
+|---|---|---|---|---|
+| 1100 | 13,575 | 0 | 22.81 s | 595 |
+| 1117 | 11,275 | 0 | 20.31 s | 555 |
+| 1118 | 11,826 | 0 | 16.30 s | 726 |
+| 1127 | 11,841 | 0 | 21.88 s | 541 |
+| 1132 | 5,802 | 0 | 6.75 s | 860 |
+| 1136 | 12,136 | 0 | **49.31 s** | 246 |
+
+Six of forty turns (15%) paid the cold penalty, and they carry **108.1 s — 28.2%
+of the wall clock**. So it is not once per session: an agent session diverges
+whenever a turn brings back new text (a file read, a command output, a compaction
+boundary), and each divergence starts a new region. Two of the six are adjacent
+(1117, 1118), which rules out any per-request or per-block explanation.
+
+Turn 1136 is the worst single prefill measured: 49.3 s for a 12,136-token prompt at
+246 tok/s, 4.6x the steady-rate prediction. Cause not identified; it is the same
+shape as the others and no larger.
+
+The ceiling this sets: if the cold path ran at the steady 2,271 tok/s, the same
+forty turns would cost about **275 s instead of 383 s**. The threshold used here
+(prefill > 2x the steady-rate cost of the uncached remainder) flags 14 turns, but
+eight of those are warm turns whose small uncached remainder cannot absorb fixed
+per-request overhead — the six fully cold turns are the real set.
 
 The extractor was the blocker until now. It rebuilt the transcript with
 `json.loads(json.dumps(history))` at every assistant turn — quadratic — so a 22 MB
