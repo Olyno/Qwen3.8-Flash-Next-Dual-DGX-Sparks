@@ -182,6 +182,12 @@ Measured on this box as A/B against the same recipe with the mechanism off, so t
 | Adaptive verify width | **−3.1 to −4.1%** ms/step in every bucket | [bench-gates](docs/bench-gates.md) |
 | Draft head read per draft step | **1.18 GiB → 0.22 GiB** with the 47k slice | boot log, [serving-experiments](docs/serving-experiments.md) |
 | `runai_streamer` loader | load **281-326 s**, against 683-727 s for the previous loader | [load-time](docs/load-time.md) |
+| PLE prefill prefetch (one-box only) | cold-prefix replay **23.0 → 13.4 s per turn**; mean prefill 19.4 → 9.71 s (647 → 1,294 tok/s); worst cold prefill 17.09 → 7.93 s; major faults 121,360 → 40,026 on the same content | [serving-experiments](docs/serving-experiments.md) |
+
+The last row is a debt this recipe pays and the vendor one does not: at one node the
+PLE n-gram table has to live off-device, so every genuinely new prompt faults its
+rows off disk. The prefetch is the remedy inside that constraint; the two-rank
+shape keeps the table on device and has no such cost to remove.
 
 Two things this table cannot say, and does not pretend to. It cannot give a vendor-vs-ours **absolute** throughput row, because the vendor figures are two-rank and every number here is one box — the honest single-rank/both-rank statement is that ours is the same serving lane plus the deltas above, and the two-rank record is absent until the pair is measured. And a faster step is not automatically a better model: each mechanism above passed a distribution gate first (p99 KL inside the self-noise floor), and a mechanism that fails it is recorded as rejected in [bench-gates](docs/bench-gates.md) instead of shipping.
 
