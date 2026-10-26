@@ -63,6 +63,13 @@ loader moved bytes, not the decode loop.
 Those are inside the spread of the earlier boot, so the loader did not change
 decode throughput.
 
+**Pool-size correction.** The 368,009 above is what a container restart reports,
+not what the recipe allocates. A restart skips the launch-time checkpoint
+page-cache release, so less memory is free when the pool is sized. A clean
+`./start.sh` boot of the same recipe reports **414,389** tokens (6.32x at 65,536
+per request). Quote the clean-boot figure; the restart figure only describes a
+restarted container.
+
 **The `entropy` row is not a comparable measurement.** Its content is regenerated
 per run, and three runs on one boot gave 30.0, 44.1 and 38.6 tok/s at 1k
 (acceptance 47.1%, 66.2%, 57.1%). A single sample differs from another by more
@@ -110,6 +117,33 @@ TTFT was 0.52-1.17 s at 1k and 16.9-41.8 s at 48k; acceptance held at 39-40%
 moved the same way as before. The 1k code row at temp 0.8 (16.7 against 31.2) is
 one sample each and falls in the jitter measured above; repeat it before reading
 anything into that pair.
+
+## A 131,072-token cap on one node
+
+`MAX_MODEL_LEN` is env-overridable and is not a recipe key, so this gate is a
+single boot: `MAX_MODEL_LEN=131072 RECIPE=prod ./start.sh --launch
+--no-download` — 514 s to healthy, with `--max-model-len 131072` confirmed on the
+live process.
+
+| boot | cap | KV pool | concurrency at the cap |
+|---|---|---|---|
+| prod | 65,536 | 414,389 | 6.32x |
+| gate | 131,072 | 701,991 | 5.36x |
+
+The pool grew 1.7x when the cap doubled, which is the opposite of what a
+reservation argument predicts. It is recorded as measured, not explained. A
+100k-token request is served:
+
+| run | prompt tokens | TTFT | prefill | decode | needles found |
+|---|---|---|---|---|---|
+| 100k, 16 output tokens | 100,117 | 39.26 s | 2,550 tok/s | 32.5 tok/s | 0 of 3 |
+| 100k, 96 output tokens | 100,116 | 35.65 s | 2,808 tok/s | 61.7 tok/s | 2 of 3 |
+
+The first row is not a result: a three-item answer cannot fit in 16 tokens. At 96
+tokens the model found two of the three needles, so the context is served but
+retrieval inside it is not reliable. The committed default stays 65,536; 131,072
+is available to a caller that needs it and accepts both the 35-39 s TTFT and that
+retrieval rate.
 
 ## Concurrency: the stream cap, and what a long prefill does to every stream
 
