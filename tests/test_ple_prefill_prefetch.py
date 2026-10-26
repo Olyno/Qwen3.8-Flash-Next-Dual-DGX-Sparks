@@ -252,10 +252,10 @@ class PrefillGate(unittest.TestCase):
         ns = helper_namespace()
         saved = os.environ.pop("VLLM_PLE_PREFETCH_THREADS", None)
         try:
-            self.assertEqual(ns["_ple_prefetch_threads"](), 16)
+            self.assertEqual(ns["_ple_prefetch_threads"](), 32)
             for value, expected in (
                 ("1", 1), ("8", 8), ("32", 32), ("64", 32), ("0", 1),
-                ("", 16), ("many", 16),
+                ("", 32), ("many", 32),
             ):
                 os.environ["VLLM_PLE_PREFETCH_THREADS"] = value
                 self.assertEqual(ns["_ple_prefetch_threads"](), expected, value)

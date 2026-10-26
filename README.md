@@ -184,6 +184,8 @@ Measured on this box as A/B against the same recipe with the mechanism off, so t
 | `runai_streamer` loader | load **281-326 s**, against 683-727 s for the previous loader | [load-time](docs/load-time.md) |
 | PLE prefill prefetch (one-box only) | cold-prefix replay **23.0 → 13.4 s per turn**; mean prefill 19.4 → 9.71 s (647 → 1,294 tok/s); worst cold prefill 17.09 → 7.93 s; major faults 121,360 → 40,026 on the same content | [serving-experiments](docs/serving-experiments.md) |
 
+| PLE prefill prefetch reader pool (16 → 32) | a 13k never-sent prompt **51.85 → 12.17 s** (1,067 tok/s), cold read 20.7 → 66.0 MiB/s, major faults 98,132 → 13,578 | [serving-experiments](docs/serving-experiments.md) |
+
 The last row is a debt this recipe pays and the vendor one does not: at one node the
 PLE n-gram table has to live off-device, so every genuinely new prompt faults its
 rows off disk. The prefetch is the remedy inside that constraint; the two-rank

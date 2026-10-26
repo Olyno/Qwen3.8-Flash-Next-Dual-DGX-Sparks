@@ -250,7 +250,7 @@ PLE_STAGED_LOOKUP="${PLE_STAGED_LOOKUP:-false}"
 # capture never reach it. Off = on-demand faults, as before.
 PLE_PREFILL_PREFETCH="${PLE_PREFILL_PREFETCH:-false}"
 # Host reader threads for that prefetch (clamped to [1, 32] in the overlay).
-PLE_PREFETCH_THREADS="${PLE_PREFETCH_THREADS:-16}"
+PLE_PREFETCH_THREADS="${PLE_PREFETCH_THREADS:-32}"
 # Direct GDN prefill output (v0.32 lane only,
 # patches/patch_gdn_direct_out.py): pass core_attn_out[:num_actual_tokens]
 # to the same flashinfer prefill kernel as its output= buffer and skip the

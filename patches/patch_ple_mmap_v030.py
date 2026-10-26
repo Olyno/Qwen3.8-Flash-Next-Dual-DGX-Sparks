@@ -235,12 +235,14 @@ def _ple_prefetch_threads() -> int:
     """VLLM_PLE_PREFETCH_THREADS: host readers, clamped to [1, 32].
 
     The table measures 19.8 MB/s at queue depth 1 and 358 MB/s at 32, so the
-    depth is the whole knob; 16 leaves the device's own demand faults room.
+    depth is the whole knob. Measured on a 13k cold prompt: 16 readers 51.85 s
+    against 32 readers 12.17 s, with major faults collapsing 98,132 -> 13,578,
+    so 32 is the default and the clamp ceiling.
     """
     try:
-        threads = int(os.environ.get("VLLM_PLE_PREFETCH_THREADS", "16"))
+        threads = int(os.environ.get("VLLM_PLE_PREFETCH_THREADS", "32"))
     except ValueError:
-        threads = 16
+        threads = 32
     return max(1, min(threads, _PLE_PREFETCH_THREADS_MAX))
 
 

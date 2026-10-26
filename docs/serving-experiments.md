@@ -494,6 +494,38 @@ only 7.5-10.7 GB (15-21%) can ever be resident next to a 124 GB checkpoint on
 121 GiB, so a real fix has to raise queue depth or read wider spans, not rely on
 warmth.
 
+### 32 readers instead of 16
+
+The knob was set to 16 when it was written; the probe says that was the wrong
+number. Same shape of prompt (~13k tokens of never-sent text, fresh `cache_salt`,
+one send), 32 readers against the archival 16-reader runs:
+
+| | 16 readers | 32 readers |
+|---|---|---|
+| prefill, ~13k cold prompt | 51.85 s / 71.40 s (two seeds) | **12.17 s** |
+| effective rate | 253 / 184 tok/s | **1,067 tok/s** |
+| major faults | 98,132 / 232,965 | **13,578** |
+| cold read throughput | 20.7 MiB/s | **66.0 MiB/s** |
+| cost per MiB of cold read | 48.2 ms | **15.1 ms** |
+
+4.26x against the faster of the two 16-thread seeds, 5.87x against the slower one,
+and 3.19x once normalised by bytes actually read — which is the only comparison
+the content difference cannot flatter, since the two seeds differed by 25% in read
+per token (84.0 against 63.4 KiB). Subtract the 5.3 s warm floor and the cold
+component drops from 46.6 s to 6.9 s, 6.8x.
+
+The mechanism shows up as a fault *collapse*: 98,132 pages faulted at 16 readers,
+13,578 at 32. With enough readers in flight the preads win the race against the
+gather's demand faults, so pread service replaces fault service and fault rate
+stops being the limiter — 32 readers run at 1,116 faults/s against 16 readers'
+1,893/s while delivering 3.2x the throughput. Prefill seconds and MiB/s are the
+honest witnesses from here, not fault counts.
+
+Headroom is still visible: 66 MiB/s is 5.4x under the 358 MiB/s the raw device did
+at depth 32, so the pool is still not the device's limiter — but the clamp caps at
+32, so measuring more needs a code change, not a recipe change. Both defaults now
+ship at 32.
+
 The extractor was the blocker until now. It rebuilt the transcript with
 `json.loads(json.dumps(history))` at every assistant turn — quadratic — so a 22 MB
 session ran for minutes and produced nothing. With a shallow snapshot of a history
