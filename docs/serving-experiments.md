@@ -526,6 +526,33 @@ at depth 32, so the pool is still not the device's limiter — but the clamp cap
 32, so measuring more needs a code change, not a recipe change. Both defaults now
 ship at 32.
 
+The gain does not show up everywhere, and the reason matters for how these rows
+are read. On the shipped default (32 readers) a fresh 13,252-token prompt of
+never-sent text costs **8.42 s** at 1,574 tok/s and 69.0 MiB/s of PLE read. The
+24-turn spread replay on the same boot costs **13.41 s per turn** — identical to
+its 16-reader number (13.4), even though the run was cold by its own counters
+(+224,016 major faults, 5.47 GiB read off the device, `Cached` +5.40 GiB).
+
+The explanation is that "cold" in a replay means the *prefix* is unseen, not that
+the table rows are. Those prompts had been sent before on earlier boots, so most of
+their rows were already resident and the fault path was never entered; only one
+turn (3842, 19.73 s) behaved like genuinely cold content. So the spread replay
+cannot arbitrate the pool size, and its 13.4 s is a mixed-residency cost, not a
+cold-path cost.
+
+| state of the same 24-request sample | rows | readers | s/turn | mean prefill |
+|---|---|---|---|---|
+| before any prefetch | cold | 16 | 23.0 | 19.4 s |
+| prefetch on | cold prefix, rows largely resident | 16 | 13.4 | 9.71 s |
+| prefetch on, shipped | same, one turn genuinely cold | 32 | 13.41 | 9.48 s |
+| truly cold content, 13k prompt | cold | 16 | 51.85 s for one prompt | — |
+| truly cold content, 13k prompt | cold | 32 | **8.42 s for one prompt** | — |
+
+A replay row can therefore only be compared to another replay row measured against
+the same residency state, and residency survives container restarts and
+`drop_caches` alike. The controlled comparisons in this document are the ones made
+either on truly cold synthetic content or on a genuinely unseen session region.
+
 The extractor was the blocker until now. It rebuilt the transcript with
 `json.loads(json.dumps(history))` at every assistant turn — quadratic — so a 22 MB
 session ran for minutes and produced nothing. With a shallow snapshot of a history
