@@ -578,6 +578,14 @@ That one turn is the honest worst case a real session meets: 11.8 s of prefill f
 sits at 4.25 s. The turn-cost target is therefore met on real content at 32
 readers, with the first touch of a region as the remaining single-turn spike.
 
+The decode row confirms the prefetch costs nothing elsewhere: three passes of
+`decodebench --contexts 1000 --temps 0` on the shipped default give copy
+13.9 / 14.4 / 14.1 steps/s (mean 14.13, spread 3.5%), which is the FP8-head
+reference band of 14.0-14.2 and still 3-6% above the 13.5-13.7 stock band. The
+mechanism only changes page residency, and the row that decides decode configs
+does not move. The KL gate was not re-run: it needs a stock-boot capture, and no
+capture on the box postdates the last reboot; it belongs to the next boot pair.
+
 The extractor was the blocker until now. It rebuilt the transcript with
 `json.loads(json.dumps(history))` at every assistant turn — quadratic — so a 22 MB
 session ran for minutes and produced nothing. With a shallow snapshot of a history
