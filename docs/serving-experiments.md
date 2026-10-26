@@ -428,7 +428,15 @@ Same boot, same proxy, 18 tasks, five passes per arm. The three arms turn out to
 - **`low` is the worst arm on every measure**: fewer tasks than the default, and *more* reasoning than either other arm (1,682–2,246 against 1,031–1,725). "Move directly to the conclusion" produces answers that need repair, and the repair costs more than the brevity saved.
 - The 28% saving measured on replayed prompts did **not** transfer: with tools in the loop the brief instruction lengthens traces. A prompt-level effect measured without a tool loop is not a result about agents.
 
-Verdict: the instruction text is a cost, not a control. `medium` is the arm to test further, and any default must be set by the proxy (`PROXY_REASONING_EFFORT=medium`) because neither the client nor the server can express it. Five passes on a ruler that resolves ±2 tasks is a consistent direction, not a certified gain.
+Verdict: the instruction text is a cost, not a control. `medium` is at least as
+good as the unset default and cheaper in turns, and any default must be set by
+the proxy (`PROXY_REASONING_EFFORT=medium`) because neither the client nor the
+server can express it — but it is not promoted to a default. A `--repeat 2` run
+of the same arm scored **29 of 36 task runs, 14.5 of 18 per run**, against the
+unset default's 14.0 mean, and **five of eighteen tasks flipped between the two
+repeats** (29 = 2x12 resolved plus 5 half-passing). The 1.6-task margin from
+single passes sits inside the ruler's own repeat variance, so the defensible
+claim is "no worse, fewer turns", not "better by a measured amount".
 
 Open, and worth saying plainly: the earlier twelve-task result used a cap that never bound (mean trace 138 tokens). The recorded agent session has a **mean trace of 901 tokens**, so a 512 `thinking_token_budget` would bind on roughly half its turns. The sampler cap and the template instruction have not been compared against each other on agent traces.
 

@@ -340,8 +340,11 @@ serving build has no default-kwargs flag. Off when unset.
 The three values are not a budget: `medium` removes the template's reasoning
 instruction entirely, while `xhigh` (the template default) and `low` each add a
 different sentence. On the 18-task agent ruler, `medium` beat the unset default
-in five of five paired passes (15.6 vs 14.0 tasks mean) and `low` was worst on
-both score and tokens, so `low` should not be used as a "cheaper" setting here.
+in five of five single passes (15.6 vs 14.0 tasks mean), but a `--repeat 2` run
+of the same arm scored 29 of 36 task runs (14.5 per run) with five of eighteen
+tasks flipping between repeats — so the margin is inside the ruler's own
+variance. `medium` is available and is not a default; `low` should not be used
+as a "cheaper" setting here, since it was worst on both score and tokens.
 
 ### `PROXY_EDIT_GUARD=1`
 
