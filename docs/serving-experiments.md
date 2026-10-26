@@ -168,8 +168,11 @@ ms/step is its reciprocal and steps/s is what the engine emits:
 Copy is the row that repeats, and it moved by the same amount in every run with
 no overlap between the arms: **-4.0% ms/step**. The prose row is inside its own
 16% spread and cannot corroborate anything. The arm's boot reported KV 444,636
-tokens, inside the 414-462k spread across the five boots measured here, so no
-pool gain is claimed.
+tokens, inside the 414-499k spread across the five clean 65,536 boots measured
+here, so no pool gain is claimed. On the boot served by the committed recipe the
+same replay gives p99 KL 1.671 and top-1 89.72%, and copy runs 14.0 / 14.2
+steps/s, so the shipped boot reproduces the arm at +3.4 to +4.2% against the
+stock 13.5-13.7.
 
 Both conditions met, so `target_head_fp8: true` is committed. The arm was booted
 from a one-key variant of the same recipe, and `engine/recipe.py` resolves the
