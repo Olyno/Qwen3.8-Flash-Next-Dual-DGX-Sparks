@@ -286,6 +286,47 @@ from "these prompts never reuse anything", and it is the next run.
 Sampling is even, not random (`--sample 24`), so the mix of prompt sizes is
 representative while any adjacency effect is not.
 
+### Locality: the 23 s is a cold-prefix upper bound
+
+Eight consecutive turns of the same session (prompts 12,848-14,121 tokens),
+sent three times: in order cold, then the identical eight reversed, then in order
+again. Same prompts in all three, so content is fixed and only residency changes.
+
+| run (8 turns, 108,142 prompt tokens) | cache share | mean prefill | mean decode | wall per turn |
+|---|---|---|---|---|
+| consecutive, first pass (cold) | 57% | 4.85 s | 1.97 s | 6.8 s |
+| the same eight, reversed (second) | 95% | 0.49 s | 2.08 s | 2.6 s |
+| consecutive, second pass | 95% | 0.47 s | 2.01 s | 2.5 s |
+
+The clean paired delta is the first and third rows — identical order, identical
+content, one rerun apart: prefill **-90.3%**, 10.3x. The reversed run is not an
+adjacency test in the end: it ran second, so every prefix was already resident,
+and it found 95% cached regardless of order. Residency, not order, is what the
+cache rewards.
+
+So the 23.0 s spread row and this 2.5 s consecutive row are not in conflict: the
+spread sample sends 24 turns whose histories the server has never seen, so every
+one pays a cold prefill. A real session sends its turns in order, and the previous
+turn's prefix is already in the pool.
+
+The cold cost itself is not flat. Within the first pass, one turn with a cold
+prefix (12,848 tokens) took 19.4 s — 662 tok/s — while two later cold turns of
+13.3k and 13.9k took 6.2 s and 6.4 s — about 2,150 tok/s. The first cold prefill
+of a boot therefore carries roughly 13 s that later cold prefills do not, which is
+the shape the cold PLE-ngram gather predicts: it is paid once per content set, not
+once per token.
+
+Three of the eight consecutive turns still reported 0 cached (turns 1900, 1903,
+1906) even on the second pass, so their prefixes genuinely differ from their
+predecessor's — a new tool result or a compaction boundary. Those are the turns a
+cache cannot help.
+
+What this means for the goal: a warm consecutive session already runs at 2.5 s per
+turn, well inside the 12 s target; the spread replay is an upper bound for
+never-seen content. The remaining measurable lever is the cold path — the ~13 s
+one-off first-prefill penalty and the ~2.1k tok/s steady-state cold prefill
+against the engine's 3.8k bench rate.
+
 The extractor was the blocker until now. It rebuilt the transcript with
 `json.loads(json.dumps(history))` at every assistant turn — quadratic — so a 22 MB
 session ran for minutes and produced nothing. With a shallow snapshot of a history
