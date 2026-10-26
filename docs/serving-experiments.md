@@ -210,6 +210,32 @@ yardstick's 64-wide request — prod carries that declaration for the same reaso
 `recipes/fp8.yaml` now does too. The fourth gate (replay of a recorded session)
 did not run: it needs an agent transcript, and none is present on the box.
 
+## Real-session replay, the gate whose unit is a turn
+
+Three of the four gates score a bench. This one replays the prompts of a recorded
+agent session unchanged, so the unit is a turn of real work at real prompt sizes.
+
+Source: a 3,842-request agent-harness session, extracted with
+`bench/session_replay.py extract --window-tokens 12000` and sampled at 24 evenly
+spaced requests. Prompts total 301,344 tokens (p50 13,543, range 669-16,245);
+every reply is capped at 128 tokens.
+
+| arm | turns | wall | wall per turn | completion | reasoning |
+|---|---|---|---|---|---|
+| shipped default | 24 | 559.5 s | 23.3 s (5.5-35.3) | 3,049 | 1,931 |
+
+That is 539 prompt tokens per wall-second once the decode is included, so at these
+sizes a turn is dominated by prefill: the 669-token turn finishes in 5.5 s, the
+16k one takes 35 s. This is the row a change has to move, and the row the other
+gates' ms/step deltas get translated through.
+
+The extractor was the blocker until now. It rebuilt the transcript with
+`json.loads(json.dumps(history))` at every assistant turn — quadratic — so a 22 MB
+session ran for minutes and produced nothing. With a shallow snapshot of a history
+whose entries are never mutated afterwards, the same extraction takes 1.3 s, and
+`tests/test_session_replay.py` pins both the output shape and the absence of that
+serialisation.
+
 ## Concurrency: the stream cap, and what a long prefill does to every stream
 
 ### The cap is `max_num_seqs`, not KV
