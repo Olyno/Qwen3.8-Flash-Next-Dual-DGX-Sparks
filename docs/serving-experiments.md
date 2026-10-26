@@ -179,6 +179,36 @@ from a one-key variant of the same recipe, and `engine/recipe.py` resolves the
 committed recipe to a byte-identical environment to that variant, so the boot
 that passed is the boot that ships.
 
+## The FP8-dense hybrid (`recipes/fp8.yaml`)
+
+A second checkpoint, `~/models/q38-lean-hyb`: NVFP4 routed experts with FP8
+per-channel dense projections, served from its own pinned image, MTP 3 instead of
+4. Boot 863 s, no errors, KV 457,677 tokens (6.98x at 65,536).
+
+| gate | shipped default | q38 |
+|---|---|---|
+| p99 KL (self-noise floor 1.939) | — | **1.577 PASS** |
+| top-1 (floor 88.98%, relaxed 86.98%) | — | 90.45% PASS |
+| mean KL, against a 0.1215 floor | — | 0.1515 |
+| perplexity delta | — | +2.6% |
+| decode copy, steps/s | 14.0 / 14.2 | 17.3 / 17.6 |
+| decode copy, tokens per step | 4.79 / 4.79 | 3.69 / 3.76 |
+| decode copy, tok/s | 66.9 / 68.1 | 63.7 / 65.8 |
+| 18-task ruler | 15/18 | 16/18 |
+
+The hybrid buys step rate and gives it back in tokens per step — the shallower
+draft costs a token per step — so aggregate throughput is flat to slightly worse.
+Quality sits inside the distribution floor on p99 KL and moves the wrong way on
+mean KL and perplexity, and the +1 task is inside a ruler that flips five of
+eighteen tasks between repeats. It stays a measured alternative, not the default:
+it also needs a second 120 GB checkpoint and a pinned image.
+
+Two instrument notes. The KL gate could not run at first because this recipe
+never declared `max_logprobs`, and the engine's default of 20 refuses the
+yardstick's 64-wide request — prod carries that declaration for the same reason;
+`recipes/fp8.yaml` now does too. The fourth gate (replay of a recorded session)
+did not run: it needs an agent transcript, and none is present on the box.
+
 ## Concurrency: the stream cap, and what a long prefill does to every stream
 
 ### The cap is `max_num_seqs`, not KV
