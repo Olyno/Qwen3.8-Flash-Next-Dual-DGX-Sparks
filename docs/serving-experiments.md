@@ -526,6 +526,29 @@ at depth 32, so the pool is still not the device's limiter — but the clamp cap
 32, so measuring more needs a code change, not a recipe change. Both defaults now
 ship at 32.
 
+### The width lever, tested and rejected
+
+The other way to raise queue depth is to read wider: group the chunk's rows into
+aligned 8 KiB spans and issue one read per span. The plan's own line settles it —
+131,048 rows, 129,627 ranges, **129,695 spans**, so the rows are so scattered over
+the 51.2 GB table that a span averages 1.01 rows and the coalescing is nil.
+
+Same-day control against the arm, one cold probe each (~13.5k tokens):
+
+| | per-row (shipped) | span 8 KiB |
+|---|---|---|
+| prefill | 8.88 s | **12.15 s** |
+| device read | 690.4 MiB | 1,209.2 MiB (1.75x) |
+| preads | 170,168 | 159,375 (0.94x) |
+| realized device throughput | 77.7 MiB/s | 99.5 MiB/s (1.28x) |
+
+Reading wider did raise realized throughput by 28%, and it still lost by 1.37x,
+because bytes grew 1.75x against that. 64 KiB was not booted: the arithmetic only
+multiplies the waste. **Rejected, not shipped** — the lever is queue depth and
+bandwidth, not read width, and on this hash the rows cannot be coalesced at all.
+The control also re-measures the shipped path at 8.88 s against the earlier 8.42 s,
+so the per-row row is stable to about 5%.
+
 The gain does not show up everywhere, and the reason matters for how these rows
 are read. On the shipped default (32 readers) a fresh 13,252-token prompt of
 never-sent text costs **8.42 s** at 1,574 tok/s and 69.0 MiB/s of PLE read. The
