@@ -137,17 +137,35 @@ def chars(requests):
     return sum(len(json.dumps(r["messages"])) for r in requests)
 
 
+def sample_evenly(reqs, k):
+    """Keep k requests spread across the session, endpoints included.
+
+    A replay of a whole session is hours of prefill; the point of the gate is a
+    realistic mix of prompt sizes, and that needs the start, the middle and the
+    end rather than the first k turns, whose prompts all look alike.
+    """
+    if k <= 0 or k >= len(reqs):
+        return reqs
+    if k == 1:
+        return [reqs[-1]]
+    step = (len(reqs) - 1) / (k - 1)
+    return [reqs[round(i * step)] for i in range(k)]
+
+
 def cmd_extract(args):
     reqs = extract(args.session)
     if args.window_tokens:
         budget = int(args.window_tokens * 4)
         reqs = [{"turn": r["turn"], "messages": trim(r["messages"], budget)}
                 for r in reqs]
+    total = len(reqs)
+    reqs = sample_evenly(reqs, args.sample)
     with open(args.out, "w", encoding="utf-8") as fh:
         for r in reqs:
             fh.write(json.dumps(r) + "\n")
-    print(f"extracted {len(reqs)} requests, {chars(reqs) / 4:.0f} approx prompt tokens "
-          f"-> {args.out}")
+    print(f"extracted {len(reqs)} requests"
+          + (f" sampled from {total}" if len(reqs) != total else "")
+          + f", {chars(reqs) / 4:.0f} approx prompt tokens -> {args.out}")
     return 0
 
 
@@ -330,6 +348,9 @@ def main(argv=None):
     e.add_argument("--window-tokens", type=int, default=12000,
                    help="cap the reconstructed prompt (0 = no cap); the real client "
                         "compacts, this is the closest reproduction")
+    e.add_argument("--sample", type=int, default=0,
+                   help="keep N requests spread across the session instead of all of "
+                        "them; a full session is hours of prefill to replay")
     s = sub.add_parser("stats")
     s.add_argument("path")
     d = sub.add_parser("send")

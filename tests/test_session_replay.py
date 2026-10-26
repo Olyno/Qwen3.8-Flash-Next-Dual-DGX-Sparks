@@ -67,5 +67,23 @@ class ExtractTest(unittest.TestCase):
         self.assertNotIn("json.loads(json.dumps(history))", src)
 
 
+class SampleTest(unittest.TestCase):
+    def test_keeps_endpoints_and_count(self):
+        reqs = list(range(100))
+        picked = replay.sample_evenly(reqs, 24)
+        self.assertEqual(len(picked), 24)
+        self.assertEqual(picked[0], 0)
+        self.assertEqual(picked[-1], 99)
+        self.assertEqual(picked, sorted(set(picked)))
+
+    def test_no_sample_is_identity(self):
+        reqs = list(range(5))
+        self.assertEqual(replay.sample_evenly(reqs, 0), reqs)
+        self.assertEqual(replay.sample_evenly(reqs, 9), reqs)
+
+    def test_single_turn_takes_the_last(self):
+        self.assertEqual(replay.sample_evenly(list(range(7)), 1), [6])
+
+
 if __name__ == "__main__":
     unittest.main()
