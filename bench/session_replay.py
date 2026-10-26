@@ -195,55 +195,136 @@ def _norm_args(raw):
         return str(raw)
 
 
-def post(url, payload, timeout):
+def _sse_rows(lines):
+    """Parse a server-sent-event stream into the JSON payloads it carries."""
+    for raw in lines:
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        line = raw.strip()
+        if not line or line.startswith(":"):
+            continue
+        if line.startswith("data:"):
+            line = line[5:].strip()
+        if not line or line == "[DONE]":
+            continue
+        try:
+            yield json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+
+def _merge_tool_call(acc, delta):
+    """A streamed tool call arrives as fragments keyed by index."""
+    slot = acc.setdefault(delta.get("index", 0), {"name": None, "args": ""})
+    fn = delta.get("function") or {}
+    if fn.get("name"):
+        slot["name"] = fn["name"]
+    if fn.get("arguments"):
+        slot["args"] += fn["arguments"]
+    return acc
+
+
+def stream_row(url, payload, timeout, clock=time.monotonic):
+    """One streamed request, split where the engine splits it.
+
+    Time to the first token is the prefill (plus any queueing); the remainder is
+    decode. `cached_tokens` says how much of the prompt the prefix cache served,
+    which is the difference between a 13k prompt costing 5 s and costing 0.5 s.
+    """
+    payload = dict(payload, stream=True, stream_options={"include_usage": True})
     req = urllib.request.Request(
         url.rstrip("/") + "/v1/chat/completions",
         data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"})
-    started = time.time()
-    first = None
+    started = clock()
+    ttft, content, calls, usage = None, [], {}, {}
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = json.load(resp)
+            for event in _sse_rows(resp):
+                if event.get("usage"):
+                    usage = event["usage"]
+                for choice in event.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    if delta and ttft is None:
+                        ttft = clock() - started
+                    if delta.get("content"):
+                        content.append(delta["content"])
+                    for tc in delta.get("tool_calls") or []:
+                        _merge_tool_call(calls, tc)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:400]
         raise RuntimeError(f"HTTP {exc.code}: {detail}") from None
-    elapsed = time.time() - started
-    return body, elapsed, first
+    elapsed = clock() - started
+    decode_s = elapsed - (ttft or 0.0)
+    completion = usage.get("completion_tokens")
+    return {
+        "seconds": round(elapsed, 2),
+        "ttft": None if ttft is None else round(ttft, 2),
+        "decode_s": round(decode_s, 2),
+        "prompt": usage.get("prompt_tokens"),
+        "cached": (usage.get("prompt_tokens_details") or {}).get("cached_tokens"),
+        "completion": completion,
+        "reasoning": (usage.get("completion_tokens_details") or {})
+        .get("reasoning_tokens"),
+        "decode_tok_s": (round(completion / decode_s, 1)
+                         if completion and decode_s > 0 else None),
+        "tool_calls": [{"name": v["name"], "args": _norm_args(v["args"])}
+                       for _, v in sorted(calls.items())],
+        "reply_head": "".join(content)[:160],
+    }
+
+
+def summarise(rows):
+    """Turn-level totals, with the prefill/decode split the goal is about."""
+    turns = len(rows)
+    if not turns:
+        return {"turns": 0, "wall": 0.0, "wall_mean": 0.0, "ttft_mean": 0.0,
+                "decode_mean": 0.0, "prompt": 0, "cached": 0, "cached_share": 0.0,
+                "completion": 0, "decode_tok_s": 0.0}
+    wall = sum(r.get("seconds") or 0.0 for r in rows)
+    ttfts = [r["ttft"] for r in rows if r.get("ttft") is not None]
+    decodes = [r["decode_s"] for r in rows if r.get("decode_s")]
+    prompt = sum(r.get("prompt") or 0 for r in rows)
+    cached = sum(r.get("cached") or 0 for r in rows)
+    completion = sum(r.get("completion") or 0 for r in rows)
+    dsum = sum(decodes)
+    return {"turns": turns,
+            "wall": round(wall, 1),
+            "wall_mean": round(wall / turns, 1),
+            "ttft_mean": round(sum(ttfts) / len(ttfts), 2) if ttfts else 0.0,
+            "decode_mean": round(dsum / len(decodes), 2) if decodes else 0.0,
+            "prompt": prompt,
+            "cached": cached,
+            "cached_share": round(cached / prompt, 3) if prompt else 0.0,
+            "completion": completion,
+            "decode_tok_s": round(completion / dsum, 1) if dsum else 0.0}
 
 
 def cmd_send(args):
     reqs = [json.loads(l) for l in open(args.path, encoding="utf-8") if l.strip()]
-    rows, started_all = [], time.time()
+    rows = []
     for req in reqs:
         payload = {"model": args.model, "messages": req["messages"],
                    "max_tokens": args.max_tokens, "temperature": 0}
         if args.reasoning_effort:
             payload["chat_template_kwargs"] = {
                 "reasoning_effort": args.reasoning_effort}
-        body, elapsed, _ = post(args.url, payload, args.timeout)
-        usage = body.get("usage") or {}
-        choice = (body.get("choices") or [{}])[0].get("message") or {}
-        rows.append({"turn": req["turn"], "seconds": round(elapsed, 2),
-                     "prompt": usage.get("prompt_tokens"),
-                     "completion": usage.get("completion_tokens"),
-                     "reasoning": (usage.get("completion_tokens_details") or {})
-                     .get("reasoning_tokens"),
-                     "tool_calls": [
-                         {"name": tc.get("function", {}).get("name"),
-                          "args": _norm_args(
-                              tc.get("function", {}).get("arguments"))}
-                         for tc in (choice.get("tool_calls") or [])],
-                     "reply_head": (choice.get("content") or "")[:160]})
-        print(f"  turn {req['turn']:3d}  {elapsed:6.1f}s  "
-              f"out {rows[-1]['completion']}  think {rows[-1]['reasoning']}")
+        row = {"turn": req["turn"]}
+        row.update(stream_row(args.url, payload, args.timeout))
+        rows.append(row)
+        print(f"  turn {req['turn']:3d}  {row['seconds']:6.1f}s  "
+              f"prefill {row['ttft'] or 0:5.1f}  decode {row['decode_s']:5.1f}  "
+              f"cached {row['cached']}/{row['prompt']}  out {row['completion']}")
     with open(args.out, "w", encoding="utf-8") as fh:
         for row in rows:
             fh.write(json.dumps(row) + "\n")
-    wall = time.time() - started_all
-    print(f"{len(rows)} turns, {wall:.0f}s wall, "
-          f"{sum(r['completion'] or 0 for r in rows)} completion tokens, "
-          f"{sum(r['reasoning'] or 0 for r in rows)} reasoning")
+    s = summarise(rows)
+    print(f"{s['turns']} turns, {s['wall']:.1f}s wall, "
+          f"{s['wall_mean']:.1f}s per turn "
+          f"(prefill {s['ttft_mean']:.1f}s, decode {s['decode_mean']:.1f}s)")
+    print(f"  prompt {s['prompt']} tokens, cached {s['cached']} "
+          f"({s['cached_share']:.0%}), completion {s['completion']}, "
+          f"decode {s['decode_tok_s']:.1f} tok/s")
     return 0
 
 
