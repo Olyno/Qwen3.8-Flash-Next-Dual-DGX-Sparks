@@ -200,10 +200,10 @@ async_scheduling: false
 # to rebuilding attention metadata eagerly"; per-position prose acceptance
 # 66.1 / 29.3 / 8.8 / 7.4% against 64.4 / 24.8 / 5.0 / 5.0% with it on, and
 # copy steps/s 13.5 against 13.6 — neutral on both axes inside the 7-10 point
-# acceptance spread. Kept because the rebuild cost it removes is per draft
-# step and only the batch-1 case has been measured; re-test at batch 8 before
-# treating it as a speed mechanism.
-qsa_fused_draft: true
+# acceptance spread. OFF because a switch that is not faster does not ship;
+# re-enable only with a batch-8 A/B that shows a step-rate gain (the rebuild it
+# removes is per draft step, and only batch 1 has been measured).
+qsa_fused_draft: false
 # Clamp pre-indexer RoPE positions into the cos/sin table (fixes a CUDA-graph
 # warmup OOB read on SM121).
 qsa_rope_clamp: true
@@ -232,8 +232,10 @@ load_format: runai_streamer
 # out address-sequential blocks — contiguous ids coalesce into larger DMA
 # bursts on KV offload/prefetch. Boot-verified on GB10 (2026-10-10): decodebench
 # and MTP acceptance identical to stock (accepted/draft 1.990 vs 1.99),
-# quality gate PASS.
-free_block_sort: true
+# quality gate PASS. That is a parity result, not a gain, and at TP=1 there is
+# no KV offload for the ordering to coalesce, so it is OFF until a boot shows a
+# step-rate or TTFT win. Re-test at TP=2, where the offload path exists.
+free_block_sort: false
 # Equal-width chunked prefill (patches/patch_chunk_equal_split.py; idea credit
 # Niko1221/Strata (MIT), chunk policy #41): when a prefill has to be split under
 # long_prefill_token_threshold, cut ceil(N/cap) equal chunks instead of
