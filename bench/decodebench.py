@@ -24,8 +24,10 @@ defaults); --jsonl appends machine-readable rows for bench/gate_report.sh.
 Findings that motivated the shape of this script:
   * decode is dominated by MTP acceptance, not context length
     (1k -> 600k costs only ~2-8%)
-  * "copy from context" is the best case (~70 tok/s) because the MTP draft
-    head predicts quoted text almost perfectly; genuine prose is ~40 tok/s.
+  * "copy from context" is the best case (~65 tok/s) because the MTP draft
+    head predicts quoted text almost perfectly; genuine prose is 20-30 tok/s
+    and swings between runs (15.5-27.8 recorded on one box), so read the tok/s
+    row only with its acceptance and step rate beside it.
     Do NOT quote a copy-heavy number as typical decode speed.
   * the "entropy" task at temperature 0 degenerates into repetition, which
     MTP then predicts easily -- read it only at temp 0.8.
@@ -185,6 +187,11 @@ def main():
     ap.add_argument("--temps")
     ap.add_argument("--conditions", choices=["default", "myllmbox"], default="default")
     ap.add_argument("--jsonl", help="append each row as a JSON line (for bench/gate_report.sh)")
+    ap.add_argument("--repeat", type=int, default=1,
+                    help="run every condition N times and print the mean with its "
+                    "min-max range. Use it for acceptance: one fixed prompt at "
+                    "temperature 0 spans 7-10 points across runs on this stack, so "
+                    "a single row cannot decide a configuration")
     ap.add_argument("--salt", help="context nonce so prefill rows are not cache "
                     "hits (default random per run; empty string disables)")
     ap.add_argument("--dry-run", action="store_true", help="print the run plan and exit")
@@ -223,15 +230,29 @@ def main():
                           f"(max_model_len {limit}, decode {a.decode})",
                           file=sys.stderr)
                     used = fit
-                p, ct, tt, dec, sps, tps, acc = run(ctx, task, a.decode, t, tkwargs)
-                print(f"{c:>9,} {t:>5.1f} {name:<10} {p:>9,} {ct:>6,} {tt:>9.2f} {dec:>10.1f} "
-                      f"{sps:>8.1f} {tps:>8.2f} {acc:>6.1f}", flush=True)
-                if a.jsonl:
-                    with open(a.jsonl, "a") as jf:
-                        jf.write(json.dumps({"context": c, "temp": t, "task": name,
-                                             "ptok": p, "ctok": ct, "ttft_s": tt,
-                                             "decode_tps": dec, "steps_ps": sps,
-                                             "tok_per_step": tps, "accept_pct": acc}) + "\n")
+                got = [run(ctx, task, a.decode, t, tkwargs)
+                       for _ in range(max(1, a.repeat))]
+                for p, ct, tt, dec, sps, tps, acc in got:
+                    print(f"{c:>9,} {t:>5.1f} {name:<10} {p:>9,} {ct:>6,} {tt:>9.2f} {dec:>10.1f} "
+                          f"{sps:>8.1f} {tps:>8.2f} {acc:>6.1f}", flush=True)
+                    if a.jsonl:
+                        with open(a.jsonl, "a") as jf:
+                            jf.write(json.dumps({"context": c, "temp": t, "task": name,
+                                                 "ptok": p, "ctok": ct, "ttft_s": tt,
+                                                 "decode_tps": dec, "steps_ps": sps,
+                                                 "tok_per_step": tps, "accept_pct": acc}) + "\n")
+                if a.repeat > 1:
+                    def ok(i):
+                        return [r[i] for r in got if r[i] == r[i]]
+                    def span(i, fmt, unit=""):
+                        v = ok(i)
+                        if not v:
+                            return "nan"
+                        return (f"{sum(v)/len(v):{fmt}}{unit} "
+                                f"({min(v):{fmt}}-{max(v):{fmt}})")
+                    print(f"  mean {c:>7,} {t:>4.1f} {name:<10} acc {span(6, '.1f', '%')}  "
+                          f"tok/step {span(5, '.2f')}  steps/s {span(4, '.1f')}  "
+                          f"dec {span(3, '.1f', ' tok/s')}", flush=True)
 
 if __name__ == "__main__":
     main()
