@@ -196,14 +196,15 @@ target_head_fp8: true
 async_scheduling: false
 # myllmbox v030 port: reuse one QSA attention-metadata build across MTP draft
 # steps (vllm#58449 port; needs mtp_num_speculative_tokens > 1).
-# A/B at batch 1 (2026-11-05, three boots): off, the engine logs "falling back
-# to rebuilding attention metadata eagerly"; per-position prose acceptance
-# 66.1 / 29.3 / 8.8 / 7.4% against 64.4 / 24.8 / 5.0 / 5.0% with it on, and
-# copy steps/s 13.5 against 13.6 — neutral on both axes inside the 7-10 point
-# acceptance spread. OFF because a switch that is not faster does not ship;
-# re-enable only with a batch-8 A/B that shows a step-rate gain (the rebuild it
-# removes is per draft step, and only batch 1 has been measured).
-qsa_fused_draft: false
+# A/B at batch 1 (2026-11-05, four boots, both knobs flipped together): with
+# these off the engine logs "falling back to rebuilding attention metadata
+# eagerly" and the wider instrument moves — myllmbox short_code 44.7 tok/s on,
+# 38.2-39.4 off; copy acceptance 98.1-98.2% on, 91.9-95.2% off; copy steps/s
+# 14.2 either way; per-position prose acceptance identical (66.1/29.3/8.8/7.4
+# off against 64.4/24.8/5.0/5.0 on). ON: it is worth ~13% on short_code, which
+# is the row that repeats. The two knobs moved together in this A/B, so
+# attribute them separately before flipping either alone.
+qsa_fused_draft: true
 # Clamp pre-indexer RoPE positions into the cos/sin table (fixes a CUDA-graph
 # warmup OOB read on SM121).
 qsa_rope_clamp: true
@@ -232,10 +233,11 @@ load_format: runai_streamer
 # out address-sequential blocks — contiguous ids coalesce into larger DMA
 # bursts on KV offload/prefetch. Boot-verified on GB10 (2026-10-10): decodebench
 # and MTP acceptance identical to stock (accepted/draft 1.990 vs 1.99),
-# quality gate PASS. That is a parity result, not a gain, and at TP=1 there is
-# no KV offload for the ordering to coalesce, so it is OFF until a boot shows a
-# step-rate or TTFT win. Re-test at TP=2, where the offload path exists.
-free_block_sort: false
+# quality gate PASS. Its own decode A/B was parity, but it moved together with
+# qsa_fused_draft in the 2026-11-05 four-boot A/B (short_code −13%, copy
+# acceptance −3..6 points when both were off), so it is ON. Attribute the two
+# separately before flipping either alone.
+free_block_sort: true
 # Equal-width chunked prefill (patches/patch_chunk_equal_split.py; idea credit
 # Niko1221/Strata (MIT), chunk policy #41): when a prefill has to be split under
 # long_prefill_token_threshold, cut ceil(N/cap) equal chunks instead of
