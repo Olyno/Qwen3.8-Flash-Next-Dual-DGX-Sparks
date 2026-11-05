@@ -741,6 +741,98 @@ The larger term is tokens/step, not step time. That is acceptance: the draft hea
 
 **Do not quote ">50 tok/s" for this box until that gap is explained.** On the dual-node production deployment the arithmetic is different; this log measures the single-node box only.
 
+### Chasing the tokens/step gap
+
+The gap is entirely in tokens/step, and tokens/step is a product of acceptance
+across draft positions, so the first move was to stop looking at averages and
+read vLLM's per-position counters on the prose task (1k context, temp 0, 200
+decoded tokens, 101 draft steps):
+
+| position | accepted | share of steps |
+|---|---|---|
+| 0 | 65 | 64.4% |
+| 1 | 25 | 24.8% |
+| 2 | 5 | 5.0% |
+| 3 | 5 | 5.0% |
+
+A cliff that starts at position 1 looks like stale attention metadata between
+draft steps, so the two shipped mechanisms that touch exactly that were each
+booted off. Both were eliminated, and neither was the cause:
+
+| arm | pos0 | pos1 | pos2 | pos3 | prose tok/step | copy (acc / tok/s / steps/s) |
+|---|---|---|---|---|---|---|
+| prod (`qsa_fused_draft: true`) | 64.4% | 24.8% | 5.0% | 5.0% | 2.05 | 98.2% / 66.2 / 13.6 |
+| `qsa_fused_draft: false` (283 drafts) | 66.1% | 29.3% | 8.8% | 7.4% | 2.01 | 98.1% / 65.3 / 13.5 |
+| no draft-vocab slice, 6 runs (median) | 68–80% | 24–40% | 9–16% | 6–16% | 2.06–2.16 | 91.5% / 55 / 12.4 |
+| `rejection_sample_method: standard`, 5 runs | 62.9–74.4% | 25.6–42.7% | 7.2–18.3% | 5.1–13.4% | 1.96–2.24 | 95.2% / 62.7–63.5 / 13.2–14.0 |
+
+**Fused draft metadata** (the vllm#58449 port): off, the engine logs
+`cannot update draft decode metadata in place; falling back to rebuilding
+attention metadata eagerly` and the per-position rates move inside the sampling
+spread. It also buys nothing measurable the other way — copy steps/s 13.5
+against 13.6 — which is worth revisiting on its own.
+
+**The 47k draft-vocabulary slice** (19.0% of the vocabulary): removing it does
+not move prose acceptance, and it costs copy badly, 98.1% to 91.5% acceptance
+and 65 to 55 tok/s. Note the confound: the FP8 draft-head patch keys on the
+slice, so that arm drafted on the stock BF16 head too — the regression is the
+head's per-step read as much as the coverage. The slice stays.
+
+**Verification method.** vLLM defaults to `standard`, the vendor lane never sets
+the key, and prod runs `block` (block verification, Sun et al.). Booted
+`standard`, prose acceptance averages 49.4% (43.8-53.4%) and tokens/step
+1.96-2.24: no recovery toward 3.00. Copy got *worse*, 98.1% to 95.2%, with no
+step-rate gain. `block` stays.
+
+**The weights.** The lean bake edits exactly one shard,
+`model-00009-of-00010.safetensors` — the one holding `lm_head.weight` and
+`embed_tokens.weight` (`overthinking_bake.json`: lambda 2.0, 50 marker ids,
+428,957 calibration rows). Booting the identical recipe on a verified copy of
+stock `nvidia/Qwen3.8-Flash-Next-NVFP4` gives prose acceptance 45.2-52.3% and
+tokens/step 2.01-2.03, inside the lean band rather than above it, and the
+drafter file `model-fp8-mtp-ple.safetensors` is byte-identical between the two
+checkpoints. The bake cannot have damaged the drafter by construction.
+
+**The instrument.** Run against the reference's own prompt set, twice:
+
+| condition | ours (tok/s) | reference claim |
+|---|---|---|
+| `short_code` | 44.7 / 44.7 | 64.7 |
+| `long_prose` | 25.8 / 25.2 | 49.8 |
+| `mixed` | 36.4 / 41.0 | 86.3 |
+
+Ours reproduce to about 2% across runs, so the shortfall is not sampling noise.
+Two of the three conditions reach 3.1-3.6 tokens/step, so the drafter does chain
+when the continuation is constrained; only `long_prose` sits at 1.9-2.1, and it
+is the same prompt the reference claims 49.8 on.
+
+**The FP8 target head.** Ours, not the vendor's: an E4M3 copy of the 248,320-row
+target head written after load, worth ~2.3 ms of a ~77 ms step. Booted off,
+prose acceptance is 47.2% mean (5.2-point spread) with tokens/step 2.08-2.11 —
+unchanged — and myllmbox `long_prose` lands at 23.2 tok/s, *below* the 25.2-25.8
+baseline, while copy falls to 92.8-93.9%. The overlay is not the cause, and it
+keeps the step-time role it was shipped for.
+
+**Where that leaves the gap.** Five controlled arms — fused draft metadata,
+draft-vocabulary slice, verification method, checkpoint and FP8 target head —
+were each booted alone on the same instrument, and none moves prose acceptance
+outside the 7-10 point spread. The residual is how far this drafter agrees with
+this target on free-form prose, which is a property of the pair, not of a
+switch. Reproducing the reference's 3.00 tokens/step would need their harness,
+which we do not have, so the row stays a claim rather than a target. The
+exercise did produce the noise floor, and the bench can now measure it:
+`--repeat N` prints the mean with its range per condition.
+
+All five arms also produced a result that matters more than any of the
+verdicts: on one identical prompt at temperature 0, repeated runs of the same
+arm span 46.3-53.6% acceptance (block, six runs) and 43.8-53.4% (standard, five
+runs) — 7.3 and 9.6 points, with position 0 spanning 60-80%. Because the spread
+does not depend on the verification method, the nondeterminism is upstream of
+it: greedy decode on this stack is not bit-reproducible (batched numerics), so
+temperature 0 does not buy determinism. A single 200-token acceptance sample
+cannot decide anything, and every acceptance claim in this log that rests on one
+run is inside that spread.
+
 ## What was already checked
 
 - **CUDA-graph capture sizes.** The boot log shows `cudagraph_capture_sizes = [1, 2, 4, 5, 8, 10, 16, 20, 24, 32, 40]`, so the MTP batch of 5 rows already has an exact graph. The 5-to-8 padding fix from the DeepInfer audit does not apply here. No experiment needed.
