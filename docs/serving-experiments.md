@@ -766,11 +766,18 @@ booted off. Both were eliminated, and neither was the cause:
 | no draft-vocab slice, 6 runs (median) | 68–80% | 24–40% | 9–16% | 6–16% | 2.06–2.16 | 91.5% / 55 / 12.4 |
 | `rejection_sample_method: standard`, 5 runs | 62.9–74.4% | 25.6–42.7% | 7.2–18.3% | 5.1–13.4% | 1.96–2.24 | 95.2% / 62.7–63.5 / 13.2–14.0 |
 
+Read the copy-acceptance column as a range, not a point: 98.1-98.2% was recorded
+on three boots, then two boots of the *same* config spread 91.2-97.0% across
+adjacent repeats. The steps/s and tok/s columns repeat; that one does not.
+
 **Fused draft metadata** (the vllm#58449 port): off, the engine logs
 `cannot update draft decode metadata in place; falling back to rebuilding
-attention metadata eagerly` and the per-position rates move inside the sampling
-spread. It also buys nothing measurable the other way — copy steps/s 13.5
-against 13.6 — which is worth revisiting on its own.
+attention metadata eagerly`. The per-position prose rates move inside the
+sampling spread, so acceptance is not the axis. Throughput is: with both this
+overlay and the free-list block-id sort off, myllmbox `short_code` fell to
+38.2-39.4 tok/s and `mixed` to 39.2; restored, the same boot gives 48.4 and
+44.7-45.1 at unchanged copy steps/s. The two were flipped together, so the
+~25% is theirs jointly, not severally — that attribution is still open.
 
 **The 47k draft-vocabulary slice** (19.0% of the vocabulary): removing it does
 not move prose acceptance, and it costs copy badly, 98.1% to 91.5% acceptance

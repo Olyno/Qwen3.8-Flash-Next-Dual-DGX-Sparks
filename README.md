@@ -184,8 +184,8 @@ Measured on this box as A/B against the same recipe with the mechanism off, so t
 | Draft head read per draft step | **1.18 GiB → 0.22 GiB** with the 47k slice | boot log, [serving-experiments](docs/serving-experiments.md) |
 | `runai_streamer` loader | load **281-326 s**, against 683-727 s for the previous loader | [load-time](docs/load-time.md) |
 | PLE prefill prefetch (one-box only) | cold-prefix replay **23.0 → 13.4 s per turn**; mean prefill 19.4 → 9.71 s (647 → 1,294 tok/s); worst cold prefill 17.09 → 7.93 s; major faults 121,360 → 40,026 on the same content | [serving-experiments](docs/serving-experiments.md) |
-
 | PLE prefill prefetch reader pool (16 → 32) | a 13k never-sent prompt **51.85 → 8.42 s** on the shipped default (1,574 tok/s, 69.0 MiB/s of PLE read), faults 98,132 → 3,565 | [serving-experiments](docs/serving-experiments.md) |
+| QSA draft-metadata overlays (fused multi-step draft metadata + free-list block-id sort) | `short_code` **38.2-39.4 → 48.4 tok/s** (+25%) and `mixed` 39.2 → 44.7-45.1, at unchanged copy steps/s; booted off, the engine falls back to rebuilding metadata eagerly. The two are flipped together, so the gain is not attributed individually | [serving-experiments](docs/serving-experiments.md) |
 
 The last row is a debt this recipe pays and the vendor one does not: at one node the
 PLE n-gram table has to live off-device, so every genuinely new prompt faults its
