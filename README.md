@@ -192,7 +192,18 @@ PLE n-gram table has to live off-device, so every genuinely new prompt faults it
 rows off disk. The prefetch is the remedy inside that constraint; the two-rank
 shape keeps the table on device and has no such cost to remove.
 
-Two things this table cannot say, and does not pretend to. It cannot give a vendor-vs-ours **absolute** throughput row, because the vendor figures are two-rank and every number here is one box — the honest single-rank/both-rank statement is that ours is the same serving lane plus the deltas above, and the two-rank record is absent until the pair is measured. And a faster step is not automatically a better model: each mechanism above passed a distribution gate first (p99 KL inside the self-noise floor), and a mechanism that fails it is recorded as rejected in [bench-gates](docs/bench-gates.md) instead of shipping.
+Two things this table cannot say, and does not pretend to. It cannot give a vendor-vs-ours **absolute** throughput row on the vendor's own topology, because their figures are two-rank and their recipe OOMs at one node — the two-rank record stays absent until the pair is measured. What it can do, and now does, is reproduce the vendor contract's *settings* on this lane at one node and measure against that:
+
+| Condition | `prod` | Vendor settings on this lane | Difference |
+|---|---|---|---|
+| `short_code` | 48.4 tok/s | 40.3-43.8 | +10 to +20% |
+| `long_prose` | 26.5-26.6 | 24.1-24.5 | +8% |
+| `mixed` | 44.7-45.1 | 33.6-36.5 | +23 to +34% |
+| decode 1k, prose | 26.8-27.8 | 25.6 | +5 to +8% |
+| decode 1k, code | 35.6-37.7 | 37.4 | parity |
+| decode 1k, copy | 63.5-64.8 | 54.7 | +16 to +18% |
+
+The arm flips seven keys to the vendor values (MTP depth 4→3, no FP8 draft or target head, no adaptive verify width, no prefetch, no fused draft metadata, no free-list sort) and changes nothing else; booted 509 s, health 200. Copy loses purely on tokens/step (3.87 against 4.5) because the k=3 chain caps it, while prose gains tokens/step but pays per-step latency once the overlays are removed. Every number above is one box, one lane, one checkpoint — not the vendor's deployment. And a faster step is not automatically a better model: each mechanism above passed a distribution gate first (p99 KL inside the self-noise floor), and a mechanism that fails it is recorded as rejected in [bench-gates](docs/bench-gates.md) instead of shipping.
 
 ## Tests
 
