@@ -739,7 +739,9 @@ Ours on the same content type: **27.8 tok/s, 75.2 ms per step, 2.09 tokens/step*
 
 The larger term is tokens/step, not step time. That is acceptance: the draft head agrees with the target on 44% of prose positions here. The reference also runs a shallower draft (3 vs 4), a larger `MAX_NUM_SEQS`, BF16 recurrent state and a different graph-capture set, so the comparison is a hypothesis, not a controlled A/B. The prompt sets also differ, and this run uses 200 tokens against their 600.
 
-**Do not quote ">50 tok/s" for this box until that gap is explained.** On the dual-node production deployment the arithmetic is different; this log measures the single-node box only.
+**Do not quote ">50 tok/s" for this box.** Its own gate records 75.2 ms per step at prose against 59.3 ms on the two-rank lane, so 27.8 is the measured number until something changes the step time — and see the correction immediately below for which reference row this box is actually obliged to beat. On the dual-node production deployment the arithmetic is different; this log measures the single-node box only.
+
+**Correction, same day.** The 48.7 / 3.00 row above is a *third* reference (myllmbox), and the comparison that matters for rule 1 is the vendor's own record. `docs/HANDOFF-single-spark.md` §0 in the upstream repo publishes one-Spark, temp-0 numbers on this very port: **prose 24.9, code 35.1 tok/s**. This recipe measures **26.8-27.8 prose / 35.6-37.7 code** at `gpu_memory_utilization` 0.72 against their 0.813 — ahead of the baseline on its own single-node ground, not 43% behind it. The earlier verdict compared our one box against their two-node row (57.6 / 71.5), which is why it read as a deficit; that row is the target for the dual deployment, not for this box.
 
 ### Chasing the tokens/step gap
 

@@ -205,6 +205,16 @@ Two things this table cannot say, and does not pretend to. It cannot give a vend
 
 The arm flips seven keys to the vendor values (MTP depth 4→3, no FP8 draft or target head, no adaptive verify width, no prefetch, no fused draft metadata, no free-list sort) and changes nothing else; booted 509 s, health 200. Copy loses purely on tokens/step (3.87 against 4.5) because the k=3 chain caps it, while prose gains tokens/step but pays per-step latency once the overlays are removed. Every number above is one box, one lane, one checkpoint — not the vendor's deployment.
 
+The upstream repo also publishes its own single-node figures (`docs/HANDOFF-single-spark.md` §0: one Spark, port 8888, MTP 3, temperature 0), which is the only same-topology row in the baseline that needs no reproduction here:
+
+| Single node, temp 0 | this recipe | upstream TP=1 record |
+|---|---|---|
+| prose | **26.8-27.8 tok/s** | 24.9 tok/s |
+| code | **35.6-37.7 tok/s** | 35.1 tok/s |
+| KV pool | 446-481k tokens at `gpu_memory_utilization` 0.72 | 685,825 tokens at GMU 0.813 |
+
+So the recipe leads the baseline on its own single-node ground, on a smaller memory budget. It is not a controlled A/B: that record is a different checkpoint (local-inference-lab NVFP4), an earlier lane, and MTP 3. The vendor's two-node row (prose 57.6 / code 71.5 at S=1) stays the number the dual deployment has to beat, and it stays unmeasured here until the second node is online.
+
 Two rules hold the recipe to that table, and both are checked by booting, not by reasoning: **the shipped recipe must beat the vendor contract** (the arm above; code is the one condition at parity), and **every change must beat the recipe it lands on** (its own A/B, copy steps/s or tokens/step, never prose tok/s alone). A switch that cannot show a gain does not ship. That rule has already cost this log one correction: the QSA draft-metadata overlays were read as neutral and switched off, which cost `short_code` 48.4 → 38.2-39.4 tok/s; they were restored and boot-verified, and the copy-acceptance figure they were judged on turned out to be a high draw (reproduced spread 91.2-97.0 %). And a faster step is not automatically a better model: each mechanism above passed a distribution gate first (p99 KL inside the self-noise floor), and a mechanism that fails it is recorded as rejected in [bench-gates](docs/bench-gates.md) instead of shipping.
 
 ## Tests
