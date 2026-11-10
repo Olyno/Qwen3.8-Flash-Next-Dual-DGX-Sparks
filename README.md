@@ -1,5 +1,7 @@
 # Qwen3.8-Flash-Next on DGX Spark
 
+> Currently broken, need time to fix it. Do not use.
+
 Serve [Qwen3.8-Flash-Next](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-NVFP4)
 on a single DGX Spark, or across a 2-node cluster, with vLLM: expert
 parallelism, MTP speculative decoding, PLE offload, up to 262K native context.
