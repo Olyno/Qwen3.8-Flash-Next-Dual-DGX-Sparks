@@ -42,3 +42,24 @@ conflicts with `use_local_argmax_reduction` which `mtp_draft_vocab` requires,
 and `GDNAttentionBackend` is an SSM backend that rejects on-device query
 trimming; needs real engine surgery, not worth it) and prefix-cache-under-MTP
 (vllm#52244 — inert without `--prefix-match-unit`, which we don't set).
+
+## Async scheduling configuration
+
+`async_scheduling` is a recipe boolean, not an auto/default selector:
+`true` emits `--async-scheduling`; `false` (also the default when unset)
+emits `--no-async-scheduling`. The existing boolean aliases (`yes`/`no`,
+`1`/`0`) still normalize to `true`/`false`. `auto` is not accepted.
+Both flags are supported by vLLM v0.32.0 and the audited day-0
+`qwen38-flash-next` image used by `mia`; no legacy flag omission is needed.
+
+Previously `false` omitted the flag, letting vLLM auto-enable async for
+MTP with the `mp` executor. `prod.yaml` now explicitly sets `true` to preserve
+that intended ON behavior. Other recipes or `.env` settings that used
+`false` to mean auto must use `true` if they want async enabled; otherwise
+they now really disable it. A recipe value still wins over `.env`.
+`EXTRA_VLLM_ARGS` remains last, so an explicit scheduling flag there wins
+over the recipe's generated flag.
+
+This corrects configuration semantics only: it does not re-port adaptive
+draft depth or establish a runtime quality/performance benefit for either
+scheduler.

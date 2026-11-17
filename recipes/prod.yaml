@@ -191,9 +191,9 @@ target_head_fp8: true
 # reading was host contention from leftover bench processes.) No benefit —
 # keep unset (stock auto resolution).
 # gdn_prefill_backend: flashinfer
-# Pass --async-scheduling explicitly. vLLM 0.32 already resolves it ON for
-# MTP + the mp executor, so false changes nothing today; true pins it.
-async_scheduling: false
+# Preserve the resolved ON behavior of the former false/omitted flag.
+# false now explicitly disables async scheduling with --no-async-scheduling.
+async_scheduling: true
 # myllmbox v030 port: reuse one QSA attention-metadata build across MTP draft
 # steps (vllm#58449 port; needs mtp_num_speculative_tokens > 1).
 # A/B at batch 1 (2026-11-05, four boots, both knobs flipped together): with

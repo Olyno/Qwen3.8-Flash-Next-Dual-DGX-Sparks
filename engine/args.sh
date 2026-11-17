@@ -91,7 +91,11 @@
     # illegal memory access at capture_end on multi-node. If boot crashes
     # there, rerun with EXTRA_VLLM_ARGS="--enforce-eager".
     [[ "$NNODES" -eq 2 ]] && warn "dual-node: if boot dies at CUDA-graph capture (IMA at capture_end, vllm#46253), rerun with EXTRA_VLLM_ARGS=\"--enforce-eager\""
-    [[ "$ASYNC_SCHEDULING" == "true" ]] && VLLM_ARGS+=("--async-scheduling")
+    if [[ "$ASYNC_SCHEDULING" == "true" ]]; then
+        VLLM_ARGS+=("--async-scheduling")
+    else
+        VLLM_ARGS+=("--no-async-scheduling")
+    fi
 
     # hf-overrides: ONE merged payload, nested under "text_config".
     # vLLM's ModelConfig._apply_dict_overrides only recurses into keys that are
