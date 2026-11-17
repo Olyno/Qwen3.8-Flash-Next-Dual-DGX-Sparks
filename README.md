@@ -86,6 +86,26 @@ must exist) and bind-mounted at `/model` in the container (on NODES=2 it is
 also rsynced to the worker's `~/models/<name>` once). `model_path` is mutually
 exclusive with `nfs_share` and `ABLIT=1`.
 
+With PLE mmap offload, persistent tables are accepted only after streaming
+SHA-256 over the actual checkpoint's PLE weights, scales and hash buffers.
+The identity also covers tensor names, shapes, dtypes and the ETP rank/layout;
+paths, config/index metadata, file sizes and manifest claims alone cannot
+authorize reuse. Local `model_weights` takes precedence over `model`; HF models
+use the locally cached snapshot for the requested revision and download directory.
+Missing, malformed or truncated checkpoint provenance stops startup loudly,
+without falling back to the large pinned-host allocation. Old metadata-only
+cache sidecars are rejected and their tables rebuilt; malformed cache sidecars
+warn and rebuild too. Keep checkpoint files unchanged throughout a serving run.
+
+This verification reads the relevant PLE payload once per process at every
+startup, including cache hits (about 51.2 GB / 47.7 GiB for the current lean
+checkpoint, plus small scales/buffers and safetensors headers). It does not
+hash unrelated expert payloads. Reads are bounded to 8 MiB chunks and advise
+`DONTNEED` on the clean source ranges immediately after hashing, so verification
+does not deliberately retain a second full PLE copy in the unified-memory page
+cache. That advice is not a hard memory cap: loading still needs the startup
+watchdog and sufficient memory headroom; cold-disk verification adds I/O latency.
+
 ## NFS weight sharing (optional, HF recipes, NODES=2 only)
 
 Off by default: each node keeps its own checkpoint copy, rsynced from the head

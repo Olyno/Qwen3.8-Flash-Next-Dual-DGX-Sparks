@@ -445,7 +445,7 @@ def _lookup_ple_rows_from_host_addr_kernel(
     tl.store(output_ptr + row_id * row_bytes + offsets, values, mask=store_mask)
 
 
-_PLE_MMAP_FORMAT = "ple-mmap-v1"
+_PLE_MMAP_FORMAT = "ple-mmap-v2-content"
 
 
 def _ple_advice_value() -> int:
@@ -468,33 +468,181 @@ def _ple_fsync_dir(path: str) -> None:
         os.close(fd)
 
 
-def _ple_checkpoint_identity() -> dict:
-    model_config = get_current_vllm_config().model_config
-    model = str(model_config.model_weights or model_config.model)
-    snapshot = None
-    if os.path.isdir(model):
-        model = os.path.realpath(model)
-        snapshot = os.path.basename(model)
-    else:
-        from huggingface_hub import try_to_load_from_cache
+def _ple_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate checkpoint metadata key: {key}")
+        result[key] = value
+    return result
 
-        try:
-            cached = try_to_load_from_cache(
-                model, "config.json", revision=model_config.revision
-            )
-        except ValueError:
-            cached = None
+
+def _ple_checkpoint_root() -> str:
+    config = get_current_vllm_config()
+    model_config = config.model_config
+    model = str(model_config.model_weights or model_config.model)
+    if os.path.isdir(model):
+        return os.path.realpath(model)
+    from huggingface_hub import try_to_load_from_cache
+
+    for filename in ("model.safetensors.index.json", "model.safetensors"):
+        cached = try_to_load_from_cache(
+            model, filename, revision=model_config.revision,
+            cache_dir=config.load_config.download_dir,
+        )
         if isinstance(cached, str):
-            snapshot = os.path.basename(os.path.dirname(cached))
-    return {"model": model, "revision": model_config.revision, "snapshot": snapshot}
+            # Keep the snapshot directory, not the symlink's blobs directory.
+            return os.path.abspath(os.path.dirname(cached))
+    raise ValueError(
+        f"no local safetensors checkpoint for {model}@{model_config.revision}"
+    )
+
+
+def _ple_checkpoint_identity(prefix: str) -> dict:
+    """Hash actual PLE payload ranges, never a path or a claimed manifest hash."""
+    try:
+        root = _ple_checkpoint_root()
+        parent = prefix.rsplit(".", 1)[0]
+
+        def relevant(name):
+            return name.startswith(prefix + ".") or name in {
+                parent + ".layer_multipliers",
+                parent + ".ngram_heads_offsets",
+                parent + ".ngram_heads_vocab_sizes",
+            }
+
+        index_path = os.path.join(root, "model.safetensors.index.json")
+        indexed = os.path.isfile(index_path)
+        shards = {}
+        if indexed:
+            with open(index_path) as handle:
+                weight_map = json.load(
+                    handle, object_pairs_hook=_ple_json_object
+                )["weight_map"]
+            if not isinstance(weight_map, dict) or not weight_map:
+                raise ValueError("empty or invalid safetensors weight_map")
+            for name, filename in weight_map.items():
+                if not isinstance(filename, str) or not filename.endswith(".safetensors"):
+                    raise ValueError(f"invalid shard path for {name}")
+                if relevant(name):
+                    shards.setdefault(filename, set()).add(name)
+        else:
+            shards = {
+                name: set() for name in os.listdir(root)
+                if name.endswith(".safetensors")
+            }
+        records = {}
+        payload_bytes = 0
+        for filename, expected in sorted(shards.items()):
+            path = os.path.join(root, filename)
+            if os.path.commonpath((root, os.path.abspath(path))) != root:
+                raise ValueError(f"checkpoint shard escapes model directory: {filename}")
+            with open(path, "rb", buffering=0) as handle:
+                before = os.fstat(handle.fileno())
+                os.posix_fadvise(handle.fileno(), 0, 0, os.POSIX_FADV_RANDOM)
+                raw_size = handle.read(8)
+                if len(raw_size) != 8:
+                    raise ValueError(f"truncated safetensors header: {filename}")
+                size = int.from_bytes(raw_size, "little")
+                if not 2 <= size <= min(100_000_000, before.st_size - 8):
+                    raise ValueError(f"invalid safetensors header length: {filename}")
+                header = json.loads(
+                    handle.read(size), object_pairs_hook=_ple_json_object
+                )
+                if not isinstance(header, dict):
+                    raise ValueError(f"invalid safetensors header: {filename}")
+                selected = {
+                    name: info for name, info in header.items()
+                    if name != "__metadata__" and relevant(name)
+                }
+                if indexed and set(selected) != expected:
+                    raise ValueError(f"PLE index/header mismatch: {filename}")
+                ranges = []
+                for name, info in selected.items():
+                    shape, dtype = info["shape"], info["dtype"]
+                    start, end = info["data_offsets"]
+                    widths = {
+                        "BOOL": 1, "U8": 1, "I8": 1, "F8_E4M3": 1,
+                        "F8_E5M2": 1, "F8_E4M3FN": 1, "F8_E8M0": 1,
+                        "I16": 2, "U16": 2, "F16": 2, "BF16": 2,
+                        "I32": 4, "U32": 4, "F32": 4,
+                        "I64": 8, "U64": 8, "F64": 8,
+                    }
+                    if not isinstance(shape, list) or dtype not in widths:
+                        raise ValueError(f"invalid PLE shape/dtype: {name}")
+                    nbytes = widths[dtype]
+                    for dim in shape:
+                        if type(dim) is not int or dim < 0:
+                            raise ValueError(f"invalid PLE dimension: {name}")
+                        nbytes *= dim
+                    if (
+                        type(start) is not int or type(end) is not int
+                        or not 0 <= start <= end <= before.st_size - 8 - size
+                        or end - start != nbytes
+                    ):
+                        raise ValueError(f"invalid/truncated PLE payload: {name}")
+                    ranges.append((start, end, name, dtype, shape))
+                previous_end = 0
+                for start, end, name, dtype, shape in sorted(ranges):
+                    if start < previous_end or name in records:
+                        raise ValueError(f"overlapping/duplicate PLE payload: {name}")
+                    previous_end = end
+                    handle.seek(8 + size + start)
+                    digest = hashlib.sha256()
+                    remaining = end - start
+                    while remaining:
+                        offset = handle.tell()
+                        block = handle.read(min(8 << 20, remaining))
+                        if not block:
+                            raise ValueError(f"truncated PLE payload: {name}")
+                        digest.update(block)
+                        remaining -= len(block)
+                        # Clean source pages must not become a second resident table.
+                        os.posix_fadvise(
+                            handle.fileno(), offset, len(block), os.POSIX_FADV_DONTNEED
+                        )
+                        del block
+                    payload_bytes += end - start
+                    records[name] = {
+                        "name": name, "dtype": dtype, "shape": shape,
+                        "sha256": digest.hexdigest(),
+                    }
+                after = os.fstat(handle.fileno())
+                if (
+                    before.st_size, before.st_mtime_ns, before.st_ctime_ns
+                ) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                    raise ValueError(f"checkpoint changed while hashing: {filename}")
+        if not any(
+            name.startswith(prefix + ".shard_") and name.endswith(".weight")
+            or name == prefix + ".weight" for name in records
+        ):
+            raise ValueError(f"no PLE weight payloads for {prefix}")
+        content = json.dumps(
+            [records[name] for name in sorted(records)],
+            sort_keys=True, separators=(",", ":"),
+        ).encode()
+        logger.info(
+            "PLE %s: verified SHA-256 of %d payload bytes in %d tensors",
+            prefix, payload_bytes, len(records),
+        )
+        return {
+            "checkpoint": root,
+            "payload_sha256": hashlib.sha256(content).hexdigest(),
+        }
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError(
+            f"PLE {prefix}: cannot verify checkpoint content; refusing mmap "
+            f"reuse or pinned-memory fallback: {exc}"
+        ) from exc
 
 
 def _ple_mmap_location(prefix: str, rank: int) -> tuple[str, dict] | None:
     root = os.environ.get("VLLM_PLE_MMAP_DIR", "").strip()
     if not root:
         return None
-    identity = _ple_checkpoint_identity()
-    key = identity["snapshot"] or hashlib.sha256(identity["model"].encode()).hexdigest()
+    identity = _ple_checkpoint_identity(prefix)
+    identity.update(rank=rank, world_size=get_etp_group().world_size)
+    key = os.path.basename(identity["checkpoint"])
     os.makedirs(root, exist_ok=True)
     name = f"{prefix.replace('/', '_')}.{key[:12]}.etp{rank}.bin"
     return os.path.join(root, name), identity
@@ -514,7 +662,9 @@ def _ple_mmap_matches(path: str, fingerprint: dict, nbytes: int) -> bool:
         with open(_ple_mmap_sidecar(path)) as handle:
             stored = json.load(handle)
         return stored == fingerprint and os.path.getsize(path) == nbytes
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        if os.path.exists(_ple_mmap_sidecar(path)):
+            logger.warning("PLE %s: invalid cache metadata; rebuilding (%s)", path, exc)
         return False
 
 
