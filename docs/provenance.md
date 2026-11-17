@@ -24,6 +24,32 @@ that lists the table and passes it back as `--hf-overrides`; the boot line
 "PLE table dtype not declared by checkpoint — overriding to float8_e4m3fn" is
 that path firing.
 
+### Verify a Lean bake against its source
+
+`scripts/verify_bake.py` compares the source and baked checkpoint payloads,
+allowing changes only in the declared BF16 `lm_head.weight` marker rows:
+
+```bash
+python3 scripts/verify_bake.py \
+  --src /path/to/trusted-source --baked /path/to/lean --token-map /path/to/map.json
+```
+
+Use `--shard` when the head is not in `model-00009-of-00010.safetensors`.
+The token map uses `{"ids": {"marker": 123}}`; IDs must be in range and every
+declared row must change. All other model files and tensor payloads must match
+the source, including other tensors in the edited shard. README/reproduction
+documents and the declared generation/bake metadata may differ. Files are
+compared in bounded chunks; manifest hashes are accumulated in the same pass
+when needed, without loading tensors or importing Torch.
+
+The baked `SHA256MANIFEST.json` must cover the edited shard and bake metadata;
+every entry is checked. It does not authenticate the artifact: source-versus-bake
+comparison supplies the independent unchanged-payload check. Verify the source
+against its pinned publisher revision with `scripts/verify-weights.py` first.
+This check establishes edit scope, not the mathematical correctness of the
+penalty transformation or generation quality; those need separate gates.
+
+
 ## Adopted
 
 | Mechanism | Where it lives | Source |
