@@ -62,6 +62,20 @@
     # ---- Worker (rank 1) ----
     if [[ "$NNODES" -eq 2 ]]; then
     info "--- Launching worker (rank 1) on $WORKER_IP ---"
+    # The worker has no repository checkout requirement. Install the host-side
+    # watchdog scripts in a stable per-user state directory for stop.sh too.
+    WORKER_MEMWATCH_DIR="$REMOTE_HOME/.local/state/vllm-memwatch"
+    ssh_worker "mkdir -p '$WORKER_MEMWATCH_DIR/scripts'"
+    scp -q "$SCRIPT_DIR/scripts/start-memwatch.sh" "$SCRIPT_DIR/scripts/memwatch.sh" \
+        "${WORKER_USER:+${WORKER_USER}@}${WORKER_IP}:$WORKER_MEMWATCH_DIR/scripts/"
+    ssh_worker "bash '$WORKER_MEMWATCH_DIR/scripts/start-memwatch.sh' --stop vllm-fn"
+    WORKER_MEMWATCH_ENV=""
+    for knob in MEMWATCH_MIN_GIB MEMWATCH_MIN_FREE_GIB MEMWATCH_FREE_GATE_GIB MEMWATCH_PSI_FULL MEMWATCH_CONSEC MEMWATCH_GRACE; do
+        if [[ -v "$knob" ]]; then
+            printf -v quoted '%q' "${!knob}"
+            WORKER_MEMWATCH_ENV+=" $knob=$quoted"
+        fi
+    done
     ssh_worker "docker rm -f vllm-fn >/dev/null 2>&1 || true"
     ssh_worker "mkdir -p '$REMOTE_HF' ~/.cache/vllm"
     WORKER_MODEL_MOUNT=""
@@ -192,6 +206,8 @@ LAUNCH_EOF
     if (( worker_rc != 0 )); then
         err "Worker container failed to start (exit $worker_rc) — not launching the head."
     fi
+    ssh_worker "$WORKER_MEMWATCH_ENV bash '$WORKER_MEMWATCH_DIR/scripts/start-memwatch.sh' vllm-fn" >/dev/null
+    info "Worker memory watchdog running during loading and serving ($WORKER_MEMWATCH_DIR/logs)."
     ok "Worker container started."
     info "  Waiting 15s for worker to initialize..."
     sleep 15
@@ -209,6 +225,7 @@ LAUNCH_EOF
         warn "Serving on 0.0.0.0 with no API key — anyone on the network can use it. Pass --api-key via EXTRA_VLLM_ARGS to require one."
     fi
     info "--- Launching head (rank 0) on $HEAD_IP ---"
+    "$SCRIPT_DIR/scripts/start-memwatch.sh" --stop vllm-fn
     docker rm -f vllm-fn >/dev/null 2>&1 || true
     mkdir -p "$HOME/.cache/vllm"
 
@@ -258,6 +275,8 @@ LAUNCH_EOF
 
     info "  (starting head container...)"
     bash "$HEAD_SCRIPT"
+    "$SCRIPT_DIR/scripts/start-memwatch.sh" vllm-fn >/dev/null
+    info "Memory watchdog running during loading and serving (logs/memwatch-vllm-fn.log)."
     rm -f "$HEAD_SCRIPT"
     ok "Head container started."
     info ""
@@ -333,9 +352,6 @@ LAUNCH_EOF
                 fi
                 ok "PLE engaged (table load line present in container log)."
             fi
-            # Host-memory watchdog, now that the load-time memory ramp is over.
-            "$SCRIPT_DIR/scripts/start-memwatch.sh" vllm-fn >/dev/null
-            info "Memory watchdog running (logs/memwatch-vllm-fn.log)"
             info ""
             info "Test with:"
             info "  curl http://localhost:$PORT/v1/chat/completions \\"

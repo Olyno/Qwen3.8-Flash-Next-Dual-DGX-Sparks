@@ -46,10 +46,9 @@ ssh_cmd() {
 
 # Stop the memory watchdog first, so it cannot emergency-stop the container
 # while we are gracefully stopping it ourselves.
-MEMWATCH_PIDFILE="logs/memwatch-$CONTAINER_NAME.pid"
-if [[ -f "$MEMWATCH_PIDFILE" ]]; then
-    kill "$(cat "$MEMWATCH_PIDFILE")" 2>/dev/null || true
-    rm -f "$MEMWATCH_PIDFILE"
+bash "$SCRIPT_DIR/scripts/start-memwatch.sh" --stop "$CONTAINER_NAME"
+if $HAS_WORKER; then
+    ssh_cmd 'if [[ -f "$HOME/.local/state/vllm-memwatch/scripts/start-memwatch.sh" ]]; then bash "$HOME/.local/state/vllm-memwatch/scripts/start-memwatch.sh" --stop vllm-fn; fi'
 fi
 
 # SIGTERM with a 30s grace, then rm: `docker rm -f` SIGKILLs, and under

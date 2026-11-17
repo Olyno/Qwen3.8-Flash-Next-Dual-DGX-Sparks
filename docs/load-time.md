@@ -27,6 +27,41 @@ So the loader is **CPU-bound**: roughly 2.4 ms per tensor (727 s ÷ 299,545), no
 
 It also explains a hazard: any loader that buffers whole shards on this device competes with the 77 GiB already resident in 121 GiB of unified memory.
 
+### Memory protection throughout loading
+
+The launcher starts a host-memory watchdog immediately after each successful
+container start, before the worker initialization delay or the head's readiness
+poll. It stays running after readiness; the ready path does not start a second
+monitor. A failed container start does not start a monitor for that container.
+With `NODES=2`, the scripts are copied over SSH/SCP to
+`$HOME/.local/state/vllm-memwatch/scripts` on the worker; the worker does not need
+a repository checkout. Its state, timeline and emergency archives live under
+`$HOME/.local/state/vllm-memwatch/logs`, not in the head's `logs/`.
+
+The existing one-second sampling and five-consecutive-sample debouncing remain:
+MemAvailable below 6 GiB, MemFree below 2 GiB while MemAvailable is below 10 GiB,
+or PSI memory `full` avg10 at least 20%. The `MEMWATCH_MIN_GIB`,
+`MEMWATCH_MIN_FREE_GIB`, `MEMWATCH_FREE_GATE_GIB`, `MEMWATCH_PSI_FULL`,
+`MEMWATCH_CONSEC` and `MEMWATCH_GRACE` overrides also apply to the worker.
+Emergency shutdown archives the container log and requests a graceful Docker
+stop with the existing 30-second grace before falling back to a kill.
+
+There is **no container memory cap configured by the launcher**. GPU allocations
+are not fully cgroup charged, and a userspace watchdog cannot guarantee protection
+against rapid unified-memory exhaustion or a stalled kernel. Starting it earlier
+closes the unmonitored loading window; it does not prove any loader or recipe safe
+and does not introduce a periodic cache-eviction workaround.
+
+Watchdog starts are serialized and idempotent for a running container instance.
+Each monitor is pinned to the Docker container ID, so it cannot stop a replacement
+with the same name. `stop.sh` terminates both host monitors before gracefully
+stopping the containers. Lifecycle state records the process start time and boot
+identity; Linux pidfds ensure even a stale or reused numeric PID cannot redirect
+the termination signal. Legacy PID-only files are signalled only if the live
+process command exactly matches this host's watchdog script and container.
+The lifecycle helper requires Python with Linux pidfd support; it refuses an
+unsafe signal fallback.
+
 ## Arms measured
 
 | loader | load | KV after boot | 18-task ruler | verdict |

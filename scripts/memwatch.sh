@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # memwatch.sh [--dry-run] [container]   (default container: vllm-fn)
 #
-# Host-memory watchdog for the single-Spark deployment, adapted from the
-# vendor single-Spark recipe's debounced version. On unified memory an
-# exhausted pool hangs the kernel instead of raising an OOM, so this stops
-# the container when the host runs out of margin. It is a second line of
-# defence behind the container's cgroup cap; a userspace poller cannot catch
-# a GiB/s collapse alone.
+# Host-memory watchdog for each Spark host, adapted from the vendor
+# single-Spark recipe's debounced version. On unified memory an exhausted
+# pool can hang the kernel instead of raising an OOM. No container memory cap
+# is configured by the launcher, and GPU allocations are not fully cgroup
+# charged. This userspace poller reduces risk during loading and serving; it
+# cannot guarantee protection against a GiB/s collapse or a stalled kernel.
 #
 # Three independent triggers, each debounced over MEMWATCH_CONSEC consecutive
 # 1s samples (a lone excursion is logged and resets the counter — the
@@ -87,6 +87,14 @@ if $DRY_RUN; then
     exit 0
 fi
 
+# Pin the container instance: an old monitor must never stop a replacement
+# which happens to reuse the same Docker name.
+CONTAINER_ID="${MEMWATCH_CONTAINER_ID:-$(docker inspect -f '{{.Id}}' "$CONTAINER")}"
+trap 'exit 0' TERM INT
+container_running() {
+    [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_ID" 2>/dev/null)" == "true" ]]
+}
+
 echo "$(date '+%F %T') watchdog start: container=$CONTAINER" \
      "floors: MemAvailable<${MIN_GIB}GiB, MemFree<${MIN_FREE_GIB}GiB (while MemAvailable<${FREE_GATE_GIB}GiB), PSI-full>=${PSI_FULL}%;" \
      "trigger=${CONSEC} consecutive samples; grace=${GRACE}s; archive=$ARCHIVE_DIR"
@@ -95,9 +103,9 @@ stop_container() {  # <reason>
     local ts; ts=$(date '+%Y%m%dT%H%M%S')
     echo "$(date '+%F %T') $1 -> stopping $CONTAINER"
     mkdir -p "$ARCHIVE_DIR"
-    docker logs --tail 3000 "$CONTAINER" > "$ARCHIVE_DIR/${CONTAINER}-$ts-container.log" 2>&1 || true
-    docker stop -t "$GRACE" "$CONTAINER" >/dev/null 2>&1 \
-        || docker kill "$CONTAINER" >/dev/null 2>&1
+    docker logs --tail 3000 "$CONTAINER_ID" > "$ARCHIVE_DIR/${CONTAINER}-$ts-container.log" 2>&1 || true
+    docker stop -t "$GRACE" "$CONTAINER_ID" >/dev/null 2>&1 \
+        || docker kill "$CONTAINER_ID" >/dev/null 2>&1
     # The marker line is how a later log read tells an emergency stop from a
     # clean stop.sh: only this path emits it.
     echo "WATCHDOG EMERGENCY STOP $1" >> "$OWN_LOG"
@@ -110,11 +118,11 @@ below_avail=0
 below_free=0
 below_psi=0
 cg_path=""
-while docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}\$"; do
+while container_running; do
     eval "$(awk '/^(MemFree|MemAvailable|SwapFree):/ { sub(":", "", $1); print "m_" $1 "=" $2 }' /proc/meminfo)"
     avail=$m_MemAvailable; free=$m_MemFree
     if [[ -z "$cg_path" || ! -f "$cg_path" ]]; then
-        cg_path="/sys/fs/cgroup/system.slice/docker-$(docker inspect -f '{{.Id}}' "$CONTAINER" 2>/dev/null).scope/memory.current"
+        cg_path="/sys/fs/cgroup/system.slice/docker-${CONTAINER_ID}.scope/memory.current"
     fi
     cg=$(cat "$cg_path" 2>/dev/null || echo 0)
 
