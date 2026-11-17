@@ -160,6 +160,78 @@ moving the verdict, while `--batch N` / `--shape-floor N` fold the server's
 batch-composition noise into the floor: the verdict uses the larger of the two
 p99 floors, and both are printed.
 
+### Completed-output and sustained tool-state gate
+
+Run the answer and tool-state gate against the actual candidate endpoint:
+
+```bash
+python3 bench/output_gate.py --url http://localhost:8888 \
+    --model Qwen3.8-Flash-Next-NVFP4 --runs 5
+```
+
+This command requires **every repeat** of every check to pass; 3/5 is a
+failure, not a majority pass. It preserves finish/stop metadata and accepts
+only a nonempty assistant final answer with `finish_reason=stop` for the
+answer checks. Length-limited, missing/nonfinal finishes, tool completions,
+unfinished inline thinking, malformed responses and request errors fail.
+The grader reads final `content`, never separate v0.32 `reasoning` or legacy
+`reasoning_content`; completed inline `<think>...</think>` is excluded too.
+The arithmetic check requires the final number, not a `540` substring.
+The lighthouse paragraph has a bounded word count and explicit historical
+anchors instead of a minimum character count. The French explanation is bounded
+to 15–100 words and must describe atmospheric scattering of light with a
+preference for blue/short wavelengths, rather than merely mentioning blue and
+diffusion; sentence punctuation and exact wording are not graded. Thus
+`"540" * 1000`, `"RAM" * 1000`, and `"bleu diffusion " * 1000` cannot pass.
+There is no general repetition ban: repeated identifiers, words, or valid
+arithmetic steps are not themselves failures.
+
+The same command also runs `tool_tasks.py`'s `reconcile_inventory` task in a
+fresh temporary directory for **each** repeat. Twelve ordered inventory
+batches must each be read, applied to `inventory.json`, and read back in a
+later assistant turn before the next batch is read. The checker validates
+every intermediate stock against independent batch ground truth, the actual
+file, the call order and turn boundaries, and the final reported stock.
+The shortest valid run has **36 actual file-tool calls and 37 assistant
+turns**, with a 50-turn cap. Only the existing `read_file` and `write_file`
+tools are offered and permitted for this task; no shell or Python execution
+is added. Tool turns require `finish_reason=tool_calls`, and the final turn
+requires a nonempty `stop` completion. Finish/stop metadata is retained per
+turn, including failed repeats. Assistant tool history uses v0.32 `reasoning`,
+normalizing legacy `reasoning_content` when needed.
+
+For the standalone task report, including per-turn completion metadata:
+
+```bash
+python3 bench/tool_tasks.py --base http://localhost:8888 \
+    --only reconcile_inventory --repeat 5 --json /tmp/inventory-gate.json
+python3 -m unittest discover -s tests -p 'test_output_gate.py'
+python3 bench/tool_tasks.py --selftest
+```
+
+The standalone tool benchmark reports task failures/flakiness but is not the
+strict gate exit-status contract; use `output_gate.py` for the fail-on-any-run
+decision. The palindrome grader runs model-authored Python in a fresh temporary
+working directory and isolated Python subprocess with a five-second wall
+timeout, two-second CPU limit, 256 MiB address-space limit, 1 MiB file-size
+limit, 32-descriptor limit, no new processes, and no core dumps. Output is
+discarded; a wall timeout kills the subprocess group. These limits are **not
+a filesystem or network sandbox**: the code still runs with the invoking
+user's permissions, and OS process limits may differ for privileged users.
+Use only a trusted endpoint and an appropriate disposable environment. The
+inventory task does not expand those privileges.
+
+Limits: these are finite breakage detectors, not proof of overall accuracy or
+of a repaired model/runtime. Prose and French grading check requested lexical
+anchors, not every historical or scientific claim; the arithmetic check does
+not prove the whole derivation. The sustained task tests state over real tool turns, not a
+guaranteed 64K-context or hours-long research workload. Increasing
+`--max-tokens` only changes each response budget; it does not establish
+long-context reliability. Keep the KL yardstick for distributional comparisons
+and retain task-specific long-run traces for broader agent claims. These
+commands describe the checks to run, not a claim that this candidate has
+already passed them on hardware.
+
 ## Running it
 
 ```

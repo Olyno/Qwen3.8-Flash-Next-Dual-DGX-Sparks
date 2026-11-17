@@ -3,8 +3,8 @@
 # Copyright (C) 2026 MiaAI Lab (https://x.com/MiaAI_lab)
 """Tool-use tasks: finish small agent jobs through the real tool-call loop.
 
-Every other gate in bench/ scores an answer. This one scores the loop: the
-model is offered tools, its calls are executed against a scratch directory,
+This scores the loop, also reused by output_gate.py: the model is offered
+tools, its calls are executed against a scratch directory,
 results go back as `role: "tool"` messages, and the run ends on a final answer
 or a turn cap. It exists so changes to tool routing, tool-call repair, skill
 nudges and output compaction can be measured by completed tasks, turns and
@@ -707,6 +707,86 @@ def check_write_then_verify(root, final, calls):
     return True, None, ""
 
 
+RECONCILE_BATCHES = [
+    {"received": 17 + i * 3, "shipped": 4 + i % 5}
+    for i in range(12)
+]
+
+
+def make_reconciliation(root):
+    with open(os.path.join(root, "inventory.json"), "w", encoding="utf-8") as f:
+        json.dump({"batch": 0, "stock": 100}, f)
+    os.makedirs(os.path.join(root, "batches"))
+    for i, batch in enumerate(RECONCILE_BATCHES, 1):
+        with open(os.path.join(root, f"batches/{i:02d}.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump(batch, f)
+
+
+def check_reconciliation(root, final, calls):
+    if any(call["name"] not in ("read_file", "write_file") for call in calls):
+        return False, "wrong_tool", "reconciliation only permits file reads and writes"
+    stock, previous_turn = 100, 0
+    for i, batch in enumerate(RECONCILE_BATCHES, 1):
+        read = _call_index(calls, "read_file", f"batches/{i:02d}.json",
+                           ok=True)
+        if read < 0 or calls[read]["turn"] <= previous_turn:
+            return False, "missing_step", f"batch {i} was not read after verification"
+        stock += batch["received"] - batch["shipped"]
+        expected = {"batch": i, "stock": stock}
+        wrote = _call_index(calls, "write_file", "inventory.json", ok=True,
+                            after=read)
+        if wrote < 0 or calls[wrote]["turn"] <= calls[read]["turn"]:
+            return False, "missing_step", f"batch {i} was not applied after reading"
+        try:
+            actual = json.loads(calls[wrote]["arguments"]["content"])
+        except (KeyError, TypeError, ValueError):
+            actual = None
+        if actual != expected:
+            return False, "wrong_state", f"batch {i}: expected {expected}, got {actual}"
+        verified = _call_index(calls, "read_file", "inventory.json", ok=True,
+                               after=wrote)
+        if verified < 0 or calls[verified]["turn"] <= calls[wrote]["turn"]:
+            return False, "not_reread", f"batch {i} was not verified after writing"
+        try:
+            actual = json.loads(calls[verified]["result"])
+        except (TypeError, ValueError):
+            actual = None
+        if actual != expected:
+            return False, "stale_read", f"batch {i} verification did not match"
+        previous_turn = calls[verified]["turn"]
+    try:
+        actual = json.loads(_read_text(root, "inventory.json") or "")
+    except ValueError:
+        actual = None
+    if actual != expected:
+        return False, "wrong_file", "final inventory does not match all batches"
+    if not re.fullmatch(rf"ANSWER:\s*{stock}\s*", final.strip()):
+        return False, "wrong_answer", f"expected final stock {stock}"
+    return True, None, ""
+
+
+SUSTAINED_TASK = {
+    "name": "reconcile_inventory",
+    "make": make_reconciliation,
+    "prompt": (
+        "Reconcile twelve inventory batches in order, 01 through 12. "
+        "inventory.json starts with batch=0 and stock=100. For each batch: "
+        "read batches/NN.json, add received and subtract shipped from stock, "
+        "then write inventory.json as a JSON object with batch (the completed "
+        "batch number) and stock. After each write, in a later tool turn read "
+        "inventory.json back to verify the exact new state. Only after seeing "
+        "that verification may you read the next batch. Read each batch before "
+        "calculating and writing its update; do not combine dependent calls "
+        "in one assistant turn. Use only read_file and write_file. After all "
+        "twelve verified updates, finish with only ANSWER: <final stock>."
+    ),
+    "check": check_reconciliation,
+    "max_turns": 50,
+    "tools": ("read_file", "write_file"),
+}
+
+
 TASKS = [
     {
         "name": "read_fact",
@@ -895,6 +975,7 @@ TASKS = [
         "check": check_write_then_verify,
         "max_turns": 5,
     },
+    SUSTAINED_TASK,
 ]
 
 TASK_BY_NAME = {task["name"]: task for task in TASKS}
@@ -941,13 +1022,48 @@ def sum_usage(usages):
     return reasoning_check.token_totals(rows)
 
 
+def final_content(message):
+    """Grade the final channel only, including legacy inline thinking."""
+    content = message.get("content") or ""
+    if not isinstance(content, str):
+        return ""
+    content = reasoning_check.strip_reasoning(content)
+    if re.search(r"</?think\b", content, re.I):
+        return ""
+    return content.strip()
+
+
+def completion_error(reply, allow_tools=True):
+    message = reply.get("message")
+    if not isinstance(message, dict):
+        return "response has no assistant message"
+    if message.get("role", "assistant") != "assistant":
+        return "response message is not from the assistant"
+    if message.get("content") is not None and not isinstance(message["content"], str):
+        return "response content is not text"
+    calls = message.get("tool_calls")
+    if calls is not None and not isinstance(calls, list):
+        return "malformed tool_calls"
+    if message.get("function_call"):
+        return "unexpected legacy function call"
+    finish = reply.get("finish_reason")
+    if calls:
+        if not allow_tools or finish != "tool_calls":
+            return f"unexpected tool completion ({finish!r})"
+    elif finish != "stop":
+        return f"nonfinal completion ({finish!r})"
+    elif not final_content(message):
+        return "empty or unfinished final content"
+    return None
+
+
 def run_task(task, root, chat, max_turns):
     setup_task(task, root)
     messages = [
         {"role": "system", "content": SYSTEM},
         {"role": "user", "content": task["prompt"]},
     ]
-    calls, usages = [], []
+    calls, usages, completions = [], [], []
     final = ""
     hit_cap = False
     error = None
@@ -971,6 +1087,11 @@ def run_task(task, root, chat, max_turns):
         model_seconds += time.time() - t_model
         usage = reply.get("usage")
         usages.append(usage if isinstance(usage, dict) else {})
+        completions.append({key: reply.get(key)
+                            for key in ("finish_reason", "stop_reason")})
+        error = completion_error(reply)
+        if error:
+            break
         message = reply.get("message")
         if not isinstance(message, dict):
             message = {}
@@ -980,25 +1101,32 @@ def run_task(task, root, chat, max_turns):
             raw_calls = []
 
         if not raw_calls:
-            final = reasoning_check.strip_reasoning(content)
+            final = final_content(message)
             break
 
         normalized = [normalize_call(call, i)
                       for i, call in enumerate(raw_calls)]
-        messages.append({"role": "assistant",
-                         "content": content or None,
-                         "tool_calls": normalized})
+        assistant = {"role": "assistant", "content": content or None,
+                     "tool_calls": normalized}
+        reasoning = message.get("reasoning")
+        if reasoning is None:
+            reasoning = message.get("reasoning_content")
+        if reasoning is not None:
+            assistant["reasoning"] = reasoning
+        messages.append(assistant)
         for call in normalized:
             name = call["function"]["name"]
             t_tool = time.time()
             try:
                 arguments = parse_arguments(call["function"]["arguments"])
+                if name not in task.get("tools", TOOL_NAMES):
+                    raise ToolError(f"tool {name!r} is not allowed for this task")
                 ok_call, output = invoke_tool(name, arguments, root)
             except ToolError as exc:
                 arguments, ok_call, output = {}, False, f"error: {exc}"
             tool_seconds += time.time() - t_tool
             calls.append({"name": name, "arguments": arguments,
-                          "ok": ok_call, "result": output,
+                          "ok": ok_call, "result": output, "turn": turns,
                           "seconds": round(time.time() - t_tool, 2)})
             messages.append({"role": "tool", "tool_call_id": call["id"],
                              "content": output})
@@ -1030,6 +1158,7 @@ def run_task(task, root, chat, max_turns):
         "model_seconds": round(model_seconds, 1),
         "tool_seconds": round(tool_seconds, 1),
         "final_tail": final.strip()[-200:],
+        "completions": completions,
         # What the model actually did, so a failure can be diagnosed without
         # re-running the task. Arguments and results are clipped: enough to
         # see the shape of the call, not a second copy of the transcript.
@@ -1038,6 +1167,7 @@ def run_task(task, root, chat, max_turns):
                                            ensure_ascii=False)[:160],
                    "ok": call["ok"],
                    "result": str(call["result"])[:160],
+                   "turn": call["turn"],
                    "seconds": call["seconds"]}
                   for call in calls],
     }
@@ -1077,6 +1207,7 @@ def aggregate_runs(runs):
                                   for run in runs), 1),
         "final_tail": shown["final_tail"],
         "calls": shown["calls"],
+        "completions": [run.get("completions", []) for run in runs],
     }
     if failures:
         result["reason"] = "flaky" if passes else failures[0]["reason"]
@@ -1093,11 +1224,11 @@ def aggregate_runs(runs):
     return result
 
 
-def chat_live(url, model, messages, max_tokens, timeout):
+def chat_live(url, model, messages, max_tokens, timeout, tools=None):
     payload = {
         "model": model,
         "messages": messages,
-        "tools": TOOLS,
+        "tools": TOOLS if tools is None else tools,
         "tool_choice": "auto",
         "temperature": 0,
         "max_tokens": max_tokens,
@@ -1112,6 +1243,8 @@ def chat_live(url, model, messages, max_tokens, timeout):
         raise RuntimeError("response has no choices")
     usage = data.get("usage")
     return {"message": choices[0].get("message") or {},
+            "finish_reason": choices[0].get("finish_reason"),
+            "stop_reason": choices[0].get("stop_reason"),
             "usage": usage if isinstance(usage, dict) else {}}
 
 
@@ -1128,7 +1261,8 @@ def _reply(content=None, tool_calls=None, usage=None):
     message = {"content": content}
     if tool_calls is not None:
         message["tool_calls"] = tool_calls
-    return {"message": message, "usage": usage or {}}
+    return {"message": message, "usage": usage or {},
+            "finish_reason": "tool_calls" if tool_calls else "stop"}
 
 
 def _call(name, arguments, call_id="call_1"):
@@ -1621,7 +1755,10 @@ def main(argv=None):
 
     def chat(messages):
         return chat_live(url, args.model, messages, args.max_tokens,
-                         args.timeout)
+                         args.timeout,
+                         tools=[tool for tool in TOOLS
+                                if tool["function"]["name"] in
+                                task.get("tools", TOOL_NAMES)])
 
     results = {}
     print(f"endpoint {url}")
