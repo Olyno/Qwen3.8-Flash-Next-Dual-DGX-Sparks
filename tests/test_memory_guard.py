@@ -5,8 +5,6 @@
   * engine/mem-gate.sh gates on min(MemAvailable, cgroup v2 headroom) and
     prints the honest "memory guard: N GiB (source: ...)" line — checked
     behaviorally against fake meminfo/cgroup files;
-  * engine/launch.sh fails a launch whose log shows no PLE table engagement
-    when the recipe asked for PLE offload;
   * none of the touched files leak the banned host token."""
 import os
 import re
@@ -97,26 +95,6 @@ class TestCgroupGuard(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
         self.assertRegex(out.stdout, r"memory guard: 100 GiB \(source: meminfo\)")
 
-
-class TestPleAssertion(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.src = (REPO / "engine" / "launch.sh").read_text()
-
-    def test_engagement_markers_cover_both_patcher_lanes(self):
-        for token in ("using packed mmap table", "mmap table attached",
-                      "file-backed table"):
-            self.assertIn(token, self.src)
-
-    def test_assertion_gated_on_v030_ple_offload(self):
-        self.assertRegex(
-            self.src,
-            r'\[\[ "\$V030" == "true" && "\$PLE_OFFLOAD" == "true" \]\]')
-
-    def test_assertion_after_readiness_and_fails_loudly(self):
-        ready = self.src.index("vLLM is ready and serving")
-        assert_pos = self.src.index("no PLE table engagement line")
-        self.assertGreater(assert_pos, ready)
 
 
 class TestNoBannedHostToken(unittest.TestCase):

@@ -279,7 +279,7 @@ LAUNCH_EOF
         log="$SCRIPT_DIR/logs/vllm-fn-$ts.log"
         docker logs vllm-fn > "$log" 2>&1 || true
         warn "Container log archived to $log"
-        grep -E 'ERROR|Traceback|Error' "$log" | tail -15
+        grep -E 'ERROR|Traceback|Error' "$log" | tail -15 || true
         # The head log alone hides the usual dual-node failure: the worker died
         # first and the head blocked on NCCL. Archive the worker side too.
         if [[ "$NNODES" -eq 2 ]]; then
@@ -326,9 +326,10 @@ LAUNCH_EOF
             # exact config that OOM-reboots this box — so fail loudly here,
             # while the container is still healthy enough to archive its log.
             if [[ "$V030" == "true" && "$PLE_OFFLOAD" == "true" ]]; then
-                if ! docker logs vllm-fn 2>&1 | grep -qE 'using packed mmap table|mmap table attached|file-backed table'; then
+                # Drain the log: grep -q can SIGPIPE docker after an early match.
+                if ! docker logs vllm-fn 2>&1 | grep -E 'using packed mmap table|mmap table attached|file-backed table' >/dev/null; then
                     dump_failure_logs
-                    err "ple_offload is on but the container log has no PLE table engagement line — PLE silently disengaged. Run ./stop.sh before relaunching; see the archived log above."
+                    err "ple_offload is on but PLE table engagement could not be verified (missing marker or container log retrieval failed). Run ./stop.sh before relaunching; see the archived log above."
                 fi
                 ok "PLE engaged (table load line present in container log)."
             fi
