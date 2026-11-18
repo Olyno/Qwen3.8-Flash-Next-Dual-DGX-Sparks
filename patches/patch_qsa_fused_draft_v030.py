@@ -21,9 +21,9 @@ and image patches — see licenses/myllmbox-MIT.LICENSE).
       the update path never reads query_start_loc_cpu.
     - QSAMetadataBuilder: opts into supports_draft_decode_metadata_update and
       implements update_draft_decode_metadata, re-launching the metadata
-      kernel between draft steps (the DeepseekSparseSWA pattern the v0.32
-      speculator already calls at
-      v1/worker/gpu/spec_decode/autoregressive/speculator.py).
+      kernel between draft steps. In the pinned image, V2 dispatch reaches
+      spec_decode/speculator.py through
+      spec_decode/target_dependent_ar/speculator.py.
 
 Stock v0.32 rebuilds attention metadata for the whole model between MTP draft
 steps because the QSA builder never opted in; the speculator logs "Fused
