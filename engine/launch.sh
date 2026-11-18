@@ -14,13 +14,10 @@
     HEAD_CHAT_MOUNT=""
     [[ -n "$CHAT_TEMPLATE" ]] && HEAD_CHAT_MOUNT="-v $CHAT_TEMPLATE:/chat_template.jinja:ro"
 
-    # PLE offload env. v0.32 defaults VLLM_PLE_CPU_OFFLOAD to True, which parks
-    # the table in pinned anonymous host memory (~32 GiB/node) — so the flag is
-    # always explicit, never inherited. On the v030 lane with ple_offload the
-    # mmap overlay (patches/v030_ple) reroutes that class to a file-backed
-    # table via VLLM_PLE_MMAP_DIR in OVERLAY_ENV; leave the flag at its default
-    # there so the pinned-host class the patch intercepts stays selected.
-    if [[ "$V030" == "true" && "$PLE_OFFLOAD" == "true" ]]; then
+    # The v030 lane uses --engram-config in the shared args. Only the legacy
+    # image consumes VLLM_PLE_CPU_OFFLOAD; sending it to v0.32 leaves the
+    # default pinned-host placement enabled even when offload is false.
+    if [[ "$V030" == "true" ]]; then
         PLE_OFFLOAD_ENV=""
     elif [[ "$PLE_OFFLOAD" == "true" ]]; then
         PLE_OFFLOAD_ENV="-e VLLM_PLE_CPU_OFFLOAD=1"

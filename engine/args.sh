@@ -9,6 +9,10 @@
     [[ -n "${MODEL_REVISION:-}" ]] && VLLM_ARGS+=("--revision" "$MODEL_REVISION")
     [[ -n "$CHAT_TEMPLATE" ]] && VLLM_ARGS+=("--chat-template" "/chat_template.jinja")
     VLLM_ARGS+=("--tensor-parallel-size" "$TENSOR_PARALLEL_SIZE")
+    # v0.32 PLE placement reads EngramConfig, not VLLM_PLE_CPU_OFFLOAD.
+    if [[ "$V030" == "true" ]]; then
+        VLLM_ARGS+=("--engram-config" "'{\"cpu_offload\":$PLE_OFFLOAD}'")
+    fi
     VLLM_ARGS+=("--gpu-memory-utilization" "$GPU_MEMORY_UTILIZATION")
     VLLM_ARGS+=("--max-num-seqs" "$MAX_NUM_SEQS")
     VLLM_ARGS+=("--max-num-batched-tokens" "$MAX_NUM_BATCHED_TOKENS")

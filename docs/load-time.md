@@ -61,6 +61,14 @@ against rapid unified-memory exhaustion or a stalled kernel. Starting it earlier
 closes the unmonitored loading window; it does not prove any loader or recipe safe
 and does not introduce a periodic cache-eviction workaround.
 
+The v0.32 image selects PLE storage through `EngramConfig.cpu_offload`,
+defaulting to pinned CPU tables. It ignores `VLLM_PLE_CPU_OFFLOAD`.
+The launcher passes the supported `--engram-config` explicitly from effective
+`PLE_OFFLOAD`, shared by head and worker; the legacy env flag is no longer
+sent on this lane. This fixes placement selection, not a general loading-time
+memory bound. Keep watchdog thresholds unchanged and verify the resulting
+table placement and loading headroom on each actual host pair.
+
 Watchdog starts are serialized and idempotent for a running container instance.
 Each monitor is pinned to the Docker container ID, so it cannot stop a replacement
 with the same name. `stop.sh` terminates both host monitors before gracefully

@@ -113,6 +113,10 @@ v0.32 mmap-offload path. `NODES=1` normally enables offload and prefetch;
 `NODES=2` normally keeps PLE on-device and disables both. An explicit
 `ple_offload: false` also disables automatic prefetch. Other recipes default
 prefetch to false; explicit `ple_prefill_prefetch: true` still requires offload.
+The v030 lane passes `--engram-config '{"cpu_offload":false}'` for on-device
+PLE, or `true` for the mmap-offload path, on both ranks. The old
+`VLLM_PLE_CPU_OFFLOAD` environment variable is only for the legacy image:
+v0.32 ignores it and otherwise defaults to pinned CPU tables.
 
 With PLE mmap offload, persistent tables are accepted only after streaming
 SHA-256 over the actual checkpoint's PLE weights, scales and hash buffers.
