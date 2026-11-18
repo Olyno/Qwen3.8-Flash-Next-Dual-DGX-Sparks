@@ -132,8 +132,9 @@ ple_staged_lookup: false
 # 233.3 s, prefill 198.1 -> 153.6 s (-22.5%), the three pathological cold turns
 # 45.64 -> 20.72 s (2.20x), the other twenty 2,266 -> 2,445 tok/s (+8%), worst
 # prefill 17.09 -> 7.93 s, and major faults 121,360 -> 40,026 on the same
-# content. Decode moved -6.3 s between boots and is not claimed.
-ple_prefill_prefetch: true
+# content. Decode moved -6.3 s between boots and is not claimed. Auto enables
+# this only with mmap offload (normally one node), not the on-device dual path.
+ple_prefill_prefetch: auto
 qsa_profile: stock
 fp8_dense: false
 # The SM12x skinny-GEMM plan table (vllm#59632/#59753, strided-A fix

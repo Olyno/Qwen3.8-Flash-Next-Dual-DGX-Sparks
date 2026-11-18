@@ -86,6 +86,12 @@ must exist) and bind-mounted at `/model` in the container (on NODES=2 it is
 also rsynced to the worker's `~/models/<name>` once). `model_path` is mutually
 exclusive with `nfs_share` and `ABLIT=1`.
 
+Production sets `ple_prefill_prefetch: auto`: prefetch is enabled only on the
+v0.32 mmap-offload path. `NODES=1` normally enables offload and prefetch;
+`NODES=2` normally keeps PLE on-device and disables both. An explicit
+`ple_offload: false` also disables automatic prefetch. Other recipes default
+prefetch to false; explicit `ple_prefill_prefetch: true` still requires offload.
+
 With PLE mmap offload, persistent tables are accepted only after streaming
 SHA-256 over the actual checkpoint's PLE weights, scales and hash buffers.
 The identity also covers tensor names, shapes, dtypes and the ETP rank/layout;

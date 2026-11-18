@@ -249,6 +249,14 @@ PLE_STAGED_LOOKUP="${PLE_STAGED_LOOKUP:-false}"
 # 19.8 MB/s at depth 1, 358 MB/s at 32). Prefill only -- decode and graph
 # capture never reach it. Off = on-demand faults, as before.
 PLE_PREFILL_PREFETCH="${PLE_PREFILL_PREFETCH:-false}"
+# Auto follows the mmap path; explicit true still requires offload below.
+if [[ "$PLE_PREFILL_PREFETCH" == "auto" ]]; then
+    PLE_PREFILL_PREFETCH=false
+    if [[ "$V030" == "true" && "$PLE_OFFLOAD" == "true" ]]; then
+        PLE_PREFILL_PREFETCH=true
+    fi
+fi
+[[ "$PLE_PREFILL_PREFETCH" == "true" || "$PLE_PREFILL_PREFETCH" == "false" ]] || err "ple_prefill_prefetch must be true, false, or auto"
 # Host reader threads for that prefetch (clamped to [1, 32] in the overlay).
 PLE_PREFETCH_THREADS="${PLE_PREFETCH_THREADS:-32}"
 # Direct GDN prefill output (v0.32 lane only,
