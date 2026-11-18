@@ -1217,3 +1217,93 @@ BENCH_BASE=http://localhost:8888 BENCH_MODEL=Qwen3.8-Flash-Next-NVFP4 \
 ```
 
 Raw rows are appended to `bench/data/exp_baseline2.jsonl` on the host. The boot log for the configuration above is the `vllm-fn` container from 2026-10-24, with `tensor_parallel_size=1`, `kv_cache_dtype=fp8`, and `speculative_config` at 4 drafts with `disable_eagle_block_drop=true`.
+
+## Upstream Gemma optimizations: applicability review
+
+Reviewed 2026-11-17: the ten PRs in the
+[lucianommartins creation-date query](https://github.com/vllm-project/vllm/pulls?q=is%3Apr+author%3Alucianommartins+%28created%3A%3E2026-10-05+created%3A%3C2026-10-10%29).
+This source comparison does not establish an end-to-end GB10 speedup.
+None warrants a direct wholesale backport.
+
+The comparison target is the digest-pinned v0.32.0 image in
+`recipes/prod.yaml`: V2ModelRunner, explicit async scheduling, GDN plus QSA,
+and FP8 target/draft heads on GB10/SM121. TP1 performance evidence does not
+establish TP2 speedups. The draft vocabulary is reduced to about 47K static
+rows, not Gemma's centroid-selected embedding scheme. The pinned published
+Lean checkpoint's `config.json` defines `text_config.hidden_size=2560`,
+`head_dim=256`, 24 query heads and 2 KV heads;
+its indexer has dimension 128, 4 query heads, 1 KV head, budget 2048 and
+compression ratio 4. GDN uses key/value dimensions 128, 16 key heads and
+48 value heads. MoE is **512 experts, top-10, intermediate size 640**
+(shared expert 640), with NVFP4 main experts; MTP uses FP8 block scales
+(group 128). These are checkpoint observations, not dimensions inferred from
+another Qwen family. In particular, the head-dimension-256 branch of #60317
+cannot be rejected on dimension alone.
+
+| PR and primary source | Current state; commit identity | Decision for this serving path |
+|---|---|---|
+| [60689](https://github.com/vllm-project/vllm/pull/60689): Gemma MTP sparse gather/GEMV, Q-only graph replay, relaxed verification | Open; head `972b5416882e` | **Profiling lead only** for draft allocations/graph replay. Gemma assistant architecture and centroid/dense embedding paths are not the existing Qwen FP8 reduced head. **Reject relaxed verification**: expert cap 14 and logit lenience 1.8 alter target computation/acceptance. |
+| [60674](https://github.com/vllm-project/vllm/pull/60674): Gemma QKV norm/RoPE, FFN norms, PLE projections, MoE routing | Open; head `0c41981faaa3` | **Profiling lead only** for launch/memory traffic. Implementations are Gemma-specific; Gemma PLE projection is not Qwen's n-gram lookup/offload/short-convolution path. Do not replace Qwen normalization or routing semantics. |
+| [60663](https://github.com/vllm-project/vllm/pull/60663): DiffusionGemma self-conditioning fused norms/GELU and zero-sync request batching | Open; head `2032b88bf329` | **No**: block diffusion/self-conditioning and canvas batching are absent from this autoregressive GDN/QSA model. |
+| [60643](https://github.com/vllm-project/vllm/pull/60643): Gemma4Unified 2D position embeddings and image/video projection batching | Merged Oct 22; `fdc5fde9d786`; merge not in v0.32.0 ancestry | **No**: encoder-free Gemma4Unified vision pipeline, not Qwen text decode. Being merged upstream does not mean this pinned release contains it. |
+| [60504](https://github.com/vllm-project/vllm/pull/60504): Triton FusedMoE tuning/configs and high-expert fallback heuristics | Open; head `3baa3d4fc044` | **Profiling lead, not usable tuning files**: Gemma E=128/top-8/N=704 at TP1, BF16/FP8 formats, differs from E=512/top-10/N=640 NVFP4. Active runtime reports FlashInfer CUTLASS, not this Triton config path. Generic E>=64 fallback edits matter only if a secondary path is actually reached. Listed Blackwell devices/SM80–90 spill checks do not establish SM121 safety or gain. |
+| [60478](https://github.com/vllm-project/vllm/pull/60478): Gemma vision pooling, vision/audio RMSNorm, axial 2D RoPE, prefix-mask bookkeeping | Open; head `6797431108c3` | **No** for this text-serving path: Gemma multimodal tower and bidirectional-prefix handling. The zero-sync/batching principle is reusable, not these model-specific modules. |
+| [60445](https://github.com/vllm-project/vllm/pull/60445): Gemma YOCO/KV-sharing fast prefill, metadata caching, decode preparation | Open; head `213591763655` | **No direct apply**: auto-enable requires KV-shared Gemma layers and **no speculative decoding**. Runner edits target `v1/worker/gpu_model_runner.py`, not evidence of execution in active V2ModelRunner. QSA draft-metadata reuse already exists locally (`patch_qsa_fused_draft_v030.py`); it is not proof YOCO work is covered or useful here. |
+| [60317](https://github.com/vllm-project/vllm/pull/60317): Triton unified-attention head-512 prefill and head-256 sliding-window tuning | Open; head `8f2ae76fd22e` | **No direct apply: backend mismatch**. Head-256 matches dimension, but the actual QSA implementation calls its own sparse kernel and explicitly rejects sliding-window attention. Head-512 also mismatches. The PR's general “Qwen 64/128 unchanged” statement does not describe this checkpoint. |
+| [60289](https://github.com/vllm-project/vllm/pull/60289): EmbeddingGemma2 sequence-length resolution and head>=512 Triton prefill tile cap | Merged Oct 7; `b803edbc9fa5`; ancestor of v0.32.0 | **Already upstream; no extra patch**. Pooling/config cleanup is unrelated; generic head>=512 prefill guard does not match head 256 here. |
+| [60254](https://github.com/vllm-project/vllm/pull/60254): EmbeddingGemma2 bidirectional multimodal pooling model | Merged Oct 6; `02b83919aa2e`; ancestor of v0.32.0 | **Already upstream; no extra patch**. Adds an embedding architecture (768-dimensional output, bidirectional head-512 attention), not an optimization of Qwen generation. |
+
+The **actual pinned image**, not an assumed official-tag layout, resolves the
+attention mismatch. In its `vllm/models/qwen4_exp/nvidia/qsa.py:284-285`,
+`forward_qsa` rejects sliding-window attention; lines 316-329 dispatch
+`qsa_sparse_paged_attention`. That function in `nvidia/ops/qsa.py:670-695`
+selects a QSA-specific split configuration and launches
+`_qsa_sparse_paged_gqa_splitk_kernel`, not Triton unified attention.
+Existing fusion is also concrete: `nvidia/qsa.py:493-498` gates the combined
+indexer/main QK-norm/RoPE/gate/cache-write preparation, and
+`nvidia/indexer_qsa.py:298-342` calls `qsa_prepare` with main QKV and norm
+weights. Actual V2 selection in `vllm/v1/worker/gpu_worker.py:563-579`
+imports `v1/worker/gpu/model_runner.py`, bypassing the legacy runner targeted
+by #60445. These source observations came from a read-only extraction of
+the image digest above; they are not kernel-time measurements.
+
+Release inclusion above is commit ancestry, not an inference from dates:
+the [v0.32.0 tag](https://api.github.com/repos/vllm-project/vllm/git/ref/tags/v0.32.0)
+resolves to `5df63a7203cdb9328d824a27b682e77c7b9928be`.
+GitHub comparisons show [#60254](https://api.github.com/repos/vllm-project/vllm/compare/02b83919aa2eece2fd7efb8d8c906e4db9a02ff4...v0.32.0)
+and [#60289](https://api.github.com/repos/vllm-project/vllm/compare/b803edbc9fa5adbbf31136bf128d88533f7d39c2...v0.32.0)
+as `ahead` with zero commits behind; [#60643](https://api.github.com/repos/vllm-project/vllm/compare/fdc5fde9d786832ab638bc0c2eb2328b637ecd0a...v0.32.0)
+is `diverged`. All seven open PR heads above also compare as `diverged`
+against that tag. This does not rule out equivalent independently backported
+hunks in the image; such equivalence needs a source comparison, not a PR state.
+
+**Numerical claims are narrower than “lossless.”** #60689's headline exactness
+coexists with 93.8% token-match rows in its draft-loop component table.
+#60674 reports only 65–100% within one ULP; #60317 reports 94.2–100% within
+one ULP and less than 100% evaluation-answer agreement. #60663 reports
+99.98–100% bit-exact self-conditioning results, while its batching results
+are weaker; #60478's 2D RoPE is only 96.3–96.4% within one ULP. #60643's
+position lookup is exact, but larger batched GEMMs are not generally exact.
+Cosine similarity, one-ULP agreement, seeded greedy agreement, and preserved
+sampling distribution are different claims. Several included serving scripts
+(for example #60663, #60445 and #60643) use `load_format="dummy"`; those
+measurements do not establish trained-checkpoint quality. #60643's included
+script also sets eager mode for unified 12B despite its compiled-serving
+headline. No A100/component figure establishes end-to-end NVFP4 GB10 gain.
+
+**Next profiling candidates, in order:** (1) attribute active Qwen MTP draft
+head traffic, transient allocations and graph-replay gaps before borrowing
+only the allocation/graph ideas from #60689; keep strict target verification
+and the existing reduced-vocabulary mapping. (2) Attribute the observed
+FlashInfer CUTLASS NVFP4 expert kernel and routed-token/padding distribution
+at E=512/top-10/N=640; consider #60504's generic routing/tiling ideas only
+after proving they apply to that implementation, not by installing its
+Triton configs. (3) Attribute QSA norm/RoPE and metadata launch time, checking
+the native fused preparation and existing draft-metadata reuse before
+considering #60674/#60445 ideas. #60317 is not a candidate for the established
+QSA call path; revisit only for a separately demonstrated unified-attention
+path. Outstanding evidence is runtime fusion-gate selection, any secondary
+expert-backend dispatch, kernel time shares and before/after
+quality/performance on this checkpoint.
+Do not turn on relaxed verification, copy Gemma kernels/configs, or change
+SSM/head precision on the strength of these PRs.
