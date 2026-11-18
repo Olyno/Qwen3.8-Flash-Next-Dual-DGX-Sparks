@@ -6,14 +6,14 @@
 # Based on: https://github.com/getrefined/Qwen3.8-Flash-Next-NVFP4-vLLM-DGX-Spark
 #
 # Config is split in two:
-#   .env                  machine truth only — IPs, interface, IB, secrets
-#   recipes/<RECIPE>.yaml serving truth — model, image, KV dtype, MTP, ports
-# Default boot is RECIPE=prod (the local checkpoint on the vLLM 0.30
-# lane, no download). RECIPE=mia boots the vendor reference recipe (stock
-# nvidia checkpoint from the HF cache).
+#   .env                  machine identity, secrets and model/cache overrides
+#   recipes/<RECIPE>.yaml serving defaults — model, image, KV dtype, MTP, ports
+# Default boot is RECIPE=prod (the pinned published Lean checkpoint in the HF
+# cache, on the v030 lane / vLLM v0.32.0). RECIPE=mia boots the vendor
+# reference recipe (stock nvidia checkpoint from the HF cache).
 #
 # Usage:
-#   ./start.sh                # sync weights if needed → patch → launch
+#   ./start.sh                # download if needed → sync → patch → launch
 #   ./start.sh --no-download  # skip HF download (weights already cached on head)
 #   ./start.sh --no-launch    # download + sync only, don't start server
 #   ./start.sh --launch       # skip download/sync; apply patch + launch
