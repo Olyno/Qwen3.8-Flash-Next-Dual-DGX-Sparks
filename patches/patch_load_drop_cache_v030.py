@@ -32,9 +32,11 @@ straggler sweep (DONTNEED on an already-dropped shard is a cheap no-op), and
 (2) the files the loader opens but never streams — config.json, the chat
 template, tokenizer files, generation_config, the shard index,
 hf_quant_config — which sit beside the shards (under /model when the recipe
-bind-mounts a local checkpoint). Out of reach of both: the threaded
+bind-mounts a local checkpoint). RunAI streaming also calls this sweep after
+its streamer context releases the shard readers; it has no per-shard hook
+because the tensor stream exposes no shard-completion boundary. The threaded
 iterator (multi_thread_safetensors_weights_iterator, only used by
---load-format threaded). End-credit for the unified-memory sweep idea:
+--load-format threaded) remains out of reach. End-credit for the sweep idea:
 NVIDIA/flare-local-inference (Apache-2.0) 5dd6769, idea-level, own
 implementation.
 
@@ -158,8 +160,25 @@ LAZY_NEW = """\
 
 def multi_thread_safetensors_weights_iterator(
 """
+RUNAI_OLD = """\
+        for name, tensor in tensor_iter:
+            yield name, tensor.clone()
+
+
+def fastsafetensors_weights_iterator(
+"""
+RUNAI_NEW = """\
+        for name, tensor in tensor_iter:
+            yield name, tensor.clone()
+
+    _fadvise_dontneed_load_end(hf_weights_files)
+
+
+def fastsafetensors_weights_iterator(
+"""
 HUNKS = ((HELPER_OLD, HELPER_NEW), (EAGER_OLD, EAGER_NEW),
-         (TORCHAO_OLD, TORCHAO_NEW), (LAZY_OLD, LAZY_NEW))
+         (TORCHAO_OLD, TORCHAO_NEW), (LAZY_OLD, LAZY_NEW),
+         (RUNAI_OLD, RUNAI_NEW))
 
 
 def _apply(src, hunks, name):

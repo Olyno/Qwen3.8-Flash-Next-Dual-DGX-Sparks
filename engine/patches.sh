@@ -238,11 +238,10 @@ if $DO_LAUNCH && [[ "$V030" == "true" ]]; then
     fi
     if [[ "$LOAD_DROP_CACHE" == "true" ]]; then
         info "=== Step 4c: loader page-cache drop (vLLM 0.32) ==="
-        # Port of myllmbox/vllm@354bfc2 (patches/patch_load_drop_cache_v030.py):
-        # posix_fadvise(DONTNEED) on each safetensors shard right after the
-        # loader consumes it. Step 4b-2 evicts the checkpoint from the host
-        # side before launch; this keeps the cache one shard deep during the
-        # load itself, on the same unified-memory pool the GPU allocates from.
+        # Safetensors drops each consumed shard; RunAI has no shard-completion
+        # boundary and sweeps only after its streamer releases the readers.
+        # Both sweep shards/sidecars at load end. DONTNEED is advisory: this
+        # does not cap page-cache growth during RunAI loading.
         mkdir -p "$SCRIPT_DIR/patches/v030_dropcache/orig"
         extract_from_image "$VLLM_PKG/model_executor/model_loader/weight_utils.py" \
                            "$SCRIPT_DIR/patches/v030_dropcache/orig/weight_utils.py"

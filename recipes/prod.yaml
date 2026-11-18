@@ -216,8 +216,8 @@ qsa_rope_clamp: true
 # ~21.2 / code ~30.9 -> ~35.9 / copy ~60.9 -> ~61.6 tok/s, quality gate
 # PASS, +2.2 GiB device (KV 262k -> 153k tokens). The merged plan ships in
 # the image table (skinny_gemm.py QWEN4_EXP_SM121_GEMM_PLANS).
-# fadvise(DONTNEED) each checkpoint shard as the loader finishes it, keeping
-# the page cache one shard deep during the load.
+# Safetensors advises DONTNEED after each shard; RunAI sweeps shards and
+# sidecars only at load end, after its readers close. Not a loading memory cap.
 load_drop_cache: true
 # Weight loader. This checkpoint holds ~300k tensors (weight + weight_scale +
 # weight_scale_2 + input_scale per expert per layer), and the per-tensor path

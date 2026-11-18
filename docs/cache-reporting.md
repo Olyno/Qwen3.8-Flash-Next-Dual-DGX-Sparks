@@ -32,3 +32,19 @@ CPU-only regressions in `tests/test_launch_readiness.py` use fake Docker and
 health responses to cover large logs, missing markers, log retrieval failures,
 PLE gating, and diagnostic preservation. They do not start a server or prove
 live PLE engagement.
+
+## Loader page-cache eviction
+
+`load_drop_cache: true` mounts a patched `weight_utils.py`. The safetensors
+iterator advises `DONTNEED` after each consumed shard and sweeps checkpoint
+shards and sidecars at load end. `runai_streamer` uses a separate iterator:
+it now runs the same end sweep after the streamer's context releases its
+readers. There is no per-shard RunAI hook because that tensor stream does not
+publish shard-completion boundaries. Previously RunAI bypassed both hooks.
+
+This is advisory clean-page eviction, not a hard loading-time memory bound,
+and it does not release live tensors or streamer-owned buffers. Keep the
+memory watchdog active during loading. The threaded loader is not covered.
+CPU regressions execute the patched iterator from an extracted upstream
+source, checking tensor delivery, gate-off behavior, and eviction only after
+streamer release. They do not certify GPU loading or memory headroom.
