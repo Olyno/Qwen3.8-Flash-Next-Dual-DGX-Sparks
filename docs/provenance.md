@@ -24,6 +24,14 @@ that lists the table and passes it back as `--hf-overrides`; the boot line
 "PLE table dtype not declared by checkpoint — overriding to float8_e4m3fn" is
 that path firing.
 
+Production downloads the published Lean repository
+`Olyno/Qwen3.8-Flash-Next-NVFP4-lean` at commit
+`a4d1e6082aa54e64188ea0cd3fca644e0447bc8a` into the normal HF cache.
+It does not require a separately staged local directory. `.env` may override
+`HF_HOME`, `MODEL_ID`, `MODEL_REVISION`, or use `MODEL_PATH` to bypass HF.
+A commit pin identifies the requested artifact; it is not an independent
+source-versus-bake payload or generation-quality verification.
+
 ### Verify a Lean bake against its source
 
 `scripts/verify_bake.py` compares the source and baked checkpoint payloads,

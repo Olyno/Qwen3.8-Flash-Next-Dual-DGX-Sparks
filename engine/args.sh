@@ -6,6 +6,7 @@
     VLLM_ARGS=()
     VLLM_ARGS+=("--enable-prompt-tokens-details")
     VLLM_ARGS+=("--served-model-name" "$SERVED_MODEL_NAME")
+    [[ -n "${MODEL_REVISION:-}" ]] && VLLM_ARGS+=("--revision" "$MODEL_REVISION")
     [[ -n "$CHAT_TEMPLATE" ]] && VLLM_ARGS+=("--chat-template" "/chat_template.jinja")
     VLLM_ARGS+=("--tensor-parallel-size" "$TENSOR_PARALLEL_SIZE")
     VLLM_ARGS+=("--gpu-memory-utilization" "$GPU_MEMORY_UTILIZATION")

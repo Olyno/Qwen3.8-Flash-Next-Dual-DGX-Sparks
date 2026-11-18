@@ -50,7 +50,7 @@ else
         WORKER_SNAP_RC=2
         if ssh_worker "test -d '$REMOTE_HUB/models--${ORG}--${NAME}'" 2>/dev/null; then
             set +e
-            ssh_worker python3 - "$REMOTE_HUB/models--${ORG}--${NAME}" \
+            ssh_worker python3 - "$REMOTE_HUB/models--${ORG}--${NAME}${MODEL_REVISION:+/snapshots/$MODEL_REVISION}" \
                 < "$SCRIPT_DIR/scripts/resolve_snapshot.py" >/dev/null
             WORKER_SNAP_RC=$?
             set -e

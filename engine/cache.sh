@@ -110,8 +110,9 @@ normalize_ref_main "$HEAD_MODEL_PATH"
 # and vLLM would die minutes into load.
 SNAP=""
 SNAP_RC=0
-SNAP="$(python3 "$SCRIPT_DIR/scripts/resolve_snapshot.py" "$HEAD_MODEL_PATH")" && SNAP_RC=0 || SNAP_RC=$?
-[[ -n "$SNAP" ]] || err "No snapshot under $HEAD_MODEL_PATH/snapshots"
+SNAPSHOT_PATH="$HEAD_MODEL_PATH${MODEL_REVISION:+/snapshots/$MODEL_REVISION}"
+SNAP="$(python3 "$SCRIPT_DIR/scripts/resolve_snapshot.py" "$SNAPSHOT_PATH")" && SNAP_RC=0 || SNAP_RC=$?
+[[ -n "$SNAP" ]] || err "No checkpoint snapshot at $SNAPSHOT_PATH (revision ${MODEL_REVISION:-main})"
 if [[ "$SNAP_RC" -ne 0 ]]; then
     if [[ "$ABLIT" == "1" && "$MODEL_ID" == "$ABLIT_MODEL_ID" ]]; then
         err "Checkpoint snapshot is incomplete (missing indexed weight shards).
@@ -123,10 +124,8 @@ if [[ "$SNAP_RC" -ne 0 ]]; then
 fi
 ok "Model cache: $HEAD_MODEL_PATH  (snapshot $SNAP)"
 
-# PLE config must come from the snapshot the engine will load. refs/main
-# names that revision. Directory order does not. Never guess by ls order.
-# SNAP was already resolved by scripts/resolve_snapshot.py (complete shards,
-# refs/main preferred).
+# Use the exact requested revision, or the resolver's selected main snapshot.
+# PLE configuration and vLLM must describe the same checkpoint.
 PLE_CONFIG_DIR="$HEAD_MODEL_PATH/snapshots/$SNAP"
 if [[ ! -f "$PLE_CONFIG_DIR/config.json" && -f "$MODEL_DIR/config.json" ]]; then
     PLE_CONFIG_DIR="$MODEL_DIR"

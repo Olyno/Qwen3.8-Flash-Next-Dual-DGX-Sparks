@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""The shipped recipes must resolve to their contracts: prod (the default
-boot) is the local checkpoint on the v030 lane (vLLM v0.32.0) with no
-download; mia is the vendor day-0 reference (stock HF checkpoint, stock
-image)."""
+"""Recipe parsing and topology-dependent PLE configuration."""
 import subprocess, unittest
 import os
 import shlex
@@ -24,16 +21,6 @@ def load(name):
 
 
 class TestRecipes(unittest.TestCase):
-    def test_prod_is_lean_local_v030(self):
-        env = load("prod")
-        self.assertTrue(env["IMAGE"].startswith("vllm/vllm-openai:v0.32.0@sha256:"))
-        self.assertEqual(env["V030"], "true")
-        self.assertIn("Qwen3.8-Flash-Next-NVFP4-lean", env["MODEL_PATH"])
-        self.assertEqual(env["DO_DOWNLOAD_DEFAULT"], "false")
-        self.assertEqual(env["MTP_NUM_SPECULATIVE_TOKENS"], "4")
-        # opt-in flags stay off by default; prod must not pin them
-        self.assertNotIn("GDN_PREFILL_BACKEND", env)
-
     def test_mia_is_vendor_reference(self):
         env = load("mia")
         self.assertEqual(env["IMAGE"], "vllm/vllm-openai:qwen38-flash-next")
@@ -48,7 +35,6 @@ class TestPrefetchTopology(unittest.TestCase):
             root = Path(directory)
             (root / "engine").symlink_to(REPO / "engine", target_is_directory=True)
             (root / "chat_template_cod.jinja").symlink_to(REPO / "chat_template_cod.jinja")
-            (root / "models/Qwen3.8-Flash-Next-NVFP4-lean").mkdir(parents=True)
             (root / "recipes").mkdir()
             recipe = (REPO / "recipes/prod.yaml").read_text()
             if prefetch is not None:

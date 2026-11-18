@@ -23,7 +23,7 @@ if ! $DO_LAUNCH && [[ "$NNODES" -eq 2 ]]; then
         fi
     elif [[ "$NFS_SHARE" == "true" ]]; then
         nfs_ensure_worker_volume
-        if nfs_worker_has_model "hub/models--${ORG}--${NAME}"; then
+        if nfs_worker_has_model "hub/models--${ORG}--${NAME}${MODEL_REVISION:+/snapshots/$MODEL_REVISION}"; then
             ok "WORKER ($WORKER_IP): nfs $NFS_VOLUME → hub/models--${ORG}--${NAME}"
         else
             err "WORKER cannot see hub/models--${ORG}--${NAME} over NFS. Check: docker logs $NFS_CONTAINER"

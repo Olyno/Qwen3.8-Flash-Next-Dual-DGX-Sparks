@@ -48,9 +48,9 @@ ssh_worker() {
 }
 
 # 1. Download the model weights (head node) — HF recipes only; local
-#    model_path recipes set do_download_default: "false".
+#    MODEL_PATH overrides set do_download_default: "false".
 if $DO_DOWNLOAD; then
-    "$SCRIPT_DIR/download.sh" "$MODEL_ID"
+    MODEL_REVISION="$MODEL_REVISION" "$SCRIPT_DIR/download.sh" "$MODEL_ID"
 fi
 
 # shellcheck source=engine/cache.sh

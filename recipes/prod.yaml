@@ -1,9 +1,10 @@
 # recipes/prod.yaml — our serving config, and the default boot (RECIPE unset
 # -> prod). All new optimizations and deltas land here.
 #
-# Model: the local checkpoint (marker-penalty thinking suppression baked into the weights — the
-# thinking suppression needs no serving-side code). Local dir, bind-mounted
-# at /model, never downloaded. vLLM v0.32.0 (v030 lane): PLE handling, the
+# Model: the published Lean checkpoint (marker penalty baked into the weights;
+# no serving-side suppression code). Resolve the pinned revision in the HF
+# cache by default; .env can override repository/revision or MODEL_PATH.
+# vLLM v0.32.0 (v030 lane): PLE handling, the
 # block-drop fix and FP8 KV (vllm#55557) are all native — the FP8-KV overlay
 # is gone.
 #
@@ -36,8 +37,9 @@ name: prod
 image: vllm/vllm-openai:v0.32.0@sha256:befccf0e7e4089aa23926bb6f887a85c0d46c2a99e6de5c5ffdf5cb7957c5b34
 v030: true
 skip_ple_patch: true
-model_path: ~/models/Qwen3.8-Flash-Next-NVFP4-lean
-do_download_default: false
+model_id: Olyno/Qwen3.8-Flash-Next-NVFP4-lean
+model_revision: a4d1e6082aa54e64188ea0cd3fca644e0447bc8a
+do_download_default: true
 served_model_name: Qwen3.8-Flash-Next-NVFP4  # what client tools match on /v1/models
 # CoD (Chain-of-Draft) prior baked into the template's default reasoning
 # instructions — the chain-of-draft prior, applied to every client.

@@ -83,9 +83,13 @@
     # (indexed shards present) exactly like engine/pair.sh does before syncing.
     worker_snapshot_ok() {  # worker_snapshot_ok <remote checkpoint dir>
         local rc=2
-        if ssh_worker "test -d '$1'" 2>/dev/null; then
+        local checkpoint="$1"
+        if [[ -z "$MODEL_PATH" && -n "${MODEL_REVISION:-}" ]]; then
+            checkpoint+="/snapshots/$MODEL_REVISION"
+        fi
+        if ssh_worker "test -d '$checkpoint'" 2>/dev/null; then
             set +e
-            ssh_worker python3 - "$1" \
+            ssh_worker python3 - "$checkpoint" \
                 < "$SCRIPT_DIR/scripts/resolve_snapshot.py" >/dev/null
             rc=$?
             set -e
@@ -101,7 +105,7 @@
         WORKER_MODEL_MOUNT="-v $WORKER_MODEL_PATH:/model:ro"
     elif [[ "$NFS_SHARE" == "true" ]]; then
         nfs_ensure_worker_volume recreate
-        if nfs_worker_has_model "hub/models--${ORG}--${NAME}"; then
+        if nfs_worker_has_model "hub/models--${ORG}--${NAME}${MODEL_REVISION:+/snapshots/$MODEL_REVISION}"; then
             ok "Worker sees checkpoint over NFS"
         else
             err "WORKER cannot see hub/models--${ORG}--${NAME} over NFS. Check: docker logs $NFS_CONTAINER"

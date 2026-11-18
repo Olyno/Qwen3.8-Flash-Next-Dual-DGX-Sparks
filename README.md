@@ -29,17 +29,17 @@ docs/             notes
 
 Config is split in two, on purpose:
 
-- **`.env`** — machine truth only: `NODES` (1 = single Spark, 2 = head +
-  worker), cluster IPs, interface, InfiniBand, secrets. Copy `.env.example`
-  and edit. Never holds serving knobs.
-- **`recipes/<name>.yaml`** — the complete serving config: model, image, KV
-  dtype, MTP, ports. A recipe wins over `.env` for every key it sets, so a
-  stale `.env` value can never silently take effect. `RECIPE=<name> ./start.sh`
+- **`.env`** — machine identity, secrets, HF cache location, and optional
+  model-source overrides (`MODEL_ID`, `MODEL_REVISION`, `MODEL_PATH`).
+  Copy `.env.example` and edit.
+- **`recipes/<name>.yaml`** — serving defaults: model, image, KV dtype, MTP,
+  ports. Recipes win over `.env` for serving settings; the three model-source
+  variables above override recipe defaults. `RECIPE=<name> ./start.sh`
   selects one; the default is `prod`.
 
 | Recipe | Model | Image | Use |
 |---|---|---|---|
-| `prod` (default) | local `~/models/Qwen3.8-Flash-Next-NVFP4-lean`, published as [Olyno/Qwen3.8-Flash-Next-NVFP4-lean](https://huggingface.co/Olyno/Qwen3.8-Flash-Next-NVFP4-lean) | `vllm/vllm-openai:v0.32.0` | our serving config |
+| `prod` (default) | [Olyno/Qwen3.8-Flash-Next-NVFP4-lean](https://huggingface.co/Olyno/Qwen3.8-Flash-Next-NVFP4-lean) (HF cache, pinned revision) | `vllm/vllm-openai:v0.32.0` | our serving config |
 | `mia` | `nvidia/Qwen3.8-Flash-Next-NVFP4` (HF cache, stock weights) | `vllm/vllm-openai:qwen38-flash-next` | vendor reference, day-0 defaults |
 
 All new optimizations land in `prod.yaml`.
@@ -51,14 +51,14 @@ All new optimizations land in `prod.yaml`.
 - `.env` filled in (`cp .env.example .env`): `NODES`, `HEAD_IP`, and for
   NODES=2 also `WORKER_IP`, `IFACE`, `IB_HCA`, `IB_GID_INDEX` — see the
   comments in the file.
-- For `prod`: the local checkpoint at the recipe's `model_path`
-  (default `~/models/Qwen3.8-Flash-Next-NVFP4-lean`) on the head.
-- For `mia`: `./download.sh` once (fetches the nvidia checkpoint onto the head).
+- For `prod`: enough storage in the HF cache; startup downloads the pinned Lean
+  revision if missing. No separate `~/models` directory is required.
+- For `mia`: startup downloads the nvidia checkpoint if missing.
 
 ## Quick start
 
 ```bash
-./start.sh                 # default: patch → launch (syncs weights to the worker first when NODES=2)
+./start.sh                 # default: download if needed → sync (NODES=2) → patch → launch
 RECIPE=mia ./start.sh      # vendor reference: download (if needed) → sync → patch → launch
 
 curl http://localhost:8888/v1/chat/completions \
@@ -78,10 +78,32 @@ curl http://localhost:8888/v1/chat/completions \
 ./start.sh --no-nfs       # force rsync even if the recipe sets nfs_share
 ```
 
+## Hugging Face cache and model overrides
+
+Production uses revision `a4d1e6082aa54e64188ea0cd3fca644e0447bc8a` of
+`Olyno/Qwen3.8-Flash-Next-NVFP4-lean`, under
+`~/.cache/huggingface/hub` by default. Download, head/worker cache checks and
+vLLM use the same revision; another complete cached revision is not a substitute.
+Set these optional overrides in `.env`:
+
+```bash
+HF_HOME="/data/huggingface"       # cache root; contains hub/
+# WORKER_HF_HOME="/data/huggingface"
+# MODEL_ID="another-owner/model"
+# MODEL_REVISION="<full 40-character commit SHA>"
+# MODEL_REVISION=""              # explicitly follow main
+```
+
+Changing `MODEL_ID` without setting `MODEL_REVISION` follows the new repository's
+main rather than inheriting the Lean pin. Keep `MODEL_REVISION` unset to use the
+recipe pin for the default model. On two nodes, weights are rsynced to the
+worker's HF cache unless NFS sharing is selected.
+
 ## Local checkpoints (`model_path`)
 
-A recipe with `model_path: <dir>` serves a plain checkpoint directory — no HF
-repo, no download. The dir is verified (every shard in the safetensors index
+A `.env` override `MODEL_PATH="/path/to/checkpoint"` (or a recipe's
+`model_path: <dir>`) serves a plain checkpoint directory instead of HF:
+no download or revision pin. The dir is verified (every indexed shard
 must exist) and bind-mounted at `/model` in the container (on NODES=2 it is
 also rsynced to the worker's `~/models/<name>` once). `model_path` is mutually
 exclusive with `nfs_share` and `ABLIT=1`.

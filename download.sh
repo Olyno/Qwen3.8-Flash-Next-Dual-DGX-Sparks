@@ -14,6 +14,7 @@
 #   ./download.sh --fp8           # Qwen/Qwen3.8-Flash-Next-FP8
 #   ./download.sh org/repo        # explicit HuggingFace repo
 #   HF_TOKEN=hf_... ./download.sh # for a gated repo
+#   MODEL_REVISION=<commit-sha> ./download.sh org/repo  # pin the cached revision
 # ============================================================================
 set -euo pipefail
 
@@ -47,6 +48,8 @@ fi
 # Environment wins over .env for ABLIT / HF_TOKEN (same rule as start.sh).
 _CLI_HF_TOKEN="${HF_TOKEN:-}"
 _CLI_ABLIT="${ABLIT:-}"
+_CLI_MODEL_REVISION_SET="${MODEL_REVISION+x}"
+_CLI_MODEL_REVISION="${MODEL_REVISION:-}"
 # shellcheck source=.env
 source .env
 [[ -n "$_CLI_HF_TOKEN" ]] && HF_TOKEN="$_CLI_HF_TOKEN"
@@ -55,6 +58,9 @@ HF_TOKEN="${HF_TOKEN:-}"
 [[ -n "$_CLI_ABLIT" ]] && ABLIT="$_CLI_ABLIT"
 ABLIT="${ABLIT:-0}"
 [[ "$ABLIT" == "0" || "$ABLIT" == "1" ]] || err "ABLIT must be 0 or 1 (got: '$ABLIT')"
+if [[ -n "$_CLI_MODEL_REVISION_SET" ]]; then MODEL_REVISION="$_CLI_MODEL_REVISION"; fi
+MODEL_REVISION="${MODEL_REVISION:-}"
+[[ -z "$MODEL_REVISION" || "$MODEL_REVISION" =~ ^[0-9a-fA-F]{40}$ ]] || err "MODEL_REVISION must be a full HF commit SHA (or empty for main)"
 
 MODEL_ID="${MODEL_ID:-nvidia/Qwen3.8-Flash-Next-NVFP4}"
 EXPLICIT_MODEL=""
@@ -74,6 +80,8 @@ if [[ -n "$EXPLICIT_MODEL" ]]; then
 elif [[ "$ABLIT" == "1" ]]; then
     MODEL_ID="$ABLIT_MODEL_ID"
 fi
+REVISION_ARGS=()
+[[ -n "$MODEL_REVISION" ]] && REVISION_ARGS=(--revision "$MODEL_REVISION")
 
 HF_CACHE_DIR="${HF_HOME:-$HOME/.cache/huggingface}"
 export HF_HOME="$HF_CACHE_DIR"
@@ -111,7 +119,7 @@ next_start_hint() {
 
 # Prints a snapshot hash. Exit 0 = complete, 1 = incomplete, 2 = none.
 resolve_snapshot() {
-    python3 "$SCRIPT_DIR/scripts/resolve_snapshot.py" "$1"
+    python3 "$SCRIPT_DIR/scripts/resolve_snapshot.py" "$1${MODEL_REVISION:+/snapshots/$MODEL_REVISION}"
 }
 
 info "Downloading $MODEL_ID"
@@ -152,6 +160,7 @@ try:
         repo_id=sys.argv[1],
         token=(os.environ.get("HF_TOKEN") or None),
         cache_dir=cache_dir,
+        revision=(sys.argv[4] or None),
         max_workers=4,
     )
 except Exception as e:
@@ -194,17 +203,17 @@ cli_download_or_die() {
     if command -v uvx &>/dev/null; then
         info "Using uvx..."
         HF_HOME="$HF_CACHE_DIR" HF_HUB_CACHE="$HUB_PATH" \
-            uvx hf download "$MODEL_ID" --cache-dir "$HUB_PATH" 2>&1 | tee "$log"
+            uvx hf download "$MODEL_ID" --cache-dir "$HUB_PATH" "${REVISION_ARGS[@]}" 2>&1 | tee "$log"
         rc=${PIPESTATUS[0]}
     elif command -v huggingface-cli &>/dev/null; then
         info "Using huggingface-cli..."
         HF_HOME="$HF_CACHE_DIR" HF_HUB_CACHE="$HUB_PATH" \
-            huggingface-cli download "$MODEL_ID" --cache-dir "$HUB_PATH" 2>&1 | tee "$log"
+            huggingface-cli download "$MODEL_ID" --cache-dir "$HUB_PATH" "${REVISION_ARGS[@]}" 2>&1 | tee "$log"
         rc=${PIPESTATUS[0]}
     elif command -v hf &>/dev/null; then
         info "Using hf CLI..."
         HF_HOME="$HF_CACHE_DIR" HF_HUB_CACHE="$HUB_PATH" \
-            hf download "$MODEL_ID" --cache-dir "$HUB_PATH" 2>&1 | tee "$log"
+            hf download "$MODEL_ID" --cache-dir "$HUB_PATH" "${REVISION_ARGS[@]}" 2>&1 | tee "$log"
         rc=${PIPESTATUS[0]}
     else
         set -e
@@ -223,7 +232,7 @@ cli_download_or_die() {
 info "Downloading (resumable; interrupt and rerun to continue)..."
 if [[ "$MODEL_ID" == "$ABLIT_MODEL_ID" ]] && python3 -c "import huggingface_hub" 2>/dev/null; then
     HF_HOME="$HF_CACHE_DIR" HF_HUB_CACHE="$HUB_PATH" HF_TOKEN="$HF_TOKEN" \
-        python3 -c "$DL_PY" "$MODEL_ID" "$RETRY_HINT" "$HUB_PATH"
+        python3 -c "$DL_PY" "$MODEL_ID" "$RETRY_HINT" "$HUB_PATH" "$MODEL_REVISION"
 else
     cli_download_or_die
 fi

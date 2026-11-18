@@ -2,11 +2,10 @@
 # engine/config.sh — .env (machine truth) + recipes/<RECIPE>.yaml (serving
 # truth) + CLI flags -> the environment every later step consumes.
 #
-# .env carries ONLY cluster identity and secrets (HEAD_IP, WORKER_IP, IFACE,
-# IB_HCA, IB_GID_INDEX, HF_TOKEN, ABLIT, HF_HOME, ...). Serving config comes
-# from the recipe, and a recipe wins over .env for every key it sets, so a
-# stale .env value can never silently take effect. The shell environment wins
-# over both only for ABLIT and HF_TOKEN.
+# .env carries cluster identity, secrets and model/cache location overrides.
+# Recipes own serving settings; MODEL_ID, MODEL_REVISION and MODEL_PATH from
+# .env override recipe defaults. Shell values win over .env only for ABLIT
+# and HF_TOKEN.
 # ---------------------------------------------------------------------------
 _CLI_ABLIT="${ABLIT:-}"
 _CLI_HF_TOKEN="${HF_TOKEN:-}"
@@ -17,12 +16,27 @@ fi
 
 # shellcheck source=.env
 source .env
+declare -A _MODEL_ENV=()
+for knob in MODEL_ID MODEL_REVISION MODEL_PATH; do
+    if [[ -v "$knob" ]]; then _MODEL_ENV[$knob]="${!knob}"; fi
+done
 
-# Recipe: serving config. Default boot is prod (the local checkpoint).
+# Recipe: serving defaults. Default boot is prod (the published Lean model).
 RECIPE="${RECIPE:-prod}"
 RECIPE_ENV="$(python3 "$SCRIPT_DIR/engine/recipe.py" "$SCRIPT_DIR/recipes" "$RECIPE")" \
     || err "failed to load recipe '$RECIPE'"
 eval "$RECIPE_ENV"
+# A different repository must not inherit the default repository's commit pin.
+if [[ -v _MODEL_ENV[MODEL_ID] && ! -v _MODEL_ENV[MODEL_REVISION] &&
+      "${_MODEL_ENV[MODEL_ID]}" != "${MODEL_ID:-}" ]]; then
+    MODEL_REVISION=""
+fi
+for knob in MODEL_ID MODEL_REVISION MODEL_PATH; do
+    if [[ -v "_MODEL_ENV[$knob]" ]]; then
+        printf -v "$knob" '%s' "${_MODEL_ENV[$knob]}"
+    fi
+done
+unset _MODEL_ENV knob
 info "Recipe: recipes/$RECIPE.yaml"
 
 [[ -n "$_CLI_ABLIT" ]] && ABLIT="$_CLI_ABLIT"
@@ -320,6 +334,7 @@ if [[ -n "$MODEL_PATH" ]]; then
     [[ "$FP8_DENSE" == "true" && -z "${FP8_DENSE_LOCAL:-}" ]] && err "model_path and fp8_dense are mutually exclusive"
     MODEL_PATH="${MODEL_PATH/#\~/$HOME}"
     [[ -d "$MODEL_PATH" ]] || err "model_path not found: $MODEL_PATH"
+    MODEL_REVISION=""  # Direct checkpoint paths have no HF revision.
     MODEL_ID="${MODEL_ID:-local/$(basename "$MODEL_PATH")}"
     DO_DOWNLOAD_DEFAULT=false
 fi
@@ -330,10 +345,13 @@ if [[ "$ABLIT" == "1" ]]; then
         warn "ABLIT=1 ignored for checkpoint selection: FP8_DENSE=true (MODEL_ID=$MODEL_ID)"
     else
         MODEL_ID="$ABLIT_MODEL_ID"
+        MODEL_REVISION=""
     fi
 fi
 MODEL_ID="${MODEL_ID:-}"
 [[ -n "$MODEL_ID" ]] || err "MODEL_ID is not set (checked recipes/$RECIPE.yaml and .env)"
+MODEL_REVISION="${MODEL_REVISION:-}"
+[[ -z "$MODEL_REVISION" || "$MODEL_REVISION" =~ ^[0-9a-fA-F]{40}$ ]] || err "model_revision must be a full HF commit SHA (or empty for main)"
 # What vLLM gets as its model argument.
 MODEL_ARG="$MODEL_ID"
 if [[ -n "$MODEL_PATH" ]]; then
