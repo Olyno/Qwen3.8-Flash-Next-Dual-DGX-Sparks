@@ -2,6 +2,15 @@
 
 Every experiment pays this: a boot is 12–13 minutes, and almost all of it is weight loading. This file records what that time is spent on, what did not work, and what the default now is.
 
+## First image pull
+
+Overlay extraction can pull the image implicitly through `docker create`,
+before the later image-preparation step. The extraction helper records the
+created container's image ID after creation, not the missing pre-pull image ID.
+Successful extraction then continues under `set -e`, and later calls reuse
+only payloads stamped for the current image. Pull or copy failures still stop
+startup; a failed copy never marks an old payload as current.
+
 ## The checkpoint and the ceiling
 
 | | value |

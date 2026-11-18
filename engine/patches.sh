@@ -34,10 +34,12 @@ extract_from_image() {   # extract_from_image <container path> <host dest>
     fi
     info "  Extracting $(basename "$1") from image..."
     local c; c=$(docker create "$IMAGE" /bin/true)
+    # create may have just pulled the image; stamp the container's actual image.
+    img_id=$(docker inspect --format '{{.Image}}' "$c")
     docker cp "$c:$1" "$2" >/dev/null
     docker rm "$c" >/dev/null 2>&1
     [[ -f "$2" ]] || err "Failed to extract $1 from image."
-    [[ -n "$img_id" ]] && printf '%s' "$img_id" > "$stamp"
+    printf '%s' "$img_id" > "$stamp"
 }
 if $DO_LAUNCH && [[ "$FP8_DENSE" == "true" && "$V030" != "true" ]]; then
     info "=== Step 4c: FP8-dense overlay ==="
